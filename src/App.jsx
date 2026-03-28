@@ -1,0 +1,1545 @@
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line } from "recharts";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+async function apiFetch(path) {
+  try { const r = await fetch(`${API_BASE}${path}`); if (r.ok) return await r.json(); } catch {}
+  return null;
+}
+
+// ─── Static Data ──────────────────────────────────────────────────────────────
+const FALLBACK = {
+  nasdaq_passive: [
+    { code:"019524",name:"华泰柏瑞纳斯达克100ETF联接(QDII)A",fee_rate:0.77,scale:6.77,ytd_return:20.93,track_error:1.65,daily_limit:"100元",buy_status:"open"},
+    { code:"019547",name:"招商纳斯达克100ETF联接(QDII)A",fee_rate:0.77,scale:15.79,ytd_return:20.71,track_error:1.72,daily_limit:"100元",buy_status:"open"},
+    { code:"539001",name:"建信纳斯达克100指数QDIIA",fee_rate:1.12,scale:13.23,ytd_return:20.67,track_error:2.17,daily_limit:"100元",buy_status:"open"},
+    { code:"018966",name:"汇添富纳斯达克100ETF联接(QDII)A",fee_rate:0.77,scale:11.33,ytd_return:19.22,track_error:2.08,daily_limit:"100元",buy_status:"open"},
+    { code:"016452",name:"南方纳斯达克100指数(QDII)A",fee_rate:0.77,scale:33.25,ytd_return:21.86,track_error:1.64,daily_limit:"50元",buy_status:"open"},
+    { code:"000834",name:"大成纳斯达克100指数(QDII)A",fee_rate:1.12,scale:38.85,ytd_return:21.16,track_error:1.51,daily_limit:"50元",buy_status:"open"},
+    { code:"019172",name:"摩根纳斯达克100指数(QDII)A",fee_rate:0.72,scale:26.14,ytd_return:22.19,track_error:2.15,daily_limit:"10元",buy_status:"open"},
+    { code:"270042",name:"广发纳斯达克100ETF联接(QDII)",fee_rate:1.13,scale:108.44,ytd_return:21.75,track_error:1.10,daily_limit:"10元",buy_status:"open"},
+    { code:"019441",name:"万家纳斯达克100指数发起式(QDII)",fee_rate:0.75,scale:4.98,ytd_return:21.41,track_error:1.75,daily_limit:"10元",buy_status:"open"},
+    { code:"161130",name:"易方达纳斯达克100ETF联接(QDII-LOF)A",fee_rate:0.72,scale:16.11,ytd_return:21.07,track_error:1.55,daily_limit:"10元",buy_status:"open"},
+    { code:"040046",name:"华安纳斯达克100指数(QDII)",fee_rate:0.92,scale:55.20,ytd_return:20.19,track_error:2.06,daily_limit:"10元",buy_status:"open"},
+    { code:"160213",name:"国泰纳斯达克100指数(QDII)",fee_rate:1.15,scale:18.55,ytd_return:22.37,track_error:1.03,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"016055",name:"博时纳斯达克100ETF联接(QDII)A",fee_rate:0.75,scale:15.59,ytd_return:22.10,track_error:1.52,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"018043",name:"天弘纳斯达克100指数(QDII)A",fee_rate:0.70,scale:26.20,ytd_return:21.92,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"019736",name:"宝盈纳斯达克100指数(QDII)A",fee_rate:0.77,scale:6.80,ytd_return:21.72,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"016532",name:"嘉实纳斯达克100联接(QDII)A",fee_rate:0.70,scale:21.10,ytd_return:20.82,track_error:1.60,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"015299",name:"华夏纳斯达克100ETF联接(QDII)A",fee_rate:0.92,scale:3.83,ytd_return:18.85,track_error:2.69,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"017091",name:"景顺长城纳斯达克科技市值加权ETF联接A",fee_rate:1.12,scale:25.78,ytd_return:28.62,track_error:3.11,daily_limit:"100元",buy_status:"open"},
+  ],
+  sp500_passive: [
+    { code:"017641",name:"摩根标普500指数(QDII)A",fee_rate:0.77,scale:31.56,ytd_return:15.31,track_error:2.57,daily_limit:"50元",buy_status:"open"},
+    { code:"161125",name:"易方达标普500指数(QDII-LOF)A",fee_rate:1.12,scale:14.75,ytd_return:15.48,track_error:2.39,daily_limit:"10元",buy_status:"open"},
+    { code:"017028",name:"国泰标普500ETF联接(QDII)A",fee_rate:0.85,scale:1.57,ytd_return:16.10,track_error:1.87,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"050025",name:"博时标普500ETF联接(QDII)A",fee_rate:0.92,scale:67.56,ytd_return:15.90,track_error:1.31,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"007721",name:"天弘标普500(QDII-FOF)A",fee_rate:0.90,scale:26.47,ytd_return:14.84,track_error:null,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"018064",name:"华夏标普500ETF联接(QDII)A",fee_rate:0.87,scale:4.09,ytd_return:13.34,track_error:1.10,daily_limit:"暂停申购",buy_status:"suspended"},
+    { code:"096001",name:"大成标普500等权重指数(QDII)A",fee_rate:1.35,scale:6.09,ytd_return:9.06,track_error:1.69,daily_limit:"50元",buy_status:"open"},
+    { code:"161128",name:"易方达标普信息科技指数(QDII-FOF)A",fee_rate:1.12,scale:36.79,ytd_return:26.59,track_error:10.85,daily_limit:"10元",buy_status:"open"},
+  ],
+  us_active: [
+    { code:"100055",name:"富国全球科技互联网股票(QDII)A",fee_rate:1.55,scale:10.24,ytd_return:39.34,daily_limit:"不限额",buy_status:"open"},
+    { code:"016701",name:"银华海外数字经济量化选股混合(QDII)A",fee_rate:1.55,scale:11.21,ytd_return:33.64,daily_limit:"50000元",buy_status:"open"},
+    { code:"005698",name:"华夏全球科技先锋混合(QDII)",fee_rate:1.55,scale:26.32,ytd_return:56.71,daily_limit:"10000元",buy_status:"open"},
+    { code:"017144",name:"华宝海外新能源汽车股票(QDII)A",fee_rate:1.55,scale:2.56,ytd_return:29.45,daily_limit:"10000元",buy_status:"open"},
+    { code:"270023",name:"广发全球精选股票(QDII)A",fee_rate:1.56,scale:104.54,ytd_return:38.08,daily_limit:"5000元",buy_status:"open"},
+    { code:"008253",name:"华宝致远混合(QDII)A",fee_rate:1.55,scale:1.74,ytd_return:52.25,daily_limit:"3000元",buy_status:"open"},
+    { code:"017436",name:"华宝纳斯达克精选股票(QDII)A",fee_rate:1.55,scale:46.22,ytd_return:32.08,daily_limit:"3000元",buy_status:"open"},
+    { code:"501312",name:"华宝海外科技股票(QDII-FOF-LOF)A",fee_rate:1.32,scale:8.05,ytd_return:35.09,daily_limit:"2000元",buy_status:"open"},
+    { code:"501226",name:"长城全球新能源汽车股票(QDII-LOF)A",fee_rate:1.55,scale:4.69,ytd_return:53.92,daily_limit:"1000元",buy_status:"open"},
+    { code:"006555",name:"浦银安盛全球智能科技股票(QDII)A",fee_rate:1.55,scale:8.74,ytd_return:47.18,daily_limit:"500元",buy_status:"open"},
+    { code:"017730",name:"嘉实全球产业升级股票(QDII)A",fee_rate:1.55,scale:7.22,ytd_return:74.89,daily_limit:"100元",buy_status:"open"},
+    { code:"006373",name:"国富全球科技互联混合(QDII)人民币A",fee_rate:1.55,scale:24.27,ytd_return:60.52,daily_limit:"100元",buy_status:"open"},
+    { code:"000043",name:"嘉实美国成长股票(QDII)",fee_rate:1.55,scale:50.13,ytd_return:25.11,daily_limit:"100元",buy_status:"open"},
+    { code:"012920",name:"易方达全球成长精选混合(QDII)A",fee_rate:1.55,scale:28.25,ytd_return:100.44,daily_limit:"50元",buy_status:"open"},
+    { code:"539002",name:"建信新兴市场优选混合(QDII)A",fee_rate:1.56,scale:4.64,ytd_return:94.75,daily_limit:"50元",buy_status:"open"},
+  ],
+  // 场内ETF — 名称经 fundgz 实测验证（2026-03-27），premium 为实际市场水平
+  etfs: [
+    { code:"513100",name:"国泰纳斯达克100ETF",         tracking_index:"纳斯达克100",         scale:220.0,ytd_return:21.0,premium:4.94,volume:3.6, change_pct:0.0},
+    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",     tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.32,volume:1.5, change_pct:0.0},
+    { code:"159941",name:"广发纳斯达克100ETF",         tracking_index:"纳斯达克100",         scale:200.0,ytd_return:21.1,premium:4.35,volume:7.8, change_pct:0.0},
+    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:45.0, ytd_return:20.9,premium:3.73,volume:3.1, change_pct:0.0},
+    { code:"159659",name:"招商纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:120.0,ytd_return:21.3,premium:3.62,volume:1.3, change_pct:0.0},
+    { code:"159632",name:"华安纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.27,volume:1.9, change_pct:0.0},
+    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)",tracking_index:"纳斯达克科技市值加权",scale:160.0,ytd_return:28.0,premium:16.9,volume:5.3, change_pct:0.0},
+    { code:"513500",name:"博时标普500ETF",             tracking_index:"标普500",             scale:95.0, ytd_return:15.8,premium:4.54,volume:2.3, change_pct:0.0},
+    { code:"159612",name:"国泰标普500ETF(QDII)",       tracking_index:"标普500",             scale:55.0, ytd_return:15.4,premium:4.63,volume:0.1, change_pct:0.0},
+    { code:"513650",name:"南方标普500ETF(QDII)",       tracking_index:"标普500",             scale:45.0, ytd_return:15.5,premium:3.06,volume:1.0, change_pct:0.0},
+  ],
+};
+
+const genPremiumHistory = (code, days=30) => {
+  const base = FALLBACK.etfs.find(e=>e.code===code)?.premium||1;
+  return Array.from({length:days},(_,i)=>{
+    const d=new Date(); d.setDate(d.getDate()-(days-i));
+    return {date:`${d.getMonth()+1}/${d.getDate()}`,premium:+(base+(Math.random()-0.4)*3).toFixed(2)};
+  });
+};
+const genReturnComp = () =>
+  ["10月","11月","12月","1月","2月","3月"].map(m=>({
+    month:m, nasdaq:+(Math.random()*8-2).toFixed(2), sp500:+(Math.random()*6-1.5).toFixed(2),
+  }));
+
+// ─── FX / Index Historical Data ───────────────────────────────────────────────
+// USD/CNY 年末汇率（来源：中国外汇交易中心 / Wind 公开数据）
+// 格式：[年初汇率, 年末汇率]
+const FX_ANNUAL = {
+  2015:[6.2078,6.4936], 2016:[6.4936,6.9448], 2017:[6.9448,6.5063],
+  2018:[6.5063,6.8775], 2019:[6.8775,6.9762], 2020:[6.9762,6.5249],
+  2021:[6.5249,6.3726], 2022:[6.3726,6.8972], 2023:[6.8972,7.1001],
+  2024:[7.1001,7.2996], 2025:[7.2996,7.0059],
+};
+// 美元口径年化涨幅（来源：Bloomberg / 指数官方年报）
+const INDEX_ANNUAL = {
+  nasdaq:{2015:9.5,2016:6.9,2017:32.7,2018:-0.1,2019:38.9,2020:48.0,2021:27.4,2022:-32.6,2023:54.9,2024:24.7,2025:21.0},
+  sp500: {2015:1.4,2016:11.9,2017:21.8,2018:-4.4,2019:31.5,2020:18.4,2021:28.7,2022:-18.1,2023:26.3,2024:23.3,2025:17.9},
+};
+
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg:"#f5f5f7", surface:"#ffffff", surfaceHover:"#f9f9fb",
+  card:"#ffffff", border:"#e0e0e5", borderLight:"#ebebf0",
+  text:"#1d1d1f", textMuted:"#6e6e73", textDim:"#aeaeb2",
+  accent:"#0071e3", accentDim:"#005bbf", accentBg:"#0071e308",
+  green:"#1a9e4a", greenBg:"#1a9e4a0d",
+  red:"#d93025",   redBg:"#d930250d",
+  orange:"#c4570a", orangeBg:"#c4570a0d",
+  purple:"#6e3de8", purpleBg:"#6e3de80d",
+  cyan:"#0077a8",  cyanBg:"#0077a80d",
+};
+
+// ─── Hooks ────────────────────────────────────────────────────────────────────
+function useCountUp(target, duration=900) {
+  const [val, setVal] = useState(0);
+  const raf = useRef(null);
+  useEffect(()=>{
+    const n = parseFloat(String(target).replace(/[^0-9.]/g,""))||0;
+    const start = performance.now();
+    cancelAnimationFrame(raf.current);
+    const tick = now => {
+      const t = Math.min((now-start)/duration,1);
+      const ease = 1-Math.pow(1-t,3);
+      setVal(+(n*ease).toFixed(1));
+      if(t<1) raf.current=requestAnimationFrame(tick);
+    };
+    raf.current=requestAnimationFrame(tick);
+    return ()=>cancelAnimationFrame(raf.current);
+  },[target]);
+  return val;
+}
+
+function useScrollReveal(threshold=0.12) {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(()=>{
+    const obs = new IntersectionObserver(([e])=>{
+      if(e.isIntersecting){setVisible(true);obs.disconnect();}
+    },{threshold});
+    if(ref.current) obs.observe(ref.current);
+    return ()=>obs.disconnect();
+  },[]);
+  return [ref, visible];
+}
+
+function useHover() {
+  const [hovered, setHovered] = useState(false);
+  return [hovered, {onMouseEnter:()=>setHovered(true), onMouseLeave:()=>setHovered(false)}];
+}
+
+// ─── Base Card with hover lift ─────────────────────────────────────────────────
+function Card({children, style={}, className="", onClick}) {
+  const [h,hProps] = useHover();
+  return (
+    <div {...hProps} onClick={onClick}
+      className={`lift-card ${className}`}
+      style={{
+        background:C.card, border:`1px solid ${C.border}`, borderRadius:18,
+        boxShadow: h?"0 12px 40px rgba(0,0,0,0.11)":"0 2px 16px rgba(0,0,0,0.06)",
+        transform: h?"translateY(-4px)":"translateY(0)",
+        transition:"box-shadow 0.28s ease, transform 0.28s ease, border-color 0.28s ease",
+        borderColor: h ? C.borderLight : C.border,
+        cursor: onClick?"pointer":"default",
+        ...style,
+      }}>
+      {children}
+    </div>
+  );
+}
+
+// ─── Reveal wrapper ───────────────────────────────────────────────────────────
+function Reveal({children, delay=0}) {
+  const [ref,vis] = useScrollReveal();
+  return (
+    <div ref={ref} style={{
+      opacity: vis?1:0,
+      transform: vis?"translateY(0)":"translateY(22px)",
+      transition:`opacity 0.5s ease ${delay}s, transform 0.5s ease ${delay}s`,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ─── StatCard ─────────────────────────────────────────────────────────────────
+function StatCard({label,value,sub,color=C.accent,index=0}) {
+  const numStr = String(value).replace(/[^0-9.]/g,"");
+  const prefix = String(value).startsWith("+") ? "+" : "";
+  const suffix = String(value).replace(/^[+\-]?[\d.]+/,"");
+  const counted = useCountUp(numStr,900);
+  const [h,hProps] = useHover();
+  return (
+    <div {...hProps} className="stat-card"
+      style={{
+        background:C.card, border:`1px solid ${h?C.borderLight:C.border}`,
+        borderRadius:18, padding:"24px 28px", flex:1, minWidth:180,
+        position:"relative", overflow:"hidden",
+        boxShadow:h?"0 12px 40px rgba(0,0,0,0.10)":"0 2px 16px rgba(0,0,0,0.06)",
+        transform:h?"translateY(-4px)":"translateY(0)",
+        transition:"all 0.28s ease",
+        animationDelay:`${index*0.08}s`,
+      }}>
+      <div style={{position:"absolute",top:-20,right:-20,width:80,height:80,borderRadius:"50%",background:color+"08"}}/>
+      <div style={{position:"absolute",bottom:0,left:0,height:2,width:h?"100%":"0%",background:`linear-gradient(90deg,${color},${color}60)`,transition:"width 0.4s ease",borderRadius:"0 0 0 18px"}}/>
+      <div style={{fontSize:11,color:C.textDim,marginBottom:8,letterSpacing:0.8,textTransform:"uppercase",fontWeight:600}}>{label}</div>
+      <div style={{fontSize:30,fontWeight:800,color,letterSpacing:-1}}>
+        {prefix}{isNaN(parseFloat(numStr)) ? value : `${counted}${suffix}`}
+      </div>
+      {sub&&<div style={{fontSize:12,color:C.textMuted,marginTop:5}}>{sub}</div>}
+    </div>
+  );
+}
+
+// ─── Mini bar for table ───────────────────────────────────────────────────────
+function MiniBar({value, max, color}) {
+  const pct = Math.min(Math.abs(value)/max*100,100);
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:8,justifyContent:"flex-end"}}>
+      <div style={{width:48,height:4,borderRadius:2,background:C.borderLight,overflow:"hidden",flexShrink:0}}>
+        <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:2,transition:"width 0.6s ease"}}/>
+      </div>
+      <span style={{color,fontWeight:700,minWidth:52,textAlign:"right"}}>{value>0?"+":""}{value}%</span>
+    </div>
+  );
+}
+
+// ─── Badges ───────────────────────────────────────────────────────────────────
+const StatusBadge = ({status}) => {
+  const ok = status==="open";
+  const color = ok?C.green:C.red;
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:ok?C.greenBg:C.redBg,color,border:`1px solid ${color}22`}}>
+      <span style={{width:5,height:5,borderRadius:"50%",background:color,animation:ok?"statusPulse 2s infinite":"none"}}/>
+      {ok?"开放":"暂停"}
+    </span>
+  );
+};
+
+function PremiumBadge({value}) {
+  const high = value>2, mid = value>1;
+  const color = high?C.red:mid?C.orange:C.green;
+  const bg    = high?C.redBg:mid?C.orangeBg:C.greenBg;
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}22`,animation:high?"premiumAlert 1.8s ease infinite":"none"}}>
+      {value>0?"+":""}{value}%
+    </span>
+  );
+}
+
+// ─── Section Header ───────────────────────────────────────────────────────────
+function SectionHeader({title,subtitle,count,color=C.accent}) {
+  return (
+    <div style={{marginBottom:24}}>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <div style={{width:3,height:20,borderRadius:2,background:`linear-gradient(180deg,${color},${color}60)`}}/>
+        <h2 style={{fontSize:20,fontWeight:800,color:C.text,margin:0,letterSpacing:-0.4}}>{title}</h2>
+        {count!=null&&<span style={{background:color+"18",color,padding:"2px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{count}只</span>}
+      </div>
+      {subtitle&&<p style={{fontSize:13,color:C.textDim,margin:"7px 0 0 15px"}}>{subtitle}</p>}
+    </div>
+  );
+}
+
+// ─── Data Table ───────────────────────────────────────────────────────────────
+function DataTable({columns,data,sortKey,sortDir,onSort}) {
+  return (
+    <div style={{overflowX:"auto",borderRadius:14,border:`1px solid ${C.border}`,background:C.card,boxShadow:"0 2px 16px rgba(0,0,0,0.06)"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead>
+          <tr>
+            {columns.map(col=>(
+              <th key={col.key} onClick={()=>col.sortable!==false&&onSort?.(col.key)}
+                style={{padding:"13px 16px",textAlign:col.align||"left",color:sortKey===col.key?C.accent:C.textDim,fontWeight:600,fontSize:11,letterSpacing:0.6,textTransform:"uppercase",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,background:"#fafafa",cursor:col.sortable!==false?"pointer":"default",userSelect:"none",position:"sticky",top:0,zIndex:1,transition:"color 0.15s"}}>
+                <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                  {col.label}
+                  {col.tip&&<span title={col.tip} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:"50%",background:C.borderLight,color:C.textDim,fontSize:9,fontWeight:700,cursor:"help",flexShrink:0}}>?</span>}
+                  {sortKey===col.key&&<span style={{marginLeft:2}}>{sortDir==="asc"?"↑":"↓"}</span>}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row,i)=>(
+            <TableRow key={row.code} row={row} columns={columns} i={i}/>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TableRow({row,columns,i}) {
+  const [h,hProps] = useHover();
+  return (
+    <tr {...hProps} className="table-row" style={{
+      background:h?"#f0f5ff":i%2===0?"transparent":"#fafafa",
+      transition:"background 0.15s",
+      borderLeft:h?`3px solid ${C.accent}`:"3px solid transparent",
+    }}>
+      {columns.map(col=>(
+        <td key={col.key} style={{padding:"12px 16px",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}30`,textAlign:col.align||"left",color:C.text}}>
+          {col.render?col.render(row[col.key],row):row[col.key]}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+// ─── Tip Box ──────────────────────────────────────────────────────────────────
+// ─── Search Bar ───────────────────────────────────────────────────────────────
+function SearchBar({value, onChange, color=C.accent}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <div style={{marginBottom:16,position:"relative"}}>
+      <div style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",pointerEvents:"none",color:focused?color:C.textDim,transition:"color 0.2s"}}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+      </div>
+      <input
+        value={value}
+        onChange={e=>onChange(e.target.value)}
+        onFocus={()=>setFocused(true)}
+        onBlur={()=>setFocused(false)}
+        placeholder="搜索基金名称或代码..."
+        style={{
+          width:"100%", boxSizing:"border-box",
+          padding:"10px 40px 10px 40px",
+          fontSize:14, color:C.text,
+          background:C.surface,
+          border:`1.5px solid ${focused?color:C.border}`,
+          borderRadius:10, outline:"none",
+          boxShadow: focused?`0 0 0 3px ${color}12`:"none",
+          transition:"border-color 0.2s, box-shadow 0.2s",
+        }}
+      />
+      {value&&(
+        <button onClick={()=>onChange("")}
+          style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:C.textDim,padding:2,display:"flex",alignItems:"center"}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function EmptyResult({query}) {
+  return (
+    <div style={{textAlign:"center",padding:"48px 0",color:C.textDim}}>
+      <div style={{fontSize:32,marginBottom:12}}>🔍</div>
+      <div style={{fontSize:15,fontWeight:600,color:C.textMuted,marginBottom:6}}>未找到匹配结果</div>
+      <div style={{fontSize:13}}>没有找到包含「{query}」的基金，请尝试其他关键词</div>
+    </div>
+  );
+}
+
+function TipBox({color,text}) {  const [h,hProps] = useHover();
+  return (
+    <div {...hProps} style={{marginTop:20,padding:"16px 20px",borderRadius:14,background:color+"0a",border:`1px solid ${color}1a`,borderLeft:`3px solid ${color}`,fontSize:13,color:C.textMuted,lineHeight:1.8,transition:"all 0.25s",boxShadow:h?`0 4px 20px ${color}12`:"none",transform:h?"translateX(3px)":"translateX(0)"}}>
+      <strong style={{color}}>提示：</strong>{text}
+    </div>
+  );
+}
+
+// ─── Custom Tooltip ───────────────────────────────────────────────────────────
+function ChartTooltip({active,payload,label,unit="%"}) {
+  if(!active||!payload?.length) return null;
+  return (
+    <div style={{background:"rgba(255,255,255,0.96)",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",fontSize:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}>
+      <div style={{color:C.textDim,marginBottom:6,fontWeight:600}}>{label}</div>
+      {payload.map((p,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+          <span style={{width:8,height:8,borderRadius:2,background:p.color,display:"inline-block"}}/>
+          <span style={{color:C.textMuted}}>{p.name}</span>
+          <span style={{fontWeight:700,color:C.text,marginLeft:"auto",paddingLeft:12}}>{p.value>0?"+":""}{p.value}{unit}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Disclaimer Modal ─────────────────────────────────────────────────────────
+function DisclaimerModal({onClose}) {
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{background:"#fff",borderRadius:20,padding:"36px 32px",maxWidth:460,width:"100%",boxShadow:"0 24px 80px rgba(0,0,0,0.22)",animation:"fadeInUp 0.35s ease both"}}>
+        <div style={{fontSize:28,marginBottom:14,textAlign:"center"}}>⚠️</div>
+        <h3 style={{fontSize:19,fontWeight:800,color:"#1d1d1f",margin:"0 0 12px",letterSpacing:-0.4,textAlign:"center"}}>投资风险声明</h3>
+        <p style={{fontSize:14,color:"#6e6e73",lineHeight:1.9,margin:"0 0 24px"}}>
+          本平台所展示的数据、分析及内容仅供<strong style={{color:"#1d1d1f"}}>信息参考</strong>，
+          <strong style={{color:"#d93025"}}>不构成任何投资建议</strong>。投资有风险，入市须谨慎。
+          QDII 基金及场内 ETF 涉及汇率风险、额度限制等因素，请在充分了解产品特征和风险后，
+          结合个人风险承受能力，做出<strong style={{color:"#1d1d1f"}}>独立投资决策</strong>。
+        </p>
+        <button onClick={onClose}
+          style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:"linear-gradient(135deg,#0071e3,#005bbf)",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",letterSpacing:0.2}}>
+          我已了解，继续浏览
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Skeleton Table ────────────────────────────────────────────────────────────
+function SkeletonTable({rows=7,cols=7}) {
+  const widths=[0.5,2.5,0.7,0.7,1,0.7,0.7];
+  return (
+    <div style={{borderRadius:14,border:"1px solid #e0e0e5",background:"#fff",overflow:"hidden",boxShadow:"0 2px 16px rgba(0,0,0,0.06)"}}>
+      <div style={{height:44,background:"#fafafa",borderBottom:"1px solid #e0e0e5",display:"flex",alignItems:"center",gap:16,padding:"0 16px"}}>
+        {Array.from({length:cols}).map((_,j)=>(
+          <div key={j} style={{height:10,borderRadius:4,background:"#ebebf0",flex:widths[j]||1,animation:"skeletonPulse 1.4s ease infinite",animationDelay:`${j*0.06}s`}}/>
+        ))}
+      </div>
+      {Array.from({length:rows}).map((_,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:16,padding:"13px 16px",borderBottom:i<rows-1?"1px solid #e0e0e530":"",background:i%2?"#fafafa":"#fff"}}>
+          {Array.from({length:cols}).map((_,j)=>(
+            <div key={j} style={{height:12,borderRadius:4,background:"#f0f0f5",flex:widths[j]||1,animation:"skeletonPulse 1.4s ease infinite",animationDelay:`${i*0.04+j*0.06}s`}}/>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Status Filter Bar ────────────────────────────────────────────────────────
+function StatusFilterBar({value, onChange, color}) {
+  const opts=[{id:"all",label:"全部"},{id:"open",label:"仅开放申购"},{id:"suspended",label:"暂停申购"}];
+  return (
+    <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+      {opts.map(o=>(
+        <button key={o.id} onClick={()=>onChange(o.id)}
+          style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${value===o.id?color:"#e0e0e5"}`,background:value===o.id?color+"14":"none",color:value===o.id?color:"#6e6e73",fontSize:12,fontWeight:value===o.id?700:400,cursor:"pointer",transition:"all 0.18s",lineHeight:1.5}}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Back To Top Button ───────────────────────────────────────────────────────
+function BackToTop({visible, offset=32}) {
+  return (
+    <button onClick={()=>window.scrollTo({top:0,behavior:"smooth"})}
+      aria-label="回到顶部"
+      style={{position:"fixed",bottom:offset,right:32,zIndex:200,width:44,height:44,borderRadius:"50%",background:"#0071e3",border:"none",color:"#fff",cursor:"pointer",boxShadow:"0 4px 20px rgba(0,113,227,0.4)",opacity:visible?1:0,transform:visible?"translateY(0) scale(1)":"translateY(12px) scale(0.8)",transition:"opacity 0.3s ease, transform 0.3s ease, bottom 0.3s ease",pointerEvents:visible?"auto":"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="18 15 12 9 6 15"/>
+      </svg>
+    </button>
+  );
+}
+
+// ─── FX Analysis Card ────────────────────────────────────────────────────────
+function FXAnalysisCard() {
+  const [strategy,setStrategy]=useState("nasdaq");
+  const [rawData,setRawData]=useState(null);
+  const [apiLoading,setApiLoading]=useState(true);
+
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const r=await fetch(`${API_BASE}/fx-index-history`);
+        if(r.ok){const d=await r.json();if(d.data?.length>10)setRawData(d.data);}
+      }catch{}
+      setApiLoading(false);
+    })();
+  },[]);
+
+  // Monthly cumulative returns computed from raw close prices
+  const monthlyData=useMemo(()=>{
+    if(!rawData||rawData.length<2) return null;
+    const key=strategy==="nasdaq"?"ndx_close":"spx_close";
+    let usdV=1,cnyV=1;
+    const result=[];
+    for(let i=1;i<rawData.length;i++){
+      const prev=rawData[i-1],curr=rawData[i];
+      if(!prev[key]||!curr[key]||!prev.usdcny||!curr.usdcny) continue;
+      const indexReturn=curr[key]/prev[key]-1;
+      const fxFactor=curr.usdcny/prev.usdcny;
+      usdV*=(1+indexReturn);
+      cnyV*=(1+indexReturn)*fxFactor;
+      result.push({month:curr.month,usd:+(usdV*100).toFixed(1),cny:+(cnyV*100).toFixed(1),fx:+curr.usdcny.toFixed(4)});
+    }
+    return result.length>0?result:null;
+  },[rawData,strategy]);
+
+  // Annual fallback when backend unavailable
+  const annualData=useMemo(()=>{
+    if(monthlyData) return null;
+    const ret=INDEX_ANNUAL[strategy];
+    let usdV=1,cnyV=1;
+    return Object.entries(FX_ANNUAL).map(([y,[startFX,endFX]])=>{
+      const yr=parseInt(y);
+      usdV*=(1+(ret[yr]||0)/100);
+      cnyV*=(1+(ret[yr]||0)/100)*(endFX/startFX);
+      return {month:y,usd:+(usdV*100).toFixed(1),cny:+(cnyV*100).toFixed(1),fx:+endFX.toFixed(4)};
+    });
+  },[strategy,monthlyData]);
+
+  const data=monthlyData||annualData||[];
+  const isMonthly=!!monthlyData;
+  const last=data[data.length-1]||{usd:100,cny:100,fx:7.3};
+  const usdGain=+(last.usd-100).toFixed(1);
+  const cnyGain=+(last.cny-100).toFixed(1);
+  const fxContrib=+(cnyGain-usdGain).toFixed(1);
+  const color1=strategy==="nasdaq"?C.accent:C.cyan;
+
+  // Only show tick labels for January of each year (monthly mode)
+  const yearTicks=useMemo(()=>{
+    if(!isMonthly) return undefined;
+    return data.filter(d=>d.month?.slice(5,7)==="01").map(d=>d.month);
+  },[data,isMonthly]);
+
+  return (
+    <Reveal delay={0.12}>
+      <Card style={{padding:"24px 26px",marginBottom:36}}>
+        {/* Header */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text}}>汇率影响剥离分析</div>
+              <span style={{padding:"2px 8px",borderRadius:10,background:C.orangeBg,color:C.orange,fontSize:11,fontWeight:600}}>USD/CNY</span>
+              {isMonthly&&<span style={{padding:"2px 8px",borderRadius:10,background:C.accentBg,color:C.accent,fontSize:11,fontWeight:600}}>月度粒度</span>}
+              {!isMonthly&&!apiLoading&&<span style={{padding:"2px 8px",borderRadius:10,background:C.bg,color:C.textDim,fontSize:11}}>年度数据（后端离线）</span>}
+            </div>
+            <div style={{fontSize:12,color:C.textDim}}>人民币持有者 vs 美元持有者 · 2015年起累计，以100为基准 · 间距即为汇率净贡献</div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {[{id:"nasdaq",label:"纳指100",color:C.accent},{id:"sp500",label:"标普500",color:C.cyan}].map(s=>(
+              <button key={s.id} onClick={()=>setStrategy(s.id)}
+                style={{padding:"5px 12px",borderRadius:8,border:`1.5px solid ${strategy===s.id?s.color:C.border}`,background:strategy===s.id?s.color+"12":"none",color:strategy===s.id?s.color:C.textMuted,fontSize:12,fontWeight:strategy===s.id?700:400,cursor:"pointer",transition:"all 0.18s"}}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Summary stats */}
+        <div style={{display:"flex",gap:0,marginBottom:22,background:C.bg,borderRadius:14,overflow:"hidden",border:`1px solid ${C.border}`}}>
+          {[
+            {label:"美元累计涨幅",value:`+${usdGain}%`,sub:"纯美元口径",color:color1},
+            {label:"人民币累计涨幅",value:`${cnyGain>=0?"+":""}${cnyGain}%`,sub:"含汇率折算",color:C.green},
+            {label:"汇率累计贡献",value:`${fxContrib>0?"+":""}${fxContrib}%`,sub:fxContrib>0?"人民币贬值增厚收益":"人民币升值侵蚀收益",color:fxContrib>0?C.orange:C.red},
+            {label:"当前 USD/CNY",value:last.fx,sub:isMonthly?"最新月度汇率":"年末汇率",color:C.textMuted},
+          ].map((s,i)=>(
+            <div key={s.label} style={{flex:1,padding:"16px 20px",borderRight:i<3?`1px solid ${C.border}`:"none",textAlign:"center"}}>
+              <div style={{fontSize:11,color:C.textDim,marginBottom:6}}>{s.label}</div>
+              <div style={{fontSize:22,fontWeight:800,color:s.color,letterSpacing:-0.5}}>{s.value}</div>
+              <div style={{fontSize:11,color:C.textDim,marginTop:4}}>{s.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Chart or loading */}
+        {apiLoading&&!data.length?(
+          <div style={{height:280,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
+            正在加载月度历史数据…
+          </div>
+        ):(
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={data} margin={{top:8,right:54,left:4,bottom:0}}>
+              <defs>
+                <linearGradient id="fxCnyGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={C.green}  stopOpacity={0.18}/>
+                  <stop offset="95%" stopColor={C.green}  stopOpacity={0}/>
+                </linearGradient>
+                <linearGradient id="fxUsdGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={color1}   stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={color1}   stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+              <XAxis dataKey="month" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}
+                ticks={yearTicks}
+                tickFormatter={v=>isMonthly?v?.slice(0,4):v}/>
+              <YAxis yAxisId="ret" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
+                tickFormatter={v=>`${v}`} domain={["auto","auto"]} width={38}
+                label={{value:"基准=100",angle:-90,position:"insideLeft",fill:C.textDim,fontSize:10,dy:30}}/>
+              <YAxis yAxisId="fx" orientation="right" tick={{fill:C.orange,fontSize:10}} axisLine={false} tickLine={false}
+                domain={[5.8,7.8]} tickFormatter={v=>`¥${v.toFixed(1)}`} width={46}/>
+              <Tooltip
+                formatter={(v,name)=>{
+                  if(name==="USD/CNY汇率") return [`¥${v}`,name];
+                  return [`${v}（基准100）`,name];
+                }}
+                labelFormatter={v=>isMonthly?v:v+"年"}
+                contentStyle={{borderRadius:10,fontSize:12,border:`1px solid ${C.border}`,boxShadow:"0 4px 20px rgba(0,0,0,0.08)"}}/>
+              <Legend wrapperStyle={{fontSize:11,paddingTop:10}}/>
+              <ReferenceLine yAxisId="ret" y={100} stroke={C.border} strokeDasharray="3 3"/>
+              <Area yAxisId="ret" type="monotone" dataKey="cny" name="人民币口径" stroke={C.green} fill="url(#fxCnyGrad)" strokeWidth={2.5} dot={false}/>
+              <Area yAxisId="ret" type="monotone" dataKey="usd" name="美元口径" stroke={color1} fill="url(#fxUsdGrad)" strokeWidth={2} dot={false}/>
+              <Line yAxisId="fx" type="monotone" dataKey="fx" name="USD/CNY汇率" stroke={C.orange} strokeWidth={1.5} dot={false} strokeDasharray="5 3"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+
+        {/* Insight text */}
+        <div style={{marginTop:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div style={{padding:"12px 16px",borderRadius:10,background:C.accentBg,border:`1px solid ${C.accent}18`,fontSize:12,color:C.textMuted,lineHeight:1.8}}>
+            <strong style={{color:C.accent}}>绿线 {">"} 蓝线：</strong>
+            人民币贬值期（汇率↑），在国内持有QDII的你比纯美元持有者<strong style={{color:C.text}}>多赚</strong>了这段"缺口"——因为净值折算回人民币时会自然增厚。
+          </div>
+          <div style={{padding:"12px 16px",borderRadius:10,background:C.orangeBg,border:`1px solid ${C.orange}18`,fontSize:12,color:C.textMuted,lineHeight:1.8}}>
+            <strong style={{color:C.orange}}>绿线 {"<"} 蓝线：</strong>
+            人民币升值期（汇率↓），如2017、2020–2021年，CNY口径收益低于美元口径，汇率会<strong style={{color:C.text}}>侵蚀</strong>部分收益，需特别留意。
+          </div>
+        </div>
+      </Card>
+    </Reveal>
+  );
+}
+
+// ─── Watchlist Empty State ────────────────────────────────────────────────────
+function WatchlistEmpty({onGo}) {
+  return (
+    <div style={{textAlign:"center",padding:"80px 0",color:C.textDim}}>
+      <div style={{fontSize:52,marginBottom:16,opacity:0.4}}>☆</div>
+      <div style={{fontSize:17,fontWeight:600,color:C.textMuted,marginBottom:8}}>暂无自选基金</div>
+      <div style={{fontSize:14,marginBottom:28}}>在各板块点击 ☆ 图标，将感兴趣的基金加入自选列表</div>
+      <button onClick={onGo}
+        style={{padding:"10px 28px",borderRadius:20,border:`1.5px solid ${C.accent}`,background:C.accent+"12",color:C.accent,fontSize:14,fontWeight:600,cursor:"pointer",transition:"all 0.2s"}}>
+        去挑选基金 →
+      </button>
+    </div>
+  );
+}
+
+// ─── Compare Bar (floating) ───────────────────────────────────────────────────
+function CompareBar({list,onOpen,onRemove,onClear}) {
+  if(list.length===0) return null;
+  return (
+    <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:150,background:"rgba(255,255,255,0.96)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",borderTop:`1px solid ${C.border}`,boxShadow:"0 -4px 24px rgba(0,0,0,0.09)",padding:"12px 40px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",animation:"slideUp 0.3s ease both"}}>
+      <span style={{fontSize:12,color:C.textDim,flexShrink:0,fontWeight:600}}>对比 {list.length}/4</span>
+      <div style={{display:"flex",gap:8,flex:1,flexWrap:"wrap"}}>
+        {list.map(f=>(
+          <div key={f.code} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 8px 4px 12px",borderRadius:20,background:C.accentBg,border:`1.5px solid ${C.accent}40`,fontSize:13}}>
+            <span style={{fontFamily:"monospace",fontWeight:700,color:C.accent,fontSize:12}}>{f.code}</span>
+            <span style={{fontSize:12,color:C.textMuted,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name.replace(/\(.*\)/,"").slice(0,8)}</span>
+            <button onClick={()=>onRemove(f.code)} style={{background:"none",border:"none",cursor:"pointer",color:C.textDim,padding:"0 2px",fontSize:14,lineHeight:1,display:"flex",alignItems:"center"}}>×</button>
+          </div>
+        ))}
+      </div>
+      <button onClick={onClear} style={{padding:"7px 14px",borderRadius:18,border:`1.5px solid ${C.border}`,background:"none",color:C.textMuted,fontSize:13,cursor:"pointer",flexShrink:0}}>清除</button>
+      <button onClick={onOpen} disabled={list.length<2}
+        style={{padding:"8px 22px",borderRadius:18,border:"none",background:list.length>=2?`linear-gradient(135deg,${C.accent},${C.accentDim})`:"#e0e0e5",color:list.length>=2?"#fff":C.textDim,fontSize:13,fontWeight:700,cursor:list.length>=2?"pointer":"default",flexShrink:0,transition:"all 0.2s"}}>
+        开始对比 {list.length>=2?`(${list.length})`:""} →
+      </button>
+    </div>
+  );
+}
+
+// ─── Compare Modal ────────────────────────────────────────────────────────────
+function CompareModal({list,onClose}) {
+  const COLORS=["#0071e3","#0077a8","#6e3de8","#c4570a"];
+  const [view,setView]=useState("chart"); // "chart" | "table"
+
+  // ── visual chart panels ──────────────────────────────────────────────────
+  const metrics=[
+    {label:"近1年涨幅",key:"ytd_return",unit:"%",higher:"better",color:C.green},
+    {label:"年费率",   key:"fee_rate",  unit:"%",higher:"worse", color:C.orange},
+    {label:"规模(亿)", key:"scale",     unit:"亿",higher:"better",color:C.accent},
+    {label:"跟踪误差", key:"track_error",unit:"%",higher:"worse",color:C.red},
+  ];
+
+  const rows=[
+    {label:"分类",          fmt:f=>f._cat||"—"},
+    {label:"年费率",        fmt:f=>f.fee_rate!=null?<span style={{color:f.fee_rate>1?C.orange:C.green,fontWeight:700}}>{f.fee_rate}%</span>:"—"},
+    {label:"规模(亿)",      fmt:f=>f.scale!=null?`${f.scale}亿`:"—"},
+    {label:"近1年涨幅",     fmt:f=>f.ytd_return!=null?<span style={{color:f.ytd_return>0?C.green:C.red,fontWeight:700}}>{f.ytd_return>0?"+":""}{f.ytd_return}%</span>:"—"},
+    {label:"跟踪误差",      fmt:f=>f.track_error!=null?<span style={{color:f.track_error>2?C.orange:C.textMuted}}>{f.track_error}%</span>:"—"},
+    {label:"申购/交易上限",  fmt:f=>f.daily_limit||"场内交易"},
+    {label:"溢价率",        fmt:f=>f.premium!=null?<PremiumBadge value={f.premium}/>:"—"},
+    {label:"申购状态",      fmt:f=>f.buy_status?<StatusBadge status={f.buy_status}/>:<span style={{color:C.cyan,fontSize:12}}>场内交易</span>},
+  ];
+
+  return (
+    <div onClick={e=>{if(e.target===e.currentTarget)onClose();}}
+      style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,0.42)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{background:"#fff",borderRadius:22,width:"100%",maxWidth:Math.min(260+list.length*210,980),maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 28px 90px rgba(0,0,0,0.22)",animation:"fadeInUp 0.3s ease both"}}>
+
+        {/* Header */}
+        <div style={{padding:"22px 28px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+          <div>
+            <h3 style={{fontSize:18,fontWeight:800,color:C.text,margin:0,letterSpacing:-0.4}}>基金横向对比</h3>
+            <p style={{fontSize:12,color:C.textDim,margin:"3px 0 0"}}>已选 {list.length} 只 · 点击空白处关闭</p>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {/* view toggle */}
+            {["chart","table"].map(v=>(
+              <button key={v} onClick={()=>setView(v)}
+                style={{padding:"6px 14px",borderRadius:8,border:`1.5px solid ${view===v?C.accent:C.border}`,background:view===v?C.accent:"#fff",color:view===v?"#fff":C.textMuted,fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.18s"}}>
+                {v==="chart"?"📊 图表":"☰ 详情"}
+              </button>
+            ))}
+            <button onClick={onClose}
+              style={{background:C.bg,border:"none",borderRadius:8,padding:"7px 14px",cursor:"pointer",color:C.textMuted,fontSize:13,fontWeight:500,marginLeft:4}}>✕</button>
+          </div>
+        </div>
+
+        <div style={{overflowY:"auto",padding:"20px 28px 28px"}}>
+
+          {/* Fund name header row */}
+          <div style={{display:"grid",gridTemplateColumns:`repeat(${list.length},1fr)`,gap:12,marginBottom:20}}>
+            {list.map((f,i)=>(
+              <div key={f.code} style={{textAlign:"center",padding:"14px 12px",background:COLORS[i]+"08",borderRadius:14,border:`1.5px solid ${COLORS[i]}22`}}>
+                <div style={{width:28,height:3,background:COLORS[i],borderRadius:2,margin:"0 auto 8px"}}/>
+                <div style={{fontSize:10,color:COLORS[i],fontFamily:"monospace",fontWeight:700,marginBottom:4}}>{f.code}</div>
+                <div style={{fontSize:12,fontWeight:700,color:C.text,lineHeight:1.4}}>{f.name}</div>
+                {f._cat&&<span style={{marginTop:6,display:"inline-block",padding:"1px 8px",borderRadius:10,fontSize:10,background:COLORS[i]+"14",color:COLORS[i],fontWeight:600}}>{f._cat}</span>}
+              </div>
+            ))}
+          </div>
+
+          {view==="chart"?(
+            /* ── Chart view ── */
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+              {metrics.map(({label,key,unit,higher,color})=>{
+                const vals=list.map(f=>f[key]);
+                const defined=vals.filter(v=>v!=null);
+                if(defined.length===0) return null;
+                const maxAbs=Math.max(...defined.map(v=>Math.abs(v)));
+                const best=higher==="better"?Math.max(...defined):Math.min(...defined);
+                return (
+                  <div key={key} style={{background:C.bg,borderRadius:14,padding:"16px 18px",border:`1px solid ${C.border}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:14}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>
+                      <span style={{fontSize:12,fontWeight:700,color:C.textMuted}}>{label}</span>
+                      <span style={{marginLeft:"auto",fontSize:10,color:C.textDim}}>{higher==="better"?"↑ 越高越好":"↓ 越低越好"}</span>
+                    </div>
+                    {list.map((f,i)=>{
+                      const val=f[key];
+                      if(val==null) return (
+                        <div key={f.code} style={{marginBottom:12}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"center"}}>
+                            <span style={{fontSize:11,color:COLORS[i],fontWeight:600}}>{f.code}</span>
+                            <span style={{fontSize:11,color:C.textDim}}>—</span>
+                          </div>
+                          <div style={{height:7,background:C.borderLight,borderRadius:4}}/>
+                        </div>
+                      );
+                      const pct=maxAbs>0?Math.abs(val)/maxAbs*100:0;
+                      const isWinner=val===best;
+                      const barColor=isWinner?color:COLORS[i];
+                      return (
+                        <div key={f.code} style={{marginBottom:i<list.length-1?14:0}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"center"}}>
+                            <span style={{fontSize:11,color:COLORS[i],fontWeight:600,maxWidth:"60%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.code}</span>
+                            <span style={{fontSize:13,fontWeight:800,color:isWinner?color:C.textMuted}}>
+                              {val>0&&key==="ytd_return"?"+":""}{val}{unit}
+                              {isWinner&&<span style={{marginLeft:4,fontSize:10,color:color}}>★</span>}
+                            </span>
+                          </div>
+                          <div style={{height:7,background:C.borderLight,borderRadius:4,overflow:"hidden",position:"relative"}}>
+                            <div style={{
+                              position:"absolute",left:0,top:0,height:"100%",
+                              width:`${pct}%`,
+                              background:isWinner?`linear-gradient(90deg,${barColor}88,${barColor})`:`${barColor}66`,
+                              borderRadius:4,
+                              transition:"width 0.7s cubic-bezier(0.34,1.56,0.64,1)"
+                            }}/>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+
+              {/* Radar-style summary panel */}
+              <div style={{gridColumn:"1/-1",background:`linear-gradient(135deg,${C.accent}08,${C.accentBg})`,borderRadius:14,padding:"18px 20px",border:`1.5px solid ${C.accent}18`}}>
+                <div style={{fontSize:12,fontWeight:700,color:C.accent,marginBottom:14}}>综合评分对比</div>
+                <div style={{display:"grid",gridTemplateColumns:`repeat(${list.length},1fr)`,gap:12}}>
+                  {list.map((f,i)=>{
+                    // Score: ytd_return (40%) + fee_rate invert (25%) + scale (15%) + track_error invert (20%)
+                    const allYtd=list.map(x=>x.ytd_return||0), maxYtd=Math.max(...allYtd)||1;
+                    const allFee=list.map(x=>x.fee_rate||0).filter(v=>v>0), maxFee=Math.max(...allFee)||1;
+                    const allScale=list.map(x=>x.scale||0), maxScale=Math.max(...allScale)||1;
+                    const allTE=list.map(x=>x.track_error||0).filter(v=>v>0), maxTE=Math.max(...allTE)||1;
+                    const ytdScore=(f.ytd_return||0)/maxYtd*40;
+                    const feeScore=f.fee_rate?((maxFee-(f.fee_rate||maxFee))/maxFee)*25:0;
+                    const scaleScore=(f.scale||0)/maxScale*15;
+                    const teScore=f.track_error?((maxTE-(f.track_error||maxTE))/maxTE)*20:0;
+                    const total=Math.round(ytdScore+feeScore+scaleScore+teScore);
+                    const allScores=list.map(g=>{
+                      const ys=(g.ytd_return||0)/maxYtd*40;
+                      const fs=g.fee_rate?((maxFee-(g.fee_rate||maxFee))/maxFee)*25:0;
+                      const ss=(g.scale||0)/maxScale*15;
+                      const ts=g.track_error?((maxTE-(g.track_error||maxTE))/maxTE)*20:0;
+                      return Math.round(ys+fs+ss+ts);
+                    });
+                    const isTop=total===Math.max(...allScores);
+                    return (
+                      <div key={f.code} style={{textAlign:"center",padding:"16px 10px",background:isTop?COLORS[i]+"14":"#fff",borderRadius:12,border:`1.5px solid ${isTop?COLORS[i]:C.border}`,position:"relative"}}>
+                        {isTop&&<div style={{position:"absolute",top:-10,left:"50%",transform:"translateX(-50%)",background:COLORS[i],color:"#fff",fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:10}}>推荐</div>}
+                        <div style={{fontSize:11,color:COLORS[i],fontWeight:700,marginBottom:8}}>{f.code}</div>
+                        <div style={{fontSize:32,fontWeight:900,color:isTop?COLORS[i]:C.textMuted,lineHeight:1,marginBottom:4}}>{total}</div>
+                        <div style={{fontSize:10,color:C.textDim}}>综合得分</div>
+                        <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:3,textAlign:"left"}}>
+                          {[
+                            {n:"收益",v:Math.round(ytdScore),t:40},
+                            {n:"费率",v:Math.round(feeScore),t:25},
+                            {n:"规模",v:Math.round(scaleScore),t:15},
+                            {n:"误差",v:Math.round(teScore),t:20},
+                          ].map(({n,v,t})=>(
+                            <div key={n} style={{display:"flex",alignItems:"center",gap:4}}>
+                              <span style={{fontSize:9,color:C.textDim,width:22,flexShrink:0}}>{n}</span>
+                              <div style={{flex:1,height:4,background:C.borderLight,borderRadius:2,overflow:"hidden"}}>
+                                <div style={{height:"100%",width:`${v/t*100}%`,background:COLORS[i],borderRadius:2,opacity:0.7}}/>
+                              </div>
+                              <span style={{fontSize:9,color:C.textDim,width:18,textAlign:"right"}}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:10,color:C.textDim,marginTop:12}}>
+                  综合得分 = 近1年收益(40%) + 费率优势(25%) + 规模实力(15%) + 跟踪精度(20%)，仅供参考
+                </div>
+              </div>
+            </div>
+          ):(
+            /* ── Table view ── */
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{borderBottom:`2px solid ${C.border}`}}>
+                  <th style={{width:120,padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textDim,letterSpacing:0.5,textTransform:"uppercase"}}>指标</th>
+                  {list.map((f,i)=>(
+                    <th key={f.code} style={{padding:"10px 12px",textAlign:"center",minWidth:180}}>
+                      <div style={{fontSize:11,color:C.textDim,fontFamily:"monospace",marginBottom:4}}>{f.code}</div>
+                      <div style={{fontSize:12,fontWeight:700,color:C.text,lineHeight:1.35,maxWidth:175,margin:"0 auto"}}>{f.name}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row,ri)=>(
+                  <tr key={row.label} style={{background:ri%2===0?"#fafafa":"#fff"}}>
+                    <td style={{padding:"11px 12px",fontSize:12,color:C.textMuted,fontWeight:600}}>{row.label}</td>
+                    {list.map(f=>(
+                      <td key={f.code} style={{padding:"11px 12px",textAlign:"center",fontSize:13,color:C.text}}>{row.fmt(f)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin Page ───────────────────────────────────────────────────────────────
+
+// ─── Admin Page ───────────────────────────────────────────────────────────────
+function AdminPage() {
+  const [status,setStatus]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [log,setLog]=useState([]);
+  const trigger = async()=>{
+    setLoading(true); setStatus(null);
+    const t0=Date.now();
+    const r=await apiFetch("/update");
+    const elapsed=((Date.now()-t0)/1000).toFixed(1);
+    if(r){setStatus({ok:r.status==="success",msg:r.message,elapsed});setLog(p=>[{time:new Date().toLocaleTimeString("zh-CN"),msg:r.message,ok:r.status==="success"},...p.slice(0,9)]);}
+    else{setStatus({ok:false,msg:"无法连接后端 API",elapsed});}
+    setLoading(false);
+  };
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'SF Pro Display',-apple-system,sans-serif"}}>
+      <div style={{width:"100%",maxWidth:520,padding:"0 24px"}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{fontSize:36,marginBottom:12}}>⚙️</div>
+          <h1 style={{fontSize:22,fontWeight:800,color:C.text,margin:"0 0 6px",letterSpacing:-0.5}}>Wise<span style={{color:C.accent}}>ETF</span> 数据管理</h1>
+          <p style={{color:C.textDim,fontSize:13,margin:0}}>手动触发数据更新，从天天基金网拉取最新数据</p>
+        </div>
+        <Card style={{padding:28,marginBottom:20}}>
+          <div style={{fontSize:13,color:C.textMuted,marginBottom:20,lineHeight:1.9}}>
+            <div>· 更新场外基金净值、涨幅、申购状态（41 只）</div>
+            <div>· 更新场内 ETF 行情与溢价率</div>
+            <div>· 预计耗时 2–3 分钟</div>
+          </div>
+          <button onClick={trigger} disabled={loading}
+            style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:loading?C.borderLight:`linear-gradient(135deg,${C.accent},${C.accentDim})`,color:loading?C.textDim:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",transition:"all 0.2s",letterSpacing:0.3}}>
+            {loading?"更新中，请稍候...":"立即更新数据"}
+          </button>
+        </Card>
+        {status&&(
+          <div style={{background:status.ok?C.greenBg:C.redBg,border:`1px solid ${status.ok?C.green:C.red}22`,borderRadius:12,padding:"12px 16px",marginBottom:16,fontSize:13}}>
+            <span style={{color:status.ok?C.green:C.red,fontWeight:700}}>{status.ok?"✓ 成功":"✗ 失败"}</span>
+            <span style={{color:C.textMuted,marginLeft:10}}>{status.msg} · {status.elapsed}s</span>
+          </div>
+        )}
+        {log.length>0&&(
+          <Card style={{padding:"16px 18px"}}>
+            <div style={{fontSize:11,color:C.textDim,marginBottom:10,letterSpacing:0.6,textTransform:"uppercase",fontWeight:600}}>操作记录</div>
+            {log.map((e,i)=>(
+              <div key={i} style={{fontSize:12,color:C.textMuted,padding:"5px 0",borderBottom:i<log.length-1?`1px solid ${C.border}`:"none",display:"flex",gap:10}}>
+                <span style={{color:C.textDim,fontFamily:"monospace"}}>{e.time}</span>
+                <span style={{color:e.ok?C.green:C.red}}>{e.ok?"✓":"✗"}</span>
+                <span>{e.msg}</span>
+              </div>
+            ))}
+          </Card>
+        )}
+        <div style={{textAlign:"center",marginTop:20}}>
+          <a href="/" style={{color:C.accent,fontSize:13,textDecoration:"none"}}>← 返回主站</a>
+        </div>
+      </div>
+      <style>{`*{box-sizing:border-box}`}</style>
+    </div>
+  );
+}
+
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+const TABS=[
+  {id:"overview",  label:"总览"},
+  {id:"watchlist", label:"自选"},
+  {id:"nasdaq",    label:"纳指被动"},
+  {id:"sp500",     label:"标普500"},
+  {id:"active",    label:"美股主动"},
+  {id:"etf",       label:"场内ETF"},
+];
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+export default function App() {
+  if(window.location.pathname==="/admin") return <AdminPage/>;
+
+  const [activeTab,setActiveTab]=useState("overview");
+  const [sortKey,setSortKey]=useState(null);
+  const [sortDir,setSortDir]=useState("desc");
+  const [search,setSearch]=useState("");
+  const [statusFilter,setStatusFilter]=useState("all");
+  const [selETF,setSelETF]=useState("513100");
+  const [scrolled,setScrolled]=useState(false);
+  const [showBackToTop,setShowBackToTop]=useState(false);
+  const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
+  const [showDisclaimer,setShowDisclaimer]=useState(()=>!localStorage.getItem("etf-disclaimer"));
+  const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
+  const [lastUpdate,setLastUpdate]=useState(null);
+  const [dataLoading,setDataLoading]=useState(true);
+  const [usdcny,setUsdcny]=useState(null);
+  const [compareList,setCompareList]=useState([]);
+  const [showCompare,setShowCompare]=useState(false);
+  const navRef=useRef(null);
+  const [indicator,setIndicator]=useState({left:0,width:0,opacity:0});
+
+  const [nasdaq,setNasdaq]=useState(FALLBACK.nasdaq_passive);
+  const [sp500, setSp500 ]=useState(FALLBACK.sp500_passive);
+  const [active,setActive]=useState(FALLBACK.us_active);
+  const [etfs,  setEtfs  ]=useState(FALLBACK.etfs);
+
+  useEffect(()=>{
+    const h=()=>{setScrolled(window.scrollY>8);setShowBackToTop(window.scrollY>400);};
+    window.addEventListener("scroll",h,{passive:true});
+    return()=>window.removeEventListener("scroll",h);
+  },[]);
+
+  // Sliding tab indicator
+  useEffect(()=>{
+    if(!navRef.current) return;
+    const btn=navRef.current.querySelector(`[data-tab="${activeTab}"]`);
+    if(!btn) return;
+    const nr=navRef.current.getBoundingClientRect();
+    const br=btn.getBoundingClientRect();
+    setIndicator({left:br.left-nr.left,width:br.width,opacity:1});
+  },[activeTab]);
+
+  useEffect(()=>{
+    (async()=>{
+      setDataLoading(true);
+      const ov=await apiFetch("/overview");
+      const [n,s,a,e]=await Promise.all([
+        apiFetch("/funds/nasdaq_passive"),apiFetch("/funds/sp500_passive"),
+        apiFetch("/funds/us_active"),apiFetch("/etfs"),
+      ]);
+      // 合并：以 FALLBACK 为底（含费率/规模/跟踪误差），用 API 实时数据覆盖动态字段
+      const merge=(fallback,apiData)=>{
+        if(!apiData?.data?.length) return fallback;
+        return fallback.map(fb=>{
+          const live=apiData.data.find(d=>d.code===fb.code);
+          return live?{...fb,...live}:fb;
+        });
+      };
+      setNasdaq(merge(FALLBACK.nasdaq_passive,n));
+      setSp500 (merge(FALLBACK.sp500_passive, s));
+      setActive(merge(FALLBACK.us_active,     a));
+      setEtfs  (merge(FALLBACK.etfs,          e));
+      if(ov?.last_update) setLastUpdate(ov.last_update);
+      setDataLoading(false);
+    })();
+  },[]);
+
+  useEffect(()=>{
+    (async()=>{
+      // 优先：ExchangeRate-API (免费，数据准确，更新及时)
+      try {
+        const r=await fetch("https://open.er-api.com/v6/latest/USD");
+        const d=await r.json();
+        if(d.result==="success"&&d.rates?.CNY) {setUsdcny(d.rates.CNY.toFixed(4));return;}
+      } catch{}
+      // 备用：Fawazahmed0 CDN
+      try {
+        const r=await fetch("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json");
+        const d=await r.json();
+        if(d.usd?.cny) {setUsdcny(d.usd.cny.toFixed(4));return;}
+      } catch{}
+      // 兜底：使用静态近期值
+      setUsdcny("7.2400");
+    })();
+  },[]);
+
+  const handleSort = k => {
+    if(sortKey===k) setSortDir(d=>d==="asc"?"desc":"asc");
+    else{setSortKey(k);setSortDir("desc");}
+  };
+  const sortData = data => {
+    if(!sortKey) return data;
+    return [...data].sort((a,b)=>{
+      const av=a[sortKey],bv=b[sortKey];
+      if(typeof av==="number"&&typeof bv==="number") return sortDir==="asc"?av-bv:bv-av;
+      return sortDir==="asc"?String(av||"").localeCompare(String(bv||"")):String(bv||"").localeCompare(String(av||""));
+    });
+  };
+  const switchTab = id=>{setActiveTab(id);setSortKey(null);setSearch("");setStatusFilter("all");window.scrollTo({top:0,behavior:"smooth"});};
+
+  const premHist = useMemo(()=>genPremiumHistory(selETF),[selETF]);
+  const retComp  = useMemo(()=>genReturnComp(),[]);
+
+  const filterData = data => {
+    let filtered = data;
+    if(search.trim()){
+      const q=search.trim().toLowerCase();
+      filtered=filtered.filter(f=>(f.name||"").toLowerCase().includes(q)||(f.code||"").toLowerCase().includes(q));
+    }
+    if(statusFilter==="open")      filtered=filtered.filter(f=>f.buy_status==="open");
+    if(statusFilter==="suspended") filtered=filtered.filter(f=>f.buy_status==="suspended");
+    return filtered;
+  };
+  const toggleFavorite = code=>{
+    setFavorites(prev=>{
+      const next=prev.includes(code)?prev.filter(c=>c!==code):[...prev,code];
+      localStorage.setItem("etf-favorites",JSON.stringify(next));
+      return next;
+    });
+  };
+  const toggleCompare = row=>{
+    setCompareList(prev=>{
+      if(prev.some(f=>f.code===row.code)) return prev.filter(f=>f.code!==row.code);
+      if(prev.length>=4) return prev;
+      const cat=nasdaq.some(f=>f.code===row.code)?"纳指被动"
+        :sp500.some(f=>f.code===row.code)?"标普500"
+        :active.some(f=>f.code===row.code)?"美股主动":"场内ETF";
+      return [...prev,{...row,_cat:cat}];
+    });
+  };
+
+  const avg=(arr,k)=>arr.length?(arr.reduce((s,f)=>s+(f[k]||0),0)/arr.length).toFixed(1):"0";
+  const totalFunds = nasdaq.length+sp500.length+active.length+etfs.length;
+  const openFunds  = [...nasdaq,...sp500,...active].filter(f=>f.buy_status==="open").length+etfs.length;
+  const topPerf    = [...active].sort((a,b)=>(b.ytd_return||0)-(a.ytd_return||0)).slice(0,5);
+
+  const maxReturn  = Math.max(...[...nasdaq,...sp500,...active].map(f=>f.ytd_return||0));
+
+  const actionsCol=(accent)=>({key:"_act",label:"",sortable:false,align:"center",render:(_,row)=>{
+    const isFav=favorites.includes(row.code);
+    const inCmp=compareList.some(f=>f.code===row.code);
+    const cmpFull=compareList.length>=4&&!inCmp;
+    return (
+      <div style={{display:"flex",gap:4,justifyContent:"center",alignItems:"center",whiteSpace:"nowrap"}}>
+        <button onClick={e=>{e.stopPropagation();toggleFavorite(row.code);}}
+          title={isFav?"取消自选":"加入自选"}
+          style={{background:"none",border:"none",cursor:"pointer",padding:"2px 3px",fontSize:15,lineHeight:1,color:isFav?C.orange:C.textDim,transition:"transform 0.2s,color 0.2s",transform:isFav?"scale(1.15)":"scale(1)"}}>
+          {isFav?"★":"☆"}
+        </button>
+        <button onClick={e=>{e.stopPropagation();if(!cmpFull||inCmp)toggleCompare(row);}}
+          title={inCmp?"取消对比":cmpFull?"最多4只":"加入对比"}
+          style={{background:inCmp?accent+"15":"none",border:`1px solid ${inCmp?accent+"60":C.borderLight}`,borderRadius:5,cursor:cmpFull&&!inCmp?"not-allowed":"pointer",padding:"2px 6px",fontSize:11,lineHeight:1.5,color:inCmp?accent:C.textDim,fontWeight:inCmp?700:400,transition:"all 0.18s",opacity:cmpFull&&!inCmp?0.35:1}}>
+          {inCmp?"−对比":"+对比"}
+        </button>
+      </div>
+    );
+  }});
+
+  const passiveCols=[
+    actionsCol(C.accent),
+    {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.accent,fontWeight:700,fontSize:12}}>{v}</span>},
+    {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12,color:C.text}}>{v}</span>},
+    {key:"fee_rate",label:"费率",tip:"年化管理费率，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
+    {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
+    {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅，仅供参考",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
+    {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小越紧密",align:"right",render:v=>v!=null?<span style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
+    {key:"daily_limit",label:"申购上限",tip:"每日单笔最大申购金额",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
+    {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
+  ];
+  const activeCols=[
+    actionsCol(C.purple),
+    {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.purple,fontWeight:700,fontSize:12}}>{v}</span>},
+    {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12}}>{v}</span>},
+    {key:"fee_rate",label:"费率",tip:"主动型管理费普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
+    {key:"scale",  label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
+    {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅，主动型差异较大",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
+    {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
+    {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
+  ];
+  const etfCols=[
+    actionsCol(C.cyan),
+    {key:"code",  label:"代码",  render:v=><span style={{fontFamily:"monospace",color:C.cyan,fontWeight:700,fontSize:12}}>{v}</span>},
+    {key:"name",  label:"ETF名称"},
+    {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
+    {key:"scale", label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
+    {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
+    {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价，超过1.5%需警惕",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
+    {key:"volume",label:"日均成交",tip:"日均成交额（亿元），越大流动性越好",align:"right"},
+  ];
+
+  const dismissDisclaimer = ()=>{localStorage.setItem("etf-disclaimer","1");setShowDisclaimer(false);};
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif"}}>
+      {showDisclaimer&&<DisclaimerModal onClose={dismissDisclaimer}/>}
+      <BackToTop visible={showBackToTop} offset={compareList.length>0?84:32}/>
+
+      {/* ── Header ── */}
+      <header style={{
+        background:"rgba(255,255,255,0.88)",
+        backdropFilter:"saturate(180%) blur(24px)",
+        WebkitBackdropFilter:"saturate(180%) blur(24px)",
+        borderBottom:`1px solid ${scrolled?C.border:"transparent"}`,
+        boxShadow:scrolled?"0 1px 24px rgba(0,0,0,0.08)":"none",
+        position:"sticky",top:0,zIndex:100,
+        transition:"box-shadow 0.35s ease, border-color 0.35s ease",
+      }}>
+        <div style={{maxWidth:1440,margin:"0 auto",padding:"0 40px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <a href="/" onClick={e=>{e.preventDefault();switchTab("overview");}} style={{textDecoration:"none",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+            <div style={{width:34,height:34,borderRadius:9,background:`linear-gradient(135deg,${C.accent},#5856d6)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:15,color:"#fff",boxShadow:`0 2px 14px ${C.accent}45`}}>W</div>
+            <span style={{fontSize:17,fontWeight:800,letterSpacing:-0.5,color:C.text}}>Wise<span style={{color:C.accent}}>ETF</span></span>
+          </a>
+
+          {/* Sliding tab nav */}
+          <nav ref={navRef} style={{display:"flex",alignItems:"center",height:"100%",position:"relative"}}>
+            {/* Sliding indicator */}
+            <div style={{position:"absolute",bottom:0,left:indicator.left,width:indicator.width,height:2,background:`linear-gradient(90deg,${C.accent},${C.accent}80)`,borderRadius:"2px 2px 0 0",transition:"left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1)",opacity:indicator.opacity}}/>
+            {TABS.map(tab=>(
+              <button key={tab.id} data-tab={tab.id} onClick={()=>switchTab(tab.id)}
+                style={{height:"100%",padding:"0 20px",border:"none",background:"none",color:activeTab===tab.id?C.accent:C.textMuted,fontWeight:activeTab===tab.id?700:500,fontSize:14,cursor:"pointer",borderBottom:"2px solid transparent",transition:"color 0.2s",whiteSpace:"nowrap"}}>
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:12}}>
+            {usdcny&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:8,background:C.accentBg,border:`1px solid ${C.accent}22`}}>
+                <span style={{fontSize:10,color:C.textDim,letterSpacing:0.3}}>USD/CNY</span>
+                <span style={{fontSize:13,fontWeight:700,color:C.accent,fontFamily:"monospace",letterSpacing:0.5}}>{usdcny}</span>
+              </div>
+            )}
+            {lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap"}}>更新于 {lastUpdate}</span>}
+            {/* Hamburger (mobile only) */}
+            <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn"
+              aria-label="菜单"
+              style={{display:"none",flexDirection:"column",gap:5,background:"none",border:"none",cursor:"pointer",padding:6}}>
+              <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(45deg) translateY(7px)":"none"}}/>
+              <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",opacity:mobileMenuOpen?0:1}}/>
+              <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(-45deg) translateY(-7px)":"none"}}/>
+            </button>
+          </div>
+        </div>
+        {/* Mobile dropdown menu */}
+        {mobileMenuOpen&&(
+          <div className="mobile-menu" style={{borderTop:`1px solid ${C.border}`,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)"}}>
+            {TABS.map(tab=>(
+              <button key={tab.id} onClick={()=>{switchTab(tab.id);setMobileMenuOpen(false);}}
+                style={{display:"block",width:"100%",padding:"14px 24px",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}30`,color:activeTab===tab.id?C.accent:C.text,fontWeight:activeTab===tab.id?700:400,fontSize:15,cursor:"pointer"}}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </header>
+
+      {/* ── Content ── */}
+      <main style={{maxWidth:1440,margin:"0 auto",padding:"36px 40px 100px"}}>
+        <div key={activeTab} className="tab-content">
+
+        {/* ════ WATCHLIST ════ */}
+        {activeTab==="watchlist"&&(
+          <>
+            <SectionHeader title="我的自选" subtitle={favorites.length>0?`共 ${favorites.length} 只基金`:"还没有自选"} color={C.orange}/>
+            {favorites.length===0 ? (
+              <WatchlistEmpty onGo={()=>switchTab("nasdaq")}/>
+            ) : (
+              <>
+                {nasdaq.filter(f=>favorites.includes(f.code)).length>0&&(
+                  <Reveal delay={0}><div style={{marginBottom:28}}>
+                    <SectionHeader title="纳指被动" color={C.accent}/>
+                    <DataTable columns={passiveCols} data={nasdaq.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                  </div></Reveal>
+                )}
+                {sp500.filter(f=>favorites.includes(f.code)).length>0&&(
+                  <Reveal delay={0.05}><div style={{marginBottom:28}}>
+                    <SectionHeader title="标普500被动" color={C.cyan}/>
+                    <DataTable columns={passiveCols} data={sp500.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                  </div></Reveal>
+                )}
+                {active.filter(f=>favorites.includes(f.code)).length>0&&(
+                  <Reveal delay={0.1}><div style={{marginBottom:28}}>
+                    <SectionHeader title="美股主动" color={C.purple}/>
+                    <DataTable columns={activeCols} data={active.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                  </div></Reveal>
+                )}
+                {etfs.filter(f=>favorites.includes(f.code)).length>0&&(
+                  <Reveal delay={0.15}><div style={{marginBottom:28}}>
+                    <SectionHeader title="场内ETF" color={C.orange}/>
+                    <DataTable columns={etfCols} data={etfs.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                  </div></Reveal>
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        {/* ════ OVERVIEW ════ */}
+        {activeTab==="overview"&&(
+          <>
+            {/* Stat row */}
+            <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:36}}>
+              {[
+                {label:"纳指均涨幅",value:`+${avg(nasdaq,"ytd_return")}%`,sub:"近一年",color:C.accent},
+                {label:"标普均涨幅",value:`+${avg(sp500,"ytd_return")}%`,sub:"近一年",color:C.cyan},
+                {label:"主动均涨幅",value:`+${avg(active,"ytd_return")}%`,sub:"近一年",color:C.purple},
+                {label:"ETF均溢价",value:`${avg(etfs,"premium")}%`,sub:"当前",color:C.orange},
+                {label:"监控总数",value:String(totalFunds),sub:`${openFunds}只可申购`,color:C.green},
+              ].map((s,i)=><StatCard key={s.label} {...s} index={i}/>)}
+            </div>
+
+            {/* Charts */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:36}}>
+              <Reveal delay={0.05}>
+                <Card style={{padding:"24px 26px"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
+                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>近6个月对比</div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={retComp} barGap={4} barCategoryGap="30%">
+                      <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+                      <XAxis dataKey="month" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%"/>
+                      <Tooltip content={<ChartTooltip/>}/>
+                      <ReferenceLine y={0} stroke={C.border}/>
+                      <Legend wrapperStyle={{fontSize:11,paddingTop:12}}/>
+                      <Bar dataKey="nasdaq" name="纳斯达克100" fill={C.accent} radius={[5,5,0,0]}/>
+                      <Bar dataKey="sp500"  name="标普500"    fill={C.cyan}   radius={[5,5,0,0]}/>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              </Reveal>
+
+              <Reveal delay={0.1}>
+                <Card style={{padding:"24px 26px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF溢价走势</div>
+                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>近30天</div>
+                    </div>
+                    <select value={selETF} onChange={e=>setSelETF(e.target.value)}
+                      style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 10px",fontSize:12,outline:"none",cursor:"pointer"}}>
+                      {etfs.map(e=><option key={e.code} value={e.code}>{e.code} {e.name}</option>)}
+                    </select>
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={premHist} margin={{top:16,right:0,left:0,bottom:0}}>
+                      <defs>
+                        <linearGradient id="premGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%"  stopColor={C.orange} stopOpacity={0.18}/>
+                          <stop offset="95%" stopColor={C.orange} stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+                      <XAxis dataKey="date" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%"/>
+                      <ReferenceLine y={1.5} stroke={C.orange} strokeDasharray="3 3" label={{value:"警戒线",fill:C.orange,fontSize:10,position:"right"}}/>
+                      <Tooltip content={<ChartTooltip/>}/>
+                      <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad)" strokeWidth={2} dot={false}/>
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </Card>
+              </Reveal>
+            </div>
+
+            {/* FX Analysis */}
+            <FXAnalysisCard/>
+
+            {/* Top 5 */}            <Reveal delay={0.08}>
+              <SectionHeader title="近一年涨幅 TOP 5 · 主动型" color={C.purple}/>
+              <div style={{display:"flex",gap:16,marginBottom:36,flexWrap:"wrap"}}>
+                {topPerf.map((f,i)=>(
+                  <Card key={f.code} style={{flex:1,minWidth:200,padding:"20px 22px",position:"relative",overflow:"hidden"}}>
+                    <div style={{position:"absolute",top:-10,right:-10,fontSize:80,fontWeight:900,color:C.accent+(i===0?"10":"07"),lineHeight:1,userSelect:"none"}}>
+                      {i+1}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                      {i===0&&<span style={{fontSize:10,background:C.accent+"18",color:C.accent,padding:"1px 7px",borderRadius:10,fontWeight:700}}>TOP</span>}
+                      <span style={{fontSize:11,color:C.textDim,fontFamily:"monospace"}}>{f.code}</span>
+                    </div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:14,lineHeight:1.4,paddingRight:40,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
+                    <div style={{fontSize:28,fontWeight:800,color:C.green,letterSpacing:-0.5,marginBottom:6}}>+{f.ytd_return}%</div>
+                    <div style={{height:3,borderRadius:2,background:C.borderLight,overflow:"hidden",marginBottom:8}}>
+                      <div style={{height:"100%",width:`${Math.min(f.ytd_return/120*100,100)}%`,background:`linear-gradient(90deg,${C.green},${C.green}80)`,borderRadius:2}}/>
+                    </div>
+                    <div style={{fontSize:11,color:C.textDim}}>规模 {f.scale}亿 · 限额 {f.daily_limit}</div>
+                  </Card>
+                ))}
+              </div>
+            </Reveal>
+
+            {/* ETF warning */}
+            <Reveal delay={0.1}>
+              <SectionHeader title="场内ETF溢价预警" subtitle="溢价率 > 2% 请注意风险" color={C.orange}/>
+              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                {etfs.map(e=>(
+                  <Card key={e.code} style={{minWidth:200,flex:1,padding:"18px 22px",borderColor:(e.premium||0)>2?`${C.red}30`:C.border}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                      <div>
+                        <div style={{fontSize:11,color:C.textDim,fontFamily:"monospace",marginBottom:4}}>{e.code}</div>
+                        <div style={{fontSize:14,fontWeight:600,color:C.text}}>{e.name}</div>
+                        <div style={{fontSize:11,color:C.textDim,marginTop:2}}>{e.tracking_index}</div>
+                      </div>
+                      <PremiumBadge value={e.premium||0}/>
+                    </div>
+                    {/* Premium meter */}
+                    <div style={{marginBottom:14}}>
+                      <div style={{height:4,borderRadius:2,background:C.borderLight,overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${Math.min((e.premium||0)/4*100,100)}%`,background:(e.premium||0)>2?C.red:(e.premium||0)>1?C.orange:C.green,borderRadius:2,transition:"width 0.6s ease"}}/>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:20}}>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:2}}>涨幅</div><div style={{fontSize:14,fontWeight:700,color:C.green}}>+{e.ytd_return}%</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:2}}>规模</div><div style={{fontSize:14,fontWeight:600}}>{e.scale}亿</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:2}}>成交</div><div style={{fontSize:14,fontWeight:600}}>{e.volume}亿</div></div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </Reveal>
+          </>
+        )}
+
+        {/* ════ NASDAQ ════ */}
+        {activeTab==="nasdaq"&&(
+          <Reveal>
+            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="数据来源：天天基金网" count={filterData(nasdaq).length} color={C.accent}/>
+            <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
+              <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
+              <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
+            </div>
+            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(nasdaq))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaq).length===0&&<EmptyResult query={search}/>}</>}
+            <TipBox color={C.accent} text="综合费率最低的有天弘(018043, 0.70%)和嘉实(016532, 0.70%)，但目前均暂停申购。可申购中费率较低的是摩根(019172, 0.72%)和易方达(161130, 0.72%)。广发(270042)规模最大(108亿)，跟踪误差最小(1.10%)。"/>
+          </Reveal>
+        )}
+
+        {/* ════ SP500 ════ */}
+        {activeTab==="sp500"&&(
+          <Reveal>
+            <SectionHeader title="场外标普500基金对比" subtitle="数据来源：天天基金网" count={filterData(sp500).length} color={C.cyan}/>
+            <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
+              <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
+              <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
+            </div>
+            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(sp500))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500).length===0&&<EmptyResult query={search}/>}</>}
+            <TipBox color={C.cyan} text="博时(050025)规模最大(67.56亿)、跟踪误差最小(1.31%)，但暂停申购。可申购推荐摩根(017641, 0.77%)和易方达(161125)。注意161128跟踪标普信息科技指数，波动更大。"/>
+          </Reveal>
+        )}
+
+        {/* ════ ACTIVE ════ */}
+        {activeTab==="active"&&(
+          <Reveal>
+            <SectionHeader title="场外美股（主动型）基金对比" subtitle="数据来源：天天基金网" count={filterData(active).length} color={C.purple}/>
+            <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
+              <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
+              <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
+            </div>
+            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeCols} data={sortData(filterData(active))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(active).length===0&&<EmptyResult query={search}/>}</>}
+            <TipBox color={C.purple} text="主动型管理费较高(~1.55%)，但优秀经理可带来超额收益。易方达全球成长(012920)近一年+100.44%，但限额仅50元/日。申购限额越低说明额度越紧张。"/>
+          </Reveal>
+        )}
+
+        {/* ════ ETF ════ */}
+        {activeTab==="etf"&&(
+          <Reveal>
+            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="可在A股账户直接交易，关注溢价风险" count={filterData(etfs).length} color={C.orange}/>
+            <SearchBar value={search} onChange={setSearch} color={C.orange}/>
+            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfCols} data={sortData(filterData(etfs))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfs).length===0&&<EmptyResult query={search}/>}</>}
+            <Card style={{marginTop:24,padding:"24px 26px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>溢价率历史走势（近30天）</div>
+                  <div style={{fontSize:12,color:C.textDim,marginTop:2}}>橙色虚线为 1.5% 警戒线</div>
+                </div>
+                <select value={selETF} onChange={e=>setSelETF(e.target.value)}
+                  style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 12px",fontSize:12,outline:"none"}}>
+                  {etfs.map(e=><option key={e.code} value={e.code}>{e.code} {e.name}</option>)}
+                </select>
+              </div>
+              <ResponsiveContainer width="100%" height={280}>
+                <AreaChart data={premHist} margin={{top:20,right:0,left:0,bottom:0}}>
+                  <defs>
+                    <linearGradient id="premGrad2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor={C.orange} stopOpacity={0.2}/>
+                      <stop offset="95%" stopColor={C.orange} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+                  <XAxis dataKey="date" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%" domain={["auto","auto"]}/>
+                  <ReferenceLine y={1.5} stroke={C.orange} strokeDasharray="3 3" label={{value:"1.5%",fill:C.orange,fontSize:10,position:"right"}}/>
+                  <Tooltip content={<ChartTooltip/>}/>
+                  <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad2)" strokeWidth={2} dot={{r:2,fill:C.orange,strokeWidth:0}}/>
+                </AreaChart>
+              </ResponsiveContainer>
+            </Card>
+            <TipBox color={C.orange} text="场内ETF价格 = 净值 + 溢价。溢价 > 1.5% 时需谨慎；> 3% 时建议等溢价收窄后再买。可申购场外联接基金替代场内ETF以规避溢价风险。"/>
+          </Reveal>
+        )}
+
+        </div>
+      </main>
+
+      {/* ── Compare Bar & Modal ── */}
+      <CompareBar
+        list={compareList}
+        onOpen={()=>setShowCompare(true)}
+        onRemove={code=>setCompareList(p=>p.filter(f=>f.code!==code))}
+        onClear={()=>setCompareList([])}
+      />
+      {showCompare&&compareList.length>=2&&(
+        <CompareModal list={compareList} onClose={()=>setShowCompare(false)}/>
+      )}
+
+      {/* ── Footer ── */}
+      <footer style={{background:"#fff",borderTop:`1px solid ${C.border}`}}>
+        <div style={{maxWidth:1440,margin:"0 auto",padding:"56px 40px 48px",display:"grid",gridTemplateColumns:"1fr auto auto",gap:"60px 80px"}}>
+          <div style={{maxWidth:340}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+              <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.accent},#5856d6)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:14,color:"#fff"}}>W</div>
+              <span style={{fontSize:19,fontWeight:800,letterSpacing:-0.5,color:C.text}}>Wise<span style={{color:C.accent}}>ETF</span></span>
+            </div>
+            <p style={{fontSize:14,color:C.textMuted,lineHeight:1.85,marginBottom:10}}>
+              中国投资者的美股ETF与QDII基金追踪平台，覆盖纳斯达克100、标普500被动指数及主动型QDII基金，提供费率对比、溢价监控与申购状态追踪。
+            </p>
+            <p style={{fontSize:12,color:C.textDim}}>wise-etf.com</p>
+          </div>
+
+          <div style={{minWidth:120}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>快速导航</div>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              {TABS.slice(1).map(tab=>(
+                <button key={tab.id} onClick={()=>{switchTab(tab.id);}}
+                  className="footer-link"
+                  style={{background:"none",border:"none",padding:0,fontSize:14,color:C.textMuted,cursor:"pointer",textAlign:"left",transition:"color 0.15s,transform 0.15s",lineHeight:"20px",height:20}}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{minWidth:160}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>其他</div>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              {[
+                {label:"投资主站",   href:"https://www.wise-invest.org",  icon:"🌐"},
+                {label:"Wise-Witness",href:"https://www.wise-witness.com",icon:"🏦"},
+                {label:"Wise-Claw",  href:"https://www.wise-claw.org",    icon:"🦁"},
+                {label:"Wise-SIM",   href:"https://www.wise-sim.org",     icon:"📱"},
+              ].map(l=>(
+                <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer"
+                  className="footer-link"
+                  style={{fontSize:14,color:C.textMuted,textDecoration:"none",display:"flex",alignItems:"center",gap:8,transition:"color 0.15s,transform 0.15s",lineHeight:"20px",height:20}}>
+                  <span style={{fontSize:14,lineHeight:"20px"}}>{l.icon}</span>{l.label}
+                </a>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{borderTop:`1px solid ${C.border}`}}/>
+        <div style={{maxWidth:1440,margin:"0 auto",padding:"18px 40px",display:"flex",justifyContent:"center",flexDirection:"column",alignItems:"center",gap:5}}>
+          <div style={{fontSize:12,color:C.textDim}}>© 2026 wise-etf.com · All rights reserved</div>
+          <div style={{fontSize:12,color:C.textDim}}>仅提供信息参考，不构成任何投资建议</div>
+        </div>
+      </footer>
+
+      <style>{`
+        *{box-sizing:border-box}
+
+        /* Tab content */
+        @keyframes fadeInUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+        .tab-content{animation:fadeInUp 0.4s cubic-bezier(0.25,0.46,0.45,0.94) both}
+
+        /* StatCard stagger */
+        @keyframes cardIn{from{opacity:0;transform:translateY(16px) scale(0.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+        .stat-card{animation:cardIn 0.45s cubic-bezier(0.25,0.46,0.45,0.94) both}
+
+        /* Status pulse */
+        @keyframes statusPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(1.4)}}
+
+        /* Premium alert */
+        @keyframes premiumAlert{0%,100%{opacity:1}60%{opacity:0.6}}
+
+        /* Table */
+        .table-row{transition:background 0.15s,border-left 0.15s}
+
+        /* Footer links */
+        .footer-link:hover{color:${C.text} !important;transform:translateX(3px)}
+
+        /* Nav hover */
+        header nav button:hover{color:${C.text} !important}
+
+        /* Skeleton */
+        @keyframes skeletonPulse{0%,100%{opacity:1}50%{opacity:0.45}}
+
+        /* Compare bar slide up */
+        @keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}
+
+        /* Scrollbar */
+        ::-webkit-scrollbar{width:5px;height:5px}
+        ::-webkit-scrollbar-track{background:${C.bg}}
+        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px}
+        ::-webkit-scrollbar-thumb:hover{background:${C.textDim}}
+
+        @media(max-width:900px){
+          header nav{display:none}
+          .hamburger-btn{display:flex !important}
+          .mobile-menu{display:block}
+        }
+      `}</style>
+    </div>
+  );
+}
