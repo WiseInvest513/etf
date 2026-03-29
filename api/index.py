@@ -15,9 +15,10 @@ Wise-ETF Serverless API  v3.0
   UTC 02:00 / 北京 10:00 — /api/cron/refresh 预热全部缓存
 """
 
-import json, re, logging, time
+import json, re, logging, time, xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, List
 
 import requests
@@ -36,6 +37,7 @@ CACHE_TTL = {
     "funds":      6 * 3600,   # 基金净值深夜更新，6h 有效
     "etfs":       5 * 60,     # ETF 溢价率盘中实时，5min 有效
     "fx_history": 6 * 3600,   # 汇率/指数历史，6h 有效
+    "news":       30 * 60,    # 市场新闻，30min 缓存
 }
 
 def _mem_get(key: str, kind: str) -> Optional[list]:
@@ -562,6 +564,139 @@ def get_fx_index_history(response: Response):
 
     _cache_header(response, 21600)
     return {"data": data, "source": source}
+
+
+# ── 情感关键词（轻量级，针对纳指/科技股语境）──────────────────────────────────
+_BEARISH = {
+    "fall", "falls", "fell", "drop", "drops", "dropped", "decline", "declines", "declined",
+    "correction", "sell-off", "selloff", "plunge", "plunges", "slump", "tumble", "tumbles",
+    "recession", "tariff", "tariffs", "hike", "hikes", "hawkish", "miss", "misses", "missed",
+    "weak", "weaker", "concern", "concerns", "fear", "fears", "warning", "warns", "worse",
+    "loss", "losses", "crash", "lower", "down", "sinks", "sank", "retreat", "retreats",
+    "inflation", "layoff", "layoffs",
+}
+_BULLISH = {
+    "rally", "rallies", "surge", "surges", "gain", "gains", "rise", "rises", "rose",
+    "beat", "beats", "strong", "stronger", "growth", "cut", "cuts", "dovish", "positive",
+    "record", "high", "recover", "recovers", "rebound", "rebounds", "lift", "lifts",
+    "outperform", "upgrade", "upgrades", "boost", "boosted", "jump", "jumps", "jumped",
+    "soar", "soars", "optimism", "upside", "better",
+}
+
+def _sentiment(title: str) -> str:
+    words = set(title.lower().replace("-", " ").replace("'s", "").split())
+    bull  = len(words & _BULLISH)
+    bear  = len(words & _BEARISH)
+    if bull > bear:  return "bullish"
+    if bear > bull:  return "bearish"
+    return "neutral"
+
+# 与纳指/科技相关的筛选词（必须含其一，避免无关新闻混入）
+_NASDAQ_KEYWORDS = {
+    "nasdaq", "qqq", "tech", "technology", "ai", "artificial intelligence",
+    "semiconductor", "chip", "fed", "federal reserve", "rate", "inflation",
+    "s&p", "s&p 500", "market", "stock", "equity", "equities", "etf",
+    "earnings", "gdp", "tariff", "trade", "big tech", "apple", "nvidia",
+    "microsoft", "google", "alphabet", "amazon", "meta", "tesla",
+}
+
+def _is_relevant(title: str) -> bool:
+    t = title.lower()
+    return any(kw in t for kw in _NASDAQ_KEYWORDS)
+
+
+def _translate_zh(text: str) -> str:
+    """Google Translate 非官方接口，无需 API Key，失败时返回原文"""
+    try:
+        import urllib.parse
+        url  = "https://translate.googleapis.com/translate_a/single"
+        resp = _get(url, params={
+            "client": "gtx", "sl": "en", "tl": "zh-CN", "dt": "t", "q": text
+        }, timeout=(2, 5))
+        if resp and resp.ok:
+            data = resp.json()
+            translated = "".join(seg[0] for seg in data[0] if seg[0])
+            if translated:
+                return translated
+    except Exception as e:
+        logger.warning(f"[translate] {e}")
+    return text
+
+
+def fetch_market_news() -> list:
+    """
+    抓取影响纳指的市场新闻。
+    数据源：Yahoo Finance RSS（QQQ + ^NDX）
+    返回：[{title, link, age_hours, sentiment}]
+    """
+    sources = [
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=QQQ&region=US&lang=en-US",
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5ENDX&region=US&lang=en-US",
+    ]
+    seen, candidates = set(), []
+    for url in sources:
+        resp = _get(url, headers=YF_HEADERS, timeout=(3, 8))
+        if not (resp and resp.ok):
+            continue
+        try:
+            root = ET.fromstring(resp.content)
+            for item in root.findall(".//item"):
+                title = (item.findtext("title") or "").strip()
+                link  = (item.findtext("link")  or "").strip()
+                pub   = (item.findtext("pubDate") or "").strip()
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+                age_h = None
+                try:
+                    dt    = parsedate_to_datetime(pub)
+                    age_h = round((datetime.now(dt.tzinfo) - dt).total_seconds() / 3600, 1)
+                except Exception:
+                    pass
+                candidates.append({
+                    "title":      title,
+                    "link":       link,
+                    "age_hours":  age_h,
+                    "sentiment":  _sentiment(title),
+                    "_relevant":  _is_relevant(title),
+                })
+        except Exception as e:
+            logger.warning(f"[news] parse {url[:50]}: {e}")
+
+    # 相关新闻优先，再按时间排（age_hours 小的更新）
+    candidates.sort(key=lambda x: (0 if x["_relevant"] else 1, x["age_hours"] or 999))
+    top = candidates[:5]
+
+    # 并发翻译标题
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futs = {ex.submit(_translate_zh, n["title"]): i for i, n in enumerate(top)}
+        done, _ = wait(futs, timeout=6)
+        for fut in done:
+            idx = futs[fut]
+            try:
+                top[idx]["title"] = fut.result() or top[idx]["title"]
+            except Exception:
+                pass
+
+    items = [{k: v for k, v in n.items() if k != "_relevant"} for n in top]
+    logger.info(f"[news] fetched {len(items)} items (from {len(candidates)} candidates)")
+    return items
+
+
+@app.get("/api/news")
+def get_news(response: Response):
+    """市场新闻（Yahoo Finance RSS，30min 缓存）"""
+    cache_key = "news"
+    cached = _mem_get(cache_key, "news")
+    if cached is not None:
+        _cache_header(response, 1800)
+        return {"data": cached, "source": "cache"}
+
+    data = fetch_market_news()
+    if data:
+        _mem_set(cache_key, data)
+    _cache_header(response, 1800)
+    return {"data": data, "source": "live" if data else "empty"}
 
 
 @app.get("/api/cron/refresh")
