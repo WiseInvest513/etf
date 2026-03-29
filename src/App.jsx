@@ -78,10 +78,21 @@ const genPremiumHistory = (code, days=30) => {
     return {date:`${d.getMonth()+1}/${d.getDate()}`,premium:+(base+(Math.random()-0.4)*3).toFixed(2)};
   });
 };
-const genReturnComp = () =>
-  ["10月","11月","12月","1月","2月","3月"].map(m=>({
-    month:m, nasdaq:+(Math.random()*8-2).toFixed(2), sp500:+(Math.random()*6-1.5).toFixed(2),
-  }));
+// 过去12个月真实月度收益（来源：Slickcharts / FRED，2024-04 ~ 2025-03，美元口径价格收益）
+const MONTHLY_12M = [
+  {month:"4月",  nasdaq:-4.46, sp500:-4.23},
+  {month:"5月",  nasdaq: 6.28, sp500: 4.94},
+  {month:"6月",  nasdaq: 6.18, sp500: 3.08},
+  {month:"7月",  nasdaq:-1.63, sp500: 0.94},
+  {month:"8月",  nasdaq: 1.10, sp500: 2.00},
+  {month:"9月",  nasdaq: 2.48, sp500: 2.46},
+  {month:"10月", nasdaq:-0.85, sp500:-0.91},
+  {month:"11月", nasdaq: 5.23, sp500: 5.40},
+  {month:"12月", nasdaq: 0.39, sp500:-2.62},
+  {month:"1月",  nasdaq: 2.22, sp500: 2.33},
+  {month:"2月",  nasdaq:-2.76, sp500:-0.25},
+  {month:"3月",  nasdaq:-7.69, sp500:-5.97},
+];
 
 // ─── FX / Index Historical Data ───────────────────────────────────────────────
 // USD/CNY 年末汇率（来源：中国外汇交易中心 / Wind 公开数据）
@@ -92,10 +103,32 @@ const FX_ANNUAL = {
   2021:[6.5249,6.3726], 2022:[6.3726,6.8972], 2023:[6.8972,7.1001],
   2024:[7.1001,7.2996], 2025:[7.2996,7.0059],
 };
-// 美元口径年化涨幅（来源：Bloomberg / 指数官方年报）
+// 年度涨跌幅（来源：Slickcharts，纳指100价格口径，标普500总回报含股息，1990-2025）
 const INDEX_ANNUAL = {
-  nasdaq:{2015:9.5,2016:6.9,2017:32.7,2018:-0.1,2019:38.9,2020:48.0,2021:27.4,2022:-32.6,2023:54.9,2024:24.7,2025:21.0},
-  sp500: {2015:1.4,2016:11.9,2017:21.8,2018:-4.4,2019:31.5,2020:18.4,2021:28.7,2022:-18.1,2023:26.3,2024:23.3,2025:17.9},
+  nasdaq:{
+    1990:-10.41,1991:64.99,1992:8.87,1993:10.58,1994:1.50,
+    1995:42.54,1996:42.54,1997:20.63,1998:85.31,1999:101.95,
+    2000:-36.84,2001:-32.65,2002:-37.58,2003:49.12,2004:10.44,
+    2005:1.49,2006:6.79,2007:18.67,2008:-41.89,2009:53.54,
+    2010:19.22,2011:2.70,2012:16.82,2013:34.99,2014:17.94,
+    2015:8.43,2016:5.89,2017:31.52,2018:-1.04,2019:37.96,
+    2020:47.58,2021:26.63,2022:-32.97,2023:53.81,2024:24.88,2025:20.17,
+  },
+  sp500:{
+    1990:-3.10,1991:30.47,1992:7.62,1993:10.08,1994:1.32,
+    1995:37.58,1996:22.96,1997:33.36,1998:28.58,1999:21.04,
+    2000:-9.10,2001:-11.89,2002:-22.10,2003:28.68,2004:10.88,
+    2005:4.91,2006:15.79,2007:5.49,2008:-37.00,2009:26.46,
+    2010:15.06,2011:2.11,2012:16.00,2013:32.39,2014:13.69,
+    2015:1.38,2016:11.96,2017:21.83,2018:-4.38,2019:31.49,
+    2020:18.40,2021:28.71,2022:-18.11,2023:26.29,2024:25.02,2025:17.88,
+  },
+};
+
+// 关键周期年化复合收益率 CAGR（来源：Slickcharts，截至2025年）
+const INDEX_CAGR = {
+  nasdaq:{ "36年\n1990-2025":14.03, "15年\n2011-2025":17.60, "10年\n2016-2025":18.58, "5年\n2021-2025":14.40 },
+  sp500: { "36年\n1990-2025":10.80, "15年\n2011-2025":14.07, "10年\n2016-2025":14.82, "5年\n2021-2025":14.43 },
 };
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
@@ -456,6 +489,112 @@ function BackToTop({visible, offset=32}) {
 }
 
 // ─── FX Analysis Card ────────────────────────────────────────────────────────
+// ─── Index History Card ───────────────────────────────────────────────────────
+function IndexHistoryCard() {
+  const [mode, setMode] = useState("compare"); // "nasdaq" | "sp500" | "compare"
+
+  // 构建年度数据数组
+  const annualRows = useMemo(() => {
+    const years = Object.keys(INDEX_ANNUAL.nasdaq).map(Number).sort((a,b)=>a-b);
+    return years.map(y => ({
+      year: String(y),
+      nasdaq: INDEX_ANNUAL.nasdaq[y],
+      sp500:  INDEX_ANNUAL.sp500[y],
+    }));
+  }, []);
+
+  const cagrEntries = Object.entries(INDEX_CAGR.nasdaq).map(([label, nq], i) => ({
+    label,
+    nasdaq: nq,
+    sp500: Object.values(INDEX_CAGR.sp500)[i],
+  }));
+
+  // 自定义 Bar 颜色（正绿负红）
+  const NasdaqBar = (props) => {
+    const { x, y, width, height, value } = props;
+    const fill = value >= 0 ? C.accent : C.red;
+    const h = Math.abs(height);
+    const yPos = value >= 0 ? y : y + height;
+    return <rect x={x} y={yPos} width={width} height={h} fill={fill} rx={2} opacity={0.85}/>;
+  };
+  const Sp500Bar = (props) => {
+    const { x, y, width, height, value } = props;
+    const fill = value >= 0 ? C.cyan : "#e8704a";
+    const h = Math.abs(height);
+    const yPos = value >= 0 ? y : y + height;
+    return <rect x={x} y={yPos} width={width} height={h} fill={fill} rx={2} opacity={0.85}/>;
+  };
+
+  const tabs = [{id:"compare",label:"对比"},{id:"nasdaq",label:"纳指100"},{id:"sp500",label:"标普500"}];
+
+  return (
+    <Reveal delay={0.06}>
+      <Card style={{padding:"24px 26px",marginBottom:28}}>
+        {/* Header */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>纳指100 vs 标普500 · 历年回报（1990-2025）</div>
+            <div style={{fontSize:12,color:C.textDim}}>纳指100价格口径 · 标普500总回报含股息 · 来源：Slickcharts</div>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setMode(t.id)}
+                style={{padding:"5px 12px",borderRadius:8,border:`1.5px solid ${mode===t.id?C.accent:C.border}`,background:mode===t.id?C.accent+"12":"none",color:mode===t.id?C.accent:C.textMuted,fontSize:12,fontWeight:mode===t.id?700:400,cursor:"pointer",transition:"all 0.18s"}}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Bar chart */}
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={annualRows} barGap={2} barCategoryGap="18%" margin={{top:16,right:8,left:0,bottom:0}}>
+            <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+            <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
+              tickFormatter={v=>v.slice(2)} interval={1}/>
+            <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%" domain={[-50,110]}/>
+            <ReferenceLine y={0} stroke={C.border} strokeWidth={1.5}/>
+            <Tooltip content={<ChartTooltip unit="%"/>}/>
+            {(mode==="compare"||mode==="nasdaq")&&
+              <Bar dataKey="nasdaq" name="纳指100" shape={<NasdaqBar/>}/>}
+            {(mode==="compare"||mode==="sp500")&&
+              <Bar dataKey="sp500"  name="标普500" shape={<Sp500Bar/>}/>}
+            {mode==="compare"&&<Legend wrapperStyle={{fontSize:11,paddingTop:10}}/>}
+          </BarChart>
+        </ResponsiveContainer>
+
+        {/* CAGR cards */}
+        <div style={{display:"flex",gap:12,marginTop:20,flexWrap:"wrap"}}>
+          {cagrEntries.map(({label,nasdaq,sp500},i)=>{
+            const colors=[C.accent,C.green,"#e8a020",C.purple];
+            const col=colors[i];
+            const periods=["36年 (1990-2025)","15年 (2011-2025)","10年 (2016-2025)","5年 (2021-2025)"];
+            return (
+              <div key={label} style={{flex:1,minWidth:140,borderRadius:14,border:`1px solid ${col}22`,background:col+"08",padding:"16px 18px"}}>
+                <div style={{fontSize:11,color:C.textDim,marginBottom:8,whiteSpace:"nowrap"}}>{periods[i]}</div>
+                {(mode==="compare"||mode==="nasdaq")&&(
+                  <div style={{marginBottom:mode==="compare"?6:0}}>
+                    {mode==="compare"&&<div style={{fontSize:10,color:C.textDim,marginBottom:2}}>纳指100</div>}
+                    <div style={{fontSize:24,fontWeight:800,color:col,letterSpacing:-0.5}}>{nasdaq}%</div>
+                    <div style={{fontSize:10,color:C.textDim,marginTop:2}}>年化复合收益</div>
+                  </div>
+                )}
+                {(mode==="compare"||mode==="sp500")&&(
+                  <div style={{marginTop:mode==="compare"?4:0}}>
+                    {mode==="compare"&&<div style={{fontSize:10,color:C.textDim,marginBottom:2}}>标普500</div>}
+                    <div style={{fontSize:mode==="compare"?16:24,fontWeight:mode==="compare"?600:800,color:mode==="compare"?C.textMuted:col,letterSpacing:-0.5}}>{sp500}%</div>
+                    {mode==="sp500"&&<div style={{fontSize:10,color:C.textDim,marginTop:2}}>年化复合收益</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </Reveal>
+  );
+}
+
 function FXAnalysisCard() {
   const [strategy,setStrategy]=useState("nasdaq");
   const [rawData,setRawData]=useState(null);
@@ -1032,7 +1171,6 @@ export default function App() {
   const switchTab = id=>{setActiveTab(id);setSortKey(null);setSearch("");setStatusFilter("all");window.scrollTo({top:0,behavior:"smooth"});};
 
   const premHist = useMemo(()=>genPremiumHistory(selETF),[selETF]);
-  const retComp  = useMemo(()=>genReturnComp(),[]);
 
   const filterData = data => {
     let filtered = data;
@@ -1245,21 +1383,21 @@ export default function App() {
             </div>
 
             {/* Charts */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:36}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:28}}>
               <Reveal delay={0.05}>
                 <Card style={{padding:"24px 26px"}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
-                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>近6个月对比</div>
+                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>2024年4月 — 2025年3月（美元口径）</div>
                   <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={retComp} barGap={4} barCategoryGap="30%">
+                    <BarChart data={MONTHLY_12M} barGap={3} barCategoryGap="25%">
                       <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
                       <XAxis dataKey="month" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}/>
                       <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%"/>
                       <Tooltip content={<ChartTooltip/>}/>
                       <ReferenceLine y={0} stroke={C.border}/>
                       <Legend wrapperStyle={{fontSize:11,paddingTop:12}}/>
-                      <Bar dataKey="nasdaq" name="纳斯达克100" fill={C.accent} radius={[5,5,0,0]}/>
-                      <Bar dataKey="sp500"  name="标普500"    fill={C.cyan}   radius={[5,5,0,0]}/>
+                      <Bar dataKey="nasdaq" name="纳斯达克100" fill={C.accent} radius={[4,4,0,0]}/>
+                      <Bar dataKey="sp500"  name="标普500"    fill={C.cyan}   radius={[4,4,0,0]}/>
                     </BarChart>
                   </ResponsiveContainer>
                 </Card>
@@ -1296,6 +1434,9 @@ export default function App() {
                 </Card>
               </Reveal>
             </div>
+
+            {/* Index History */}
+            <IndexHistoryCard/>
 
             {/* FX Analysis */}
             <FXAnalysisCard/>
