@@ -507,6 +507,22 @@ const CRASH_REASONS = {
     desc:"美国通胀触及40年高点（CPI 9.1%），美联储全年7次加息合计425bp，10年期美债从1.5%飙至4%+。高估值成长股和纳指科技股遭毁灭性重估。" },
 };
 
+// 自定义 Bar shape — 必须定义在组件外，避免每次渲染创建新引用
+function NasdaqBar(props) {
+  const { x, y, width, height, value } = props;
+  const fill = value >= 0 ? C.accent : C.red;
+  const h = Math.abs(height);
+  const yPos = value >= 0 ? y : y + height;
+  return <rect x={x} y={yPos} width={Math.max(width,1)} height={h} fill={fill} rx={2} opacity={0.85}/>;
+}
+function Sp500Bar(props) {
+  const { x, y, width, height, value } = props;
+  const fill = value >= 0 ? C.cyan : "#e8704a";
+  const h = Math.abs(height);
+  const yPos = value >= 0 ? y : y + height;
+  return <rect x={x} y={yPos} width={Math.max(width,1)} height={h} fill={fill} rx={2} opacity={0.85}/>;
+}
+
 // ─── Index History Card ───────────────────────────────────────────────────────
 function IndexHistoryCard() {
   const [mode, setMode] = useState("compare"); // "nasdaq" | "sp500" | "compare"
@@ -528,21 +544,11 @@ function IndexHistoryCard() {
     sp500: Object.values(INDEX_CAGR.sp500)[i],
   }));
 
-  // 自定义 Bar 颜色（正绿负红）
-  const NasdaqBar = (props) => {
-    const { x, y, width, height, value } = props;
-    const fill = value >= 0 ? C.accent : C.red;
-    const h = Math.abs(height);
-    const yPos = value >= 0 ? y : y + height;
-    return <rect x={x} y={yPos} width={width} height={h} fill={fill} rx={2} opacity={0.85}/>;
-  };
-  const Sp500Bar = (props) => {
-    const { x, y, width, height, value } = props;
-    const fill = value >= 0 ? C.cyan : "#e8704a";
-    const h = Math.abs(height);
-    const yPos = value >= 0 ? y : y + height;
-    return <rect x={x} y={yPos} width={width} height={h} fill={fill} rx={2} opacity={0.85}/>;
-  };
+  const handleBarClick = useCallback((data) => {
+    if (!data?.payload) return;
+    const yr = parseInt(data.payload.year);
+    if (CRASH_REASONS[yr]) setSelectedYear(prev => prev === yr ? null : yr);
+  }, []);
 
   const tabs = [{id:"compare",label:"对比"},{id:"nasdaq",label:"纳指100"},{id:"sp500",label:"标普500"}];
 
@@ -567,17 +573,7 @@ function IndexHistoryCard() {
 
         {/* Bar chart */}
         <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={annualRows} barGap={2} barCategoryGap="18%" margin={{top:16,right:8,left:0,bottom:0}}
-            onClick={payload=>{
-              if(!payload?.activePayload) return;
-              const row = payload.activePayload[0]?.payload;
-              if(!row) return;
-              const yr = parseInt(row.year);
-              const isNeg = (INDEX_ANNUAL.nasdaq[yr]??0)<0 || (INDEX_ANNUAL.sp500[yr]??0)<0;
-              if(isNeg && CRASH_REASONS[yr]) setSelectedYear(yr===selectedYear?null:yr);
-            }}
-            style={{cursor:"pointer"}}
-          >
+          <BarChart data={annualRows} barGap={2} barCategoryGap="18%" margin={{top:16,right:8,left:0,bottom:0}}>
             <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
             <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
               tickFormatter={v=>v.slice(2)} interval={1}/>
@@ -585,9 +581,9 @@ function IndexHistoryCard() {
             <ReferenceLine y={0} stroke={C.border} strokeWidth={1.5}/>
             <Tooltip content={<ChartTooltip unit="%"/>}/>
             {(mode==="compare"||mode==="nasdaq")&&
-              <Bar dataKey="nasdaq" name="纳指100" shape={<NasdaqBar/>}/>}
+              <Bar dataKey="nasdaq" name="纳指100" shape={<NasdaqBar/>} onClick={handleBarClick} style={{cursor:"pointer"}}/>}
             {(mode==="compare"||mode==="sp500")&&
-              <Bar dataKey="sp500"  name="标普500" shape={<Sp500Bar/>}/>}
+              <Bar dataKey="sp500"  name="标普500" shape={<Sp500Bar/>} onClick={handleBarClick} style={{cursor:"pointer"}}/>}
             {mode==="compare"&&<Legend wrapperStyle={{fontSize:11,paddingTop:10}}/>}
           </BarChart>
         </ResponsiveContainer>
