@@ -590,7 +590,7 @@ function IndexHistoryCard() {
               tickFormatter={v=>v.slice(2)} interval={1}/>
             <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%" domain={[-50,110]}/>
             <ReferenceLine y={0} stroke={C.border} strokeWidth={1.5}/>
-            <Tooltip content={<ChartTooltip unit="%"/>}/>
+            <Tooltip content={<ChartTooltip unit="%"/>} cursor={{fill:"rgba(0,0,0,0.04)",rx:3}}/>
             {(mode==="compare"||mode==="nasdaq")&&
               <Bar dataKey="nasdaq" name="纳指100" shape={<NasdaqBar/>} onClick={handleBarClick} style={{cursor:"pointer"}}/>}
             {(mode==="compare"||mode==="sp500")&&
