@@ -58,16 +58,16 @@ const FALLBACK = {
   ],
   // 场内ETF — 名称经 fundgz 实测验证（2026-03-27），premium 为实际市场水平
   etfs: [
-    { code:"513100",name:"国泰纳斯达克100ETF",         tracking_index:"纳斯达克100",         scale:220.0,ytd_return:21.0,premium:4.94,volume:3.6, change_pct:0.0},
-    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",     tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.32,volume:1.5, change_pct:0.0},
-    { code:"159941",name:"广发纳斯达克100ETF",         tracking_index:"纳斯达克100",         scale:200.0,ytd_return:21.1,premium:4.35,volume:7.8, change_pct:0.0},
-    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:45.0, ytd_return:20.9,premium:3.73,volume:3.1, change_pct:0.0},
-    { code:"159659",name:"招商纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:120.0,ytd_return:21.3,premium:3.62,volume:1.3, change_pct:0.0},
-    { code:"159632",name:"华安纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.27,volume:1.9, change_pct:0.0},
-    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)",tracking_index:"纳斯达克科技市值加权",scale:160.0,ytd_return:28.0,premium:16.9,volume:5.3, change_pct:0.0},
-    { code:"513500",name:"博时标普500ETF",             tracking_index:"标普500",             scale:95.0, ytd_return:15.8,premium:4.54,volume:2.3, change_pct:0.0},
-    { code:"159612",name:"国泰标普500ETF(QDII)",       tracking_index:"标普500",             scale:55.0, ytd_return:15.4,premium:4.63,volume:0.1, change_pct:0.0},
-    { code:"513650",name:"南方标普500ETF(QDII)",       tracking_index:"标普500",             scale:45.0, ytd_return:15.5,premium:3.06,volume:1.0, change_pct:0.0},
+    { code:"513100",name:"国泰纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:220.0,ytd_return:21.0,premium:4.94,volume:3.6, change_pct:0.0,fee_rate:0.80,track_error:1.07},
+    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",      tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.32,volume:1.5, change_pct:0.0,fee_rate:1.00,track_error:1.04},
+    { code:"159941",name:"广发纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:200.0,ytd_return:21.1,premium:4.35,volume:7.8, change_pct:0.0,fee_rate:1.00,track_error:1.03},
+    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:45.0, ytd_return:20.9,premium:3.73,volume:3.1, change_pct:0.0,fee_rate:0.80,track_error:2.53},
+    { code:"159659",name:"招商纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:120.0,ytd_return:21.3,premium:3.62,volume:1.3, change_pct:0.0,fee_rate:0.65,track_error:1.08},
+    { code:"159632",name:"华安纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.27,volume:1.9, change_pct:0.0,fee_rate:0.80,track_error:1.24},
+    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)",tracking_index:"纳斯达克科技市值加权",scale:160.0,ytd_return:28.0,premium:16.9,volume:5.3, change_pct:0.0,fee_rate:1.00,track_error:1.88},
+    { code:"513500",name:"博时标普500ETF",              tracking_index:"标普500",             scale:95.0, ytd_return:15.8,premium:4.54,volume:2.3, change_pct:0.0,fee_rate:0.80,track_error:1.07},
+    { code:"159612",name:"国泰标普500ETF(QDII)",        tracking_index:"标普500",             scale:55.0, ytd_return:15.4,premium:4.63,volume:0.1, change_pct:0.0,fee_rate:0.75,track_error:1.01},
+    { code:"513650",name:"南方标普500ETF(QDII)",        tracking_index:"标普500",             scale:45.0, ytd_return:15.5,premium:3.06,volume:1.0, change_pct:0.0,fee_rate:0.75,track_error:1.05},
   ],
 };
 
@@ -238,12 +238,13 @@ const StatusBadge = ({status}) => {
 };
 
 function PremiumBadge({value}) {
-  const high = value>2, mid = value>1;
-  const color = high?C.red:mid?C.orange:C.green;
-  const bg    = high?C.redBg:mid?C.orangeBg:C.greenBg;
+  const danger = value>3, high = value>2, mid = value>1;
+  const color = danger?C.red:high?"#ff6b35":mid?C.orange:C.green;
+  const bg    = danger?C.redBg:high?"#ff6b3512":mid?C.orangeBg:C.greenBg;
+  const label = danger?"极高":high?"偏高":mid?"注意":"正常";
   return (
-    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}22`,animation:high?"premiumAlert 1.8s ease infinite":"none"}}>
-      {value>0?"+":""}{value}%
+    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}30`,animation:danger?"premiumAlert 1.8s ease infinite":"none"}}>
+      {value>0?"+":""}{value}% <span style={{fontSize:10,opacity:0.8}}>{label}</span>
     </span>
   );
 }
@@ -1114,10 +1115,12 @@ export default function App() {
     {key:"code",  label:"代码",  render:v=><span style={{fontFamily:"monospace",color:C.cyan,fontWeight:700,fontSize:12}}>{v}</span>},
     {key:"name",  label:"ETF名称"},
     {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
-    {key:"scale", label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
+    {key:"scale", label:"规模(亿)",tip:"基金总规模，越大流动性越好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
     {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
-    {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价，超过1.5%需警惕",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
-    {key:"volume",label:"日均成交",tip:"日均成交额（亿元），越大流动性越好",align:"right"},
+    {key:"fee_rate",label:"管理+托管费",tip:"年化管理费+托管费合计，场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
+    {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
+    {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价。>1%注意；>2%偏高；>3%极高，建议等待收窄",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
+    {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好，买卖价差越小",align:"right"},
   ];
 
   const dismissDisclaimer = ()=>{localStorage.setItem("etf-disclaimer","1");setShowDisclaimer(false);};
@@ -1322,31 +1325,40 @@ export default function App() {
 
             {/* ETF warning */}
             <Reveal delay={0.1}>
-              <SectionHeader title="场内ETF溢价预警" subtitle="溢价率 > 2% 请注意风险" color={C.orange}/>
+              <SectionHeader title="场内ETF溢价预警" subtitle="溢价 >1% 注意 · >2% 偏高 · >3% 极高建议等待收窄" color={C.orange}/>
               <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-                {etfs.map(e=>(
-                  <Card key={e.code} style={{minWidth:200,flex:1,padding:"18px 22px",borderColor:(e.premium||0)>2?`${C.red}30`:C.border}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                {etfs.map(e=>{
+                  const prem = e.premium||0;
+                  const barColor = prem>3?C.red:prem>2?"#ff6b35":prem>1?C.orange:C.green;
+                  return (
+                  <Card key={e.code} style={{minWidth:200,flex:1,padding:"18px 22px",borderColor:prem>3?`${C.red}40`:prem>2?`#ff6b3530`:C.border}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                       <div>
                         <div style={{fontSize:11,color:C.textDim,fontFamily:"monospace",marginBottom:4}}>{e.code}</div>
-                        <div style={{fontSize:14,fontWeight:600,color:C.text}}>{e.name}</div>
+                        <div style={{fontSize:13,fontWeight:600,color:C.text}}>{e.name}</div>
                         <div style={{fontSize:11,color:C.textDim,marginTop:2}}>{e.tracking_index}</div>
                       </div>
-                      <PremiumBadge value={e.premium||0}/>
+                      <PremiumBadge value={prem}/>
                     </div>
-                    {/* Premium meter */}
-                    <div style={{marginBottom:14}}>
-                      <div style={{height:4,borderRadius:2,background:C.borderLight,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${Math.min((e.premium||0)/4*100,100)}%`,background:(e.premium||0)>2?C.red:(e.premium||0)>1?C.orange:C.green,borderRadius:2,transition:"width 0.6s ease"}}/>
+                    {/* Premium meter — 刻度0/1/2/3/4% */}
+                    <div style={{marginBottom:12}}>
+                      <div style={{position:"relative",height:6,borderRadius:3,background:C.borderLight,overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${Math.min(prem/4*100,100)}%`,background:`linear-gradient(90deg,${C.green},${barColor})`,borderRadius:3,transition:"width 0.6s ease"}}/>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                        {["0%","1%","2%","3%","4%+"].map(t=><span key={t} style={{fontSize:9,color:C.textDim}}>{t}</span>)}
                       </div>
                     </div>
-                    <div style={{display:"flex",gap:20}}>
-                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:2}}>涨幅</div><div style={{fontSize:14,fontWeight:700,color:C.green}}>+{e.ytd_return}%</div></div>
-                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:2}}>规模</div><div style={{fontSize:14,fontWeight:600}}>{e.scale}亿</div></div>
-                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:2}}>成交</div><div style={{fontSize:14,fontWeight:600}}>{e.volume}亿</div></div>
+                    <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>近1年</div><div style={{fontSize:13,fontWeight:700,color:C.green}}>+{e.ytd_return}%</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>规模</div><div style={{fontSize:13,fontWeight:600}}>{e.scale}亿</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>成交</div><div style={{fontSize:13,fontWeight:600}}>{e.volume}亿</div></div>
+                      {e.fee_rate!=null&&<div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>费率</div><div style={{fontSize:13,fontWeight:600,color:C.textMuted}}>{e.fee_rate}%</div></div>}
+                      {e.track_error!=null&&<div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>跟踪误差</div><div style={{fontSize:13,fontWeight:600,color:e.track_error>1?C.orange:C.textMuted}}>{e.track_error}%</div></div>}
                     </div>
                   </Card>
-                ))}
+                  );
+                })}
               </div>
             </Reveal>
           </>
@@ -1420,12 +1432,13 @@ export default function App() {
                   <XAxis dataKey="date" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}/>
                   <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%" domain={["auto","auto"]}/>
                   <ReferenceLine y={1.5} stroke={C.orange} strokeDasharray="3 3" label={{value:"1.5%",fill:C.orange,fontSize:10,position:"right"}}/>
+                  <ReferenceLine y={3} stroke={C.red} strokeDasharray="3 3" label={{value:"3%",fill:C.red,fontSize:10,position:"right"}}/>
                   <Tooltip content={<ChartTooltip/>}/>
                   <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad2)" strokeWidth={2} dot={{r:2,fill:C.orange,strokeWidth:0}}/>
                 </AreaChart>
               </ResponsiveContainer>
             </Card>
-            <TipBox color={C.orange} text="场内ETF价格 = 净值 + 溢价。溢价 > 1.5% 时需谨慎；> 3% 时建议等溢价收窄后再买。可申购场外联接基金替代场内ETF以规避溢价风险。"/>
+            <TipBox color={C.orange} text="溢价 < 1%：正常，可正常买入。溢价 1~2%：注意，考虑申购场外联接替代。溢价 2~3%：偏高，建议等待收窄。溢价 > 3%：极高，强烈建议避开或改买场外联接基金。"/>
           </Reveal>
         )}
 
