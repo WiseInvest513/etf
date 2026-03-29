@@ -636,63 +636,82 @@ function IndexHistoryCard() {
         </div>
 
         {/* 累计增长曲线 */}
-        <div style={{marginTop:28,paddingTop:24,borderTop:`1px solid ${C.borderLight}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:16}}>
-            <div>
-              <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:3}}>累计增长曲线（1990–2025）</div>
-              <div style={{fontSize:12,color:C.textDim}}>以100为起点，{cumulativeRows[cumulativeRows.length-1]?.nasdaq?.toLocaleString()} vs {cumulativeRows[cumulativeRows.length-1]?.sp500?.toLocaleString()}</div>
-            </div>
-            <div style={{display:"flex",gap:16,fontSize:12}}>
-              <span style={{display:"flex",alignItems:"center",gap:5}}>
-                <span style={{width:24,height:3,borderRadius:2,background:C.accent,display:"inline-block"}}/>
-                <span style={{color:C.textMuted}}>纳指100</span>
-              </span>
-              <span style={{display:"flex",alignItems:"center",gap:5}}>
-                <span style={{width:24,height:3,borderRadius:2,background:C.cyan,display:"inline-block"}}/>
-                <span style={{color:C.textMuted}}>标普500</span>
-              </span>
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={cumulativeRows} margin={{top:8,right:8,left:0,bottom:0}}>
-              <defs>
-                <linearGradient id="cumulNQ" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor={C.accent} stopOpacity={0.18}/>
-                  <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
-                </linearGradient>
-                <linearGradient id="cumulSP" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor={C.cyan} stopOpacity={0.15}/>
-                  <stop offset="95%" stopColor={C.cyan} stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
-              <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
-                tickFormatter={v=>v.slice(2)} interval={3}/>
-              <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}
-                tickFormatter={v=>v>=1000?`${(v/1000).toFixed(0)}k`:v}/>
-              <Tooltip content={({active,payload,label})=>{
-                if(!active||!payload?.length) return null;
-                return (
-                  <div style={{background:"rgba(255,255,255,0.97)",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",fontSize:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}>
-                    <div style={{color:C.textDim,marginBottom:6,fontWeight:600}}>{label}年</div>
-                    {payload.map((p,i)=>(
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-                        <span style={{width:8,height:8,borderRadius:2,background:p.color,display:"inline-block"}}/>
-                        <span style={{color:C.textMuted}}>{p.name}</span>
-                        <span style={{fontWeight:700,color:C.text,marginLeft:"auto",paddingLeft:12}}>
-                          {p.value?.toLocaleString()}
-                          <span style={{fontSize:10,color:C.textDim,fontWeight:400}}> (×{(p.value/100).toFixed(1)})</span>
-                        </span>
-                      </div>
-                    ))}
+        {(()=>{
+          const NQ_COLOR = "#6366f1"; // 靛紫 — 纳指
+          const SP_COLOR = "#10b981"; // 翠绿 — 标普
+          const last = cumulativeRows[cumulativeRows.length-1];
+          return (
+            <div style={{marginTop:28,paddingTop:24,borderTop:`1px solid ${C.borderLight}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:16}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:3}}>累计增长曲线（1990–2025）</div>
+                  <div style={{fontSize:12,color:C.textDim}}>以100为起点 · 对数坐标轴 · 36年持有结果：
+                    {(mode==="compare"||mode==="nasdaq")&&<span style={{color:NQ_COLOR,fontWeight:700}}> 纳指×{(last.nasdaq/100).toFixed(0)}</span>}
+                    {mode==="compare"&&<span style={{color:C.textDim}}> vs</span>}
+                    {(mode==="compare"||mode==="sp500")&&<span style={{color:SP_COLOR,fontWeight:700}}> 标普×{(last.sp500/100).toFixed(0)}</span>}
                   </div>
-                );
-              }}/>
-              <Area type="monotone" dataKey="nasdaq" name="纳指100" stroke={C.accent} fill="url(#cumulNQ)" strokeWidth={2.5} dot={false}/>
-              <Area type="monotone" dataKey="sp500"  name="标普500" stroke={C.cyan}   fill="url(#cumulSP)" strokeWidth={2}   dot={false}/>
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+                </div>
+                <div style={{display:"flex",gap:16,fontSize:12}}>
+                  {(mode==="compare"||mode==="nasdaq")&&(
+                    <span style={{display:"flex",alignItems:"center",gap:5}}>
+                      <span style={{width:24,height:3,borderRadius:2,background:NQ_COLOR,display:"inline-block"}}/>
+                      <span style={{color:C.textMuted}}>纳指100</span>
+                    </span>
+                  )}
+                  {(mode==="compare"||mode==="sp500")&&(
+                    <span style={{display:"flex",alignItems:"center",gap:5}}>
+                      <span style={{width:24,height:3,borderRadius:2,background:SP_COLOR,display:"inline-block"}}/>
+                      <span style={{color:C.textMuted}}>标普500</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={280}>
+                <AreaChart data={cumulativeRows} margin={{top:8,right:8,left:0,bottom:0}}>
+                  <defs>
+                    <linearGradient id="cumulNQ" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%"  stopColor={NQ_COLOR} stopOpacity={0.22}/>
+                      <stop offset="100%" stopColor={NQ_COLOR} stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="cumulSP" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%"  stopColor={SP_COLOR} stopOpacity={0.18}/>
+                      <stop offset="100%" stopColor={SP_COLOR} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+                  <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
+                    tickFormatter={v=>v.slice(2)} interval={3}/>
+                  <YAxis scale="log" domain={["auto","auto"]} allowDataOverflow
+                    tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}
+                    tickFormatter={v=>v>=1000?`${(v/1000).toFixed(0)}k`:String(v)}
+                    ticks={[100,200,500,1000,2000,5000,10000]}/>
+                  <Tooltip content={({active,payload,label})=>{
+                    if(!active||!payload?.length) return null;
+                    return (
+                      <div style={{background:"rgba(255,255,255,0.97)",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",fontSize:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}>
+                        <div style={{color:C.textDim,marginBottom:6,fontWeight:600}}>{label}年</div>
+                        {payload.map((p,i)=>(
+                          <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                            <span style={{width:8,height:8,borderRadius:"50%",background:p.color,display:"inline-block"}}/>
+                            <span style={{color:C.textMuted}}>{p.name}</span>
+                            <span style={{fontWeight:700,color:p.color,marginLeft:"auto",paddingLeft:12}}>
+                              {p.value?.toLocaleString()}
+                              <span style={{fontSize:10,color:C.textDim,fontWeight:400}}> ×{(p.value/100).toFixed(1)}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }}/>
+                  {(mode==="compare"||mode==="nasdaq")&&
+                    <Area type="monotone" dataKey="nasdaq" name="纳指100" stroke={NQ_COLOR} fill="url(#cumulNQ)" strokeWidth={2.5} dot={false}/>}
+                  {(mode==="compare"||mode==="sp500")&&
+                    <Area type="monotone" dataKey="sp500"  name="标普500" stroke={SP_COLOR} fill="url(#cumulSP)" strokeWidth={2.5} dot={false}/>}
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })()}
 
         {/* CAGR cards */}
         <div style={{display:"flex",gap:12,marginTop:20,flexWrap:"wrap"}}>
