@@ -538,6 +538,17 @@ function IndexHistoryCard() {
     }));
   }, []);
 
+  // 累计增长曲线（以100为起点，1989年末=100）
+  const cumulativeRows = useMemo(() => {
+    const years = Object.keys(INDEX_ANNUAL.nasdaq).map(Number).sort((a,b)=>a-b);
+    let nq = 100, sp = 100;
+    return years.map(y => {
+      nq = +(nq * (1 + INDEX_ANNUAL.nasdaq[y] / 100)).toFixed(1);
+      sp = +(sp * (1 + INDEX_ANNUAL.sp500[y]  / 100)).toFixed(1);
+      return { year: String(y), nasdaq: nq, sp500: sp };
+    });
+  }, []);
+
   const cagrEntries = Object.entries(INDEX_CAGR.nasdaq).map(([label, nq], i) => ({
     label,
     nasdaq: nq,
@@ -622,6 +633,65 @@ function IndexHistoryCard() {
         {/* 提示文字：有负收益年时提示可点击 */}
         <div style={{textAlign:"center",marginTop:8,fontSize:11,color:C.textDim}}>
           点击红色柱（负收益年）查看原因
+        </div>
+
+        {/* 累计增长曲线 */}
+        <div style={{marginTop:28,paddingTop:24,borderTop:`1px solid ${C.borderLight}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:16}}>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:3}}>累计增长曲线（1990–2025）</div>
+              <div style={{fontSize:12,color:C.textDim}}>以100为起点，{cumulativeRows[cumulativeRows.length-1]?.nasdaq?.toLocaleString()} vs {cumulativeRows[cumulativeRows.length-1]?.sp500?.toLocaleString()}</div>
+            </div>
+            <div style={{display:"flex",gap:16,fontSize:12}}>
+              <span style={{display:"flex",alignItems:"center",gap:5}}>
+                <span style={{width:24,height:3,borderRadius:2,background:C.accent,display:"inline-block"}}/>
+                <span style={{color:C.textMuted}}>纳指100</span>
+              </span>
+              <span style={{display:"flex",alignItems:"center",gap:5}}>
+                <span style={{width:24,height:3,borderRadius:2,background:C.cyan,display:"inline-block"}}/>
+                <span style={{color:C.textMuted}}>标普500</span>
+              </span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={cumulativeRows} margin={{top:8,right:8,left:0,bottom:0}}>
+              <defs>
+                <linearGradient id="cumulNQ" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={C.accent} stopOpacity={0.18}/>
+                  <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
+                </linearGradient>
+                <linearGradient id="cumulSP" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={C.cyan} stopOpacity={0.15}/>
+                  <stop offset="95%" stopColor={C.cyan} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+              <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
+                tickFormatter={v=>v.slice(2)} interval={3}/>
+              <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}
+                tickFormatter={v=>v>=1000?`${(v/1000).toFixed(0)}k`:v}/>
+              <Tooltip content={({active,payload,label})=>{
+                if(!active||!payload?.length) return null;
+                return (
+                  <div style={{background:"rgba(255,255,255,0.97)",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",fontSize:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}>
+                    <div style={{color:C.textDim,marginBottom:6,fontWeight:600}}>{label}年</div>
+                    {payload.map((p,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                        <span style={{width:8,height:8,borderRadius:2,background:p.color,display:"inline-block"}}/>
+                        <span style={{color:C.textMuted}}>{p.name}</span>
+                        <span style={{fontWeight:700,color:C.text,marginLeft:"auto",paddingLeft:12}}>
+                          {p.value?.toLocaleString()}
+                          <span style={{fontSize:10,color:C.textDim,fontWeight:400}}> (×{(p.value/100).toFixed(1)})</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              }}/>
+              <Area type="monotone" dataKey="nasdaq" name="纳指100" stroke={C.accent} fill="url(#cumulNQ)" strokeWidth={2.5} dot={false}/>
+              <Area type="monotone" dataKey="sp500"  name="标普500" stroke={C.cyan}   fill="url(#cumulSP)" strokeWidth={2}   dot={false}/>
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
 
         {/* CAGR cards */}
@@ -1122,11 +1192,11 @@ function AdminPage() {
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 const TABS=[
   {id:"overview",  label:"总览"},
-  {id:"watchlist", label:"自选"},
   {id:"nasdaq",    label:"纳指被动"},
   {id:"sp500",     label:"标普500"},
   {id:"active",    label:"美股主动"},
   {id:"etf",       label:"场内ETF"},
+  {id:"watchlist", label:"自选"},
 ];
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
