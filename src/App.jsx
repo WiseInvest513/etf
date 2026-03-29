@@ -489,9 +489,28 @@ function BackToTop({visible, offset=32}) {
 }
 
 // ─── FX Analysis Card ────────────────────────────────────────────────────────
+// ─── 负收益年原因 ──────────────────────────────────────────────────────────────
+const CRASH_REASONS = {
+  1990: { title:"海湾战争 + 储贷危机",       tag:"经济衰退", color:"#e8a020",
+    desc:"伊拉克入侵科威特引发海湾战争，油价急升推高通胀，美国陷入衰退。美国储贷协会危机持续冲击金融体系，联储被迫大幅加息。" },
+  2000: { title:"科网泡沫破裂（第一年）",     tag:"泡沫崩溃", color:"#d93025",
+    desc:"互联网泡沫从2000年3月纳指高点开始崩溃，大量.com公司估值严重虚高。纳指跌近37%，科技股受创远重于大盘。" },
+  2001: { title:"9·11恐袭 + 科网泡沫持续",   tag:"黑天鹅", color:"#d93025",
+    desc:"9月11日恐袭震惊全球，纽交所停市4天。科网泡沫继续破裂，安然公司财务丑闻爆发，市场信心持续低迷。" },
+  2002: { title:"科网泡沫尾声 + 会计丑闻",   tag:"连续熊市", color:"#d93025",
+    desc:"安然、世通等巨型会计造假案接连曝光，《萨班斯-奥克斯利法案》应运而生。纳指三年累计跌幅超80%，为有史以来最惨熊市之一。" },
+  2008: { title:"全球金融危机",               tag:"系统性危机", color:"#d93025",
+    desc:"次贷危机引爆全球金融海啸。雷曼兄弟9月宣告破产，贝尔斯登被收购，AIG获政府紧急救助2000亿，全球信贷市场几近冻结。" },
+  2018: { title:"美联储加息 + 中美贸易战",   tag:"政策收紧", color:"#e8a020",
+    desc:"美联储全年4次加息，联邦基金利率升至2.5%。中美贸易摩擦升级互加关税，科技股四季度暴跌，纳指Q4单季跌逾17%。" },
+  2022: { title:"史上最快加息周期 + 通胀危机", tag:"利率冲击", color:"#d93025",
+    desc:"美国通胀触及40年高点（CPI 9.1%），美联储全年7次加息合计425bp，10年期美债从1.5%飙至4%+。高估值成长股和纳指科技股遭毁灭性重估。" },
+};
+
 // ─── Index History Card ───────────────────────────────────────────────────────
 function IndexHistoryCard() {
   const [mode, setMode] = useState("compare"); // "nasdaq" | "sp500" | "compare"
+  const [selectedYear, setSelectedYear] = useState(null);
 
   // 构建年度数据数组
   const annualRows = useMemo(() => {
@@ -548,7 +567,17 @@ function IndexHistoryCard() {
 
         {/* Bar chart */}
         <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={annualRows} barGap={2} barCategoryGap="18%" margin={{top:16,right:8,left:0,bottom:0}}>
+          <BarChart data={annualRows} barGap={2} barCategoryGap="18%" margin={{top:16,right:8,left:0,bottom:0}}
+            onClick={payload=>{
+              if(!payload?.activePayload) return;
+              const row = payload.activePayload[0]?.payload;
+              if(!row) return;
+              const yr = parseInt(row.year);
+              const isNeg = (INDEX_ANNUAL.nasdaq[yr]??0)<0 || (INDEX_ANNUAL.sp500[yr]??0)<0;
+              if(isNeg && CRASH_REASONS[yr]) setSelectedYear(yr===selectedYear?null:yr);
+            }}
+            style={{cursor:"pointer"}}
+          >
             <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
             <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
               tickFormatter={v=>v.slice(2)} interval={1}/>
@@ -562,6 +591,42 @@ function IndexHistoryCard() {
             {mode==="compare"&&<Legend wrapperStyle={{fontSize:11,paddingTop:10}}/>}
           </BarChart>
         </ResponsiveContainer>
+
+        {/* 点击负收益年显示原因面板 */}
+        {selectedYear && CRASH_REASONS[selectedYear] && (()=>{
+          const r = CRASH_REASONS[selectedYear];
+          const nq = INDEX_ANNUAL.nasdaq[selectedYear];
+          const sp = INDEX_ANNUAL.sp500[selectedYear];
+          return (
+            <div style={{margin:"16px 0 0",padding:"18px 22px",borderRadius:14,background:r.color+"0c",border:`1.5px solid ${r.color}30`,position:"relative",animation:"fadeSlideIn 0.22s ease"}}>
+              <button onClick={()=>setSelectedYear(null)}
+                style={{position:"absolute",top:12,right:14,background:"none",border:"none",fontSize:18,color:C.textDim,cursor:"pointer",lineHeight:1}}>×</button>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                <span style={{fontSize:20,fontWeight:800,color:r.color}}>{selectedYear}</span>
+                <span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:r.color+"18",color:r.color}}>{r.tag}</span>
+                <span style={{fontSize:15,fontWeight:700,color:C.text}}>{r.title}</span>
+              </div>
+              <p style={{fontSize:13,color:C.textMuted,lineHeight:1.7,margin:"0 0 14px"}}>{r.desc}</p>
+              <div style={{display:"flex",gap:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{width:10,height:10,borderRadius:2,background:C.accent,display:"inline-block"}}/>
+                  <span style={{fontSize:12,color:C.textDim}}>纳指100</span>
+                  <span style={{fontSize:15,fontWeight:800,color:nq<0?C.red:C.green}}>{nq>0?"+":""}{nq}%</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{width:10,height:10,borderRadius:2,background:C.cyan,display:"inline-block"}}/>
+                  <span style={{fontSize:12,color:C.textDim}}>标普500</span>
+                  <span style={{fontSize:15,fontWeight:800,color:sp<0?C.red:C.green}}>{sp>0?"+":""}{sp}%</span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* 提示文字：有负收益年时提示可点击 */}
+        <div style={{textAlign:"center",marginTop:8,fontSize:11,color:C.textDim}}>
+          点击红色柱（负收益年）查看原因
+        </div>
 
         {/* CAGR cards */}
         <div style={{display:"flex",gap:12,marginTop:20,flexWrap:"wrap"}}>
@@ -1681,6 +1746,9 @@ export default function App() {
 
         /* Compare bar slide up */
         @keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}
+
+        /* Crash reason panel */
+        @keyframes fadeSlideIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 
         /* Scrollbar */
         ::-webkit-scrollbar{width:5px;height:5px}
