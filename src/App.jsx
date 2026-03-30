@@ -296,6 +296,27 @@ function SectionHeader({title,subtitle,count,color=C.accent}) {
   );
 }
 
+// ─── ColTip ───────────────────────────────────────────────────────────────────
+function ColTip({tip}) {
+  const [show,setShow] = useState(false);
+  const ref = useRef(null);
+  useEffect(()=>{
+    if(!show) return;
+    const handler=(e)=>{ if(ref.current&&!ref.current.contains(e.target)) setShow(false); };
+    document.addEventListener("mousedown",handler);
+    return()=>document.removeEventListener("mousedown",handler);
+  },[show]);
+  return (
+    <span ref={ref} style={{position:"relative",display:"inline-flex"}}
+      onClick={e=>{e.stopPropagation();setShow(s=>!s);}}>
+      <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",background:show?C.accent:C.borderLight,color:show?"#fff":C.textDim,fontSize:9,fontWeight:700,cursor:"pointer",flexShrink:0,transition:"background 0.15s"}}>?</span>
+      {show&&<div style={{position:"absolute",top:"calc(100% + 6px)",left:"50%",transform:"translateX(-50%)",background:"#1a1a2e",color:"#e8e8f0",fontSize:12,lineHeight:1.6,padding:"8px 12px",borderRadius:8,whiteSpace:"normal",width:200,zIndex:999,boxShadow:"0 4px 20px rgba(0,0,0,0.25)",pointerEvents:"none"}}>
+        {tip}
+      </div>}
+    </span>
+  );
+}
+
 // ─── Data Table ───────────────────────────────────────────────────────────────
 function DataTable({columns,data,sortKey,sortDir,onSort}) {
   return (
@@ -308,7 +329,7 @@ function DataTable({columns,data,sortKey,sortDir,onSort}) {
                 style={{padding:"13px 16px",textAlign:col.align||"left",color:sortKey===col.key?C.accent:C.textDim,fontWeight:600,fontSize:11,letterSpacing:0.6,textTransform:"uppercase",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,background:"#fafafa",cursor:col.sortable!==false?"pointer":"default",userSelect:"none",position:"sticky",top:0,zIndex:1,transition:"color 0.15s"}}>
                 <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
                   {col.label}
-                  {col.tip&&<span title={col.tip} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:"50%",background:C.borderLight,color:C.textDim,fontSize:9,fontWeight:700,cursor:"help",flexShrink:0}}>?</span>}
+                  {col.tip&&<ColTip tip={col.tip}/>}
                   {sortKey===col.key&&<span style={{marginLeft:2}}>{sortDir==="asc"?"↑":"↓"}</span>}
                 </span>
               </th>
@@ -1476,6 +1497,8 @@ export default function App() {
   const [sp500, setSp500 ]=useState(FALLBACK.sp500_passive);
   const [active,setActive]=useState(FALLBACK.us_active);
   const [etfs,  setEtfs  ]=useState(FALLBACK.etfs);
+  const [liveData,setLiveData]=useState({});
+  const [liveTs,setLiveTs]=useState(null);
 
   useEffect(()=>{
     const h=()=>{setScrolled(window.scrollY>8);setShowBackToTop(window.scrollY>400);};
@@ -1516,6 +1539,17 @@ export default function App() {
       if(ov?.last_update) setLastUpdate(ov.last_update);
       setDataLoading(false);
     })();
+  },[]);
+
+  // ── 实时行情（day_change + rolling_1y），5分钟自动刷新 ──
+  useEffect(()=>{
+    const fetchLive=async()=>{
+      const d=await apiFetch("/live_data");
+      if(d?.data){setLiveData(d.data);setLiveTs(new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));}
+    };
+    fetchLive();
+    const t=setInterval(fetchLive,5*60*1000);
+    return()=>clearInterval(t);
   },[]);
 
   useEffect(()=>{
@@ -1586,7 +1620,14 @@ export default function App() {
   const openFunds  = [...nasdaq,...sp500,...active].filter(f=>f.buy_status==="open").length+etfs.length;
   const topPerf    = [...active].sort((a,b)=>(b.ytd_return||0)-(a.ytd_return||0)).slice(0,5);
 
-  const maxReturn  = Math.max(...[...nasdaq,...sp500,...active].map(f=>f.ytd_return||0));
+  // 合并 liveData 到各基金数组
+  const mergeLive = useCallback((arr)=>arr.map(f=>({...f,...(liveData[f.code]||{})})),[liveData]);
+  const nasdaqM = useMemo(()=>mergeLive(nasdaq),[nasdaq,mergeLive]);
+  const sp500M  = useMemo(()=>mergeLive(sp500), [sp500, mergeLive]);
+  const activeM = useMemo(()=>mergeLive(active),[active,mergeLive]);
+  const etfsM   = useMemo(()=>mergeLive(etfs),  [etfs,  mergeLive]);
+
+  const maxReturn  = Math.max(...[...nasdaqM,...sp500M,...activeM].map(f=>f.ytd_return||0));
 
   const actionsCol=(accent)=>({key:"_act",label:"",sortable:false,align:"center",render:(_,row)=>{
     const isFav=favorites.includes(row.code);
@@ -1608,13 +1649,27 @@ export default function App() {
     );
   }});
 
+  const renderDayChange = v => {
+    if(v==null) return <span style={{color:C.textDim,fontSize:11}}>—</span>;
+    const n=parseFloat(v);
+    const color = n>0?C.red : n<0?"#1a9e4a":C.textDim;
+    return <span style={{color,fontWeight:700,fontSize:12}}>{n>0?"+":""}{n.toFixed(2)}%</span>;
+  };
+  const renderRolling1y = v => {
+    if(v==null) return <span style={{color:C.textDim,fontSize:11}}>—</span>;
+    const n=parseFloat(v);
+    return <MiniBar value={n} max={Math.max(maxReturn,50)} color={n>0?C.green:C.red}/>;
+  };
+
   const passiveCols=[
     actionsCol(C.accent),
     {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.accent,fontWeight:700,fontSize:12}}>{v}</span>},
     {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12,color:C.text}}>{v}</span>},
-    {key:"fee_rate",label:"费率",tip:"年化管理费率，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
+    {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），不含申购赎回费，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅，仅供参考",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
+    {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据，每5分钟更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
+    {key:"day_change",label:"昨日涨跌",tip:"红色=上涨，绿色=下跌，与天天基金保持一致",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小越紧密",align:"right",render:v=>v!=null?<span style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
     {key:"daily_limit",label:"申购上限",tip:"每日单笔最大申购金额",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
     {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
@@ -1623,9 +1678,11 @@ export default function App() {
     actionsCol(C.purple),
     {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.purple,fontWeight:700,fontSize:12}}>{v}</span>},
     {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12}}>{v}</span>},
-    {key:"fee_rate",label:"费率",tip:"主动型管理费普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
+    {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），主动型普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅，主动型差异较大",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
+    {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
+    {key:"day_change",label:"昨日涨跌",tip:"红色=上涨，绿色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
     {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
   ];
@@ -1635,11 +1692,13 @@ export default function App() {
     {key:"name",  label:"ETF名称"},
     {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
     {key:"scale", label:"规模(亿)",tip:"基金总规模，越大流动性越好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"近1年涨幅",tip:"过去一年净值涨幅",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
-    {key:"fee_rate",label:"管理+托管费",tip:"年化管理费+托管费合计，场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
-    {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
-    {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价。>1%注意；>2%偏高；>3%极高，建议等待收窄",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
-    {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好，买卖价差越小",align:"right"},
+    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
+    {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
+    {key:"day_change",label:"昨日涨跌",tip:"红色=上涨，绿色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
+    {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
+    {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
+    {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价。>1%注意；>2%偏高；>3%极高",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
+    {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好",align:"right"},
   ];
 
   const dismissDisclaimer = ()=>{
@@ -1742,25 +1801,25 @@ export default function App() {
                 {nasdaq.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0}><div style={{marginBottom:28}}>
                     <SectionHeader title="纳指被动" color={C.accent}/>
-                    <DataTable columns={passiveCols} data={nasdaq.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={passiveCols} data={nasdaqM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
-                {sp500.filter(f=>favorites.includes(f.code)).length>0&&(
+                {sp500M.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0.05}><div style={{marginBottom:28}}>
                     <SectionHeader title="标普500被动" color={C.cyan}/>
-                    <DataTable columns={passiveCols} data={sp500.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={passiveCols} data={sp500M.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
-                {active.filter(f=>favorites.includes(f.code)).length>0&&(
+                {activeM.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0.1}><div style={{marginBottom:28}}>
                     <SectionHeader title="美股主动" color={C.purple}/>
-                    <DataTable columns={activeCols} data={active.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={activeCols} data={activeM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
-                {etfs.filter(f=>favorites.includes(f.code)).length>0&&(
+                {etfsM.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0.15}><div style={{marginBottom:28}}>
                     <SectionHeader title="场内ETF" color={C.orange}/>
-                    <DataTable columns={etfCols} data={etfs.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={etfCols} data={etfsM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
               </>
@@ -1908,12 +1967,13 @@ export default function App() {
         {/* ════ NASDAQ ════ */}
         {activeTab==="nasdaq"&&(
           <Reveal>
-            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="数据来源：天天基金网" count={filterData(nasdaq).length} color={C.accent}/>
+            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="数据来源：天天基金网" count={filterData(nasdaqM).length} color={C.accent}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
+              {liveTs&&<span style={{fontSize:11,color:C.textDim,alignSelf:"center"}}>行情更新：{liveTs}</span>}
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(nasdaq))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaq).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.accent} text="综合费率最低的有天弘(018043, 0.70%)和嘉实(016532, 0.70%)，但目前均暂停申购。可申购中费率较低的是摩根(019172, 0.72%)和易方达(161130, 0.72%)。广发(270042)规模最大(108亿)，跟踪误差最小(1.10%)。"/>
           </Reveal>
         )}
@@ -1921,12 +1981,13 @@ export default function App() {
         {/* ════ SP500 ════ */}
         {activeTab==="sp500"&&(
           <Reveal>
-            <SectionHeader title="场外标普500基金对比" subtitle="数据来源：天天基金网" count={filterData(sp500).length} color={C.cyan}/>
+            <SectionHeader title="场外标普500基金对比" subtitle="数据来源：天天基金网" count={filterData(sp500M).length} color={C.cyan}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
+              {liveTs&&<span style={{fontSize:11,color:C.textDim,alignSelf:"center"}}>行情更新：{liveTs}</span>}
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(sp500))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.cyan} text="博时(050025)规模最大(67.56亿)、跟踪误差最小(1.31%)，但暂停申购。可申购推荐摩根(017641, 0.77%)和易方达(161125)。注意161128跟踪标普信息科技指数，波动更大。"/>
           </Reveal>
         )}
@@ -1934,12 +1995,13 @@ export default function App() {
         {/* ════ ACTIVE ════ */}
         {activeTab==="active"&&(
           <Reveal>
-            <SectionHeader title="场外美股（主动型）基金对比" subtitle="数据来源：天天基金网" count={filterData(active).length} color={C.purple}/>
+            <SectionHeader title="场外美股（主动型）基金对比" subtitle="数据来源：天天基金网" count={filterData(activeM).length} color={C.purple}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
+              {liveTs&&<span style={{fontSize:11,color:C.textDim,alignSelf:"center"}}>行情更新：{liveTs}</span>}
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeCols} data={sortData(filterData(active))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(active).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeCols} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.purple} text="主动型管理费较高(~1.55%)，但优秀经理可带来超额收益。易方达全球成长(012920)近一年+100.44%，但限额仅50元/日。申购限额越低说明额度越紧张。"/>
           </Reveal>
         )}
@@ -1947,9 +2009,12 @@ export default function App() {
         {/* ════ ETF ════ */}
         {activeTab==="etf"&&(
           <Reveal>
-            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="可在A股账户直接交易，关注溢价风险" count={filterData(etfs).length} color={C.orange}/>
-            <SearchBar value={search} onChange={setSearch} color={C.orange}/>
-            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfCols} data={sortData(filterData(etfs))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfs).length===0&&<EmptyResult query={search}/>}</>}
+            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="可在A股账户直接交易，关注溢价风险" count={filterData(etfsM).length} color={C.orange}/>
+            <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
+              <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
+              {liveTs&&<span style={{fontSize:11,color:C.textDim,alignSelf:"center"}}>行情更新：{liveTs}</span>}
+            </div>
+            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfCols} data={sortData(filterData(etfsM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM).length===0&&<EmptyResult query={search}/>}</>}
             <Card style={{marginTop:24,padding:"24px 26px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div>
