@@ -258,14 +258,10 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
                 pass
             break
 
-    gszzl      = realtime.get("gszzl", "")
-    buy_status = "suspended" if gszzl == "-" else "open"
-
     result: dict = {
-        "code":       code,
-        "nav":        float(realtime.get("dwjz", 0)),
-        "nav_date":   realtime.get("jzrq", ""),
-        "buy_status": buy_status,
+        "code":     code,
+        "nav":      float(realtime.get("dwjz", 0)),
+        "nav_date": realtime.get("jzrq", ""),
     }
     # ytd_return = 0 说明接口未返回，不覆盖静态保底值
     if ytd_return != 0:
@@ -750,14 +746,14 @@ _MOBILE_HEADERS = {
 
 def _fetch_live_one(code: str) -> tuple:
     """单次调用 FundMNBasicInformation 同时获取 RZDF（各基金实际日涨幅）和 SYL_1N（近1年）"""
-    day_change, rolling_1y = None, None
+    day_change, rolling_1y, buy_status, daily_limit = None, None, None, None
     for attempt in range(2):
         try:
             resp = requests.get(
                 "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation",
                 params={"FCODE": code, "deviceid": "wise-etf",
                         "plat": "Wap", "product": "EFund", "version": "6.5.0"},
-                headers=_MOBILE_HEADERS, timeout=(6, 12), verify=False)
+                headers=_MOBILE_HEADERS, timeout=(4, 8), verify=False)
             if resp.ok:
                 d = resp.json()
                 if d.get("ErrCode") == 0:
@@ -768,11 +764,22 @@ def _fetch_live_one(code: str) -> tuple:
                     syl1n = data.get("SYL_1N", "")
                     if syl1n not in ("", "--", None):
                         rolling_1y = float(syl1n)
+                    # 申购状态 & 申购上限（每日可能变化）
+                    sgzt = data.get("SGZT", "")
+                    buy_status = "suspended" if "暂停" in sgzt else "open"
+                    maxsg = data.get("MAXSG", "")
+                    if "暂停" in sgzt:
+                        daily_limit = "暂停申购"
+                    elif maxsg and maxsg not in ("", "--", "0", None):
+                        daily_limit = f"{maxsg}元"
+                    else:
+                        daily_limit = "不限额"
             break
         except Exception:
             if attempt == 0:
                 time.sleep(0.5)
-    return code, {"day_change": day_change, "rolling_1y": rolling_1y}
+    return code, {"day_change": day_change, "rolling_1y": rolling_1y,
+                  "buy_status": buy_status, "daily_limit": daily_limit}
 
 
 @app.get("/api/debug_live/{code}")
@@ -803,18 +810,17 @@ def debug_live(code: str):
 
 @app.get("/api/live_data")
 def get_live_data():
-    """昨日涨跌(day_change) + 近1年滚动涨幅(rolling_1y)，5分钟缓存，并发拉取"""
-    global _LIVE_CACHE, _LIVE_CACHE_TS
-    if time.time() - _LIVE_CACHE_TS < 300 and _LIVE_CACHE:
-        return {"data": _LIVE_CACHE, "cached": True}
-
+    """昨日涨跌(day_change) + 近1年滚动涨幅(rolling_1y)，并发拉取51只基金
+    缓存策略：前端 localStorage 缓存20小时（数据每日仅更新一次），服务端不缓存（兼容 Vercel serverless）
+    """
     result = {}
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         futures = {ex.submit(_fetch_live_one, code): code for code in _ALL_CODES}
         for f in futures:
-            code, data = f.result()
-            result[code] = data
-
-    _LIVE_CACHE = result
-    _LIVE_CACHE_TS = time.time()
-    return {"data": result, "cached": False}
+            try:
+                code, data = f.result(timeout=10)
+                # 只保留非 None 字段，避免覆盖前端静态兜底值
+                result[code] = {k: v for k, v in data.items() if v is not None}
+            except Exception:
+                pass
+    return {"data": result}

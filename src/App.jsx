@@ -1541,15 +1541,38 @@ export default function App() {
     })();
   },[]);
 
-  // ── 实时行情（day_change + rolling_1y），5分钟自动刷新 ──
+  // ── 实时行情（day_change / rolling_1y / buy_status / daily_limit）
+  // 数据每日在北京时间凌晨5点（美股收盘后）更新一次，缓存到下一个北京时间5点再失效
   useEffect(()=>{
-    const fetchLive=async()=>{
-      const d=await apiFetch("/live_data");
-      if(d?.data){setLiveData(d.data);setLiveTs(new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));}
+    const CACHE_KEY="wise_etf_live";
+    // 上一个北京时间凌晨5点对应的 UTC 时间戳
+    // 北京5:00 = UTC 21:00 前一天，公式：floor((now - 21h) / 24h) * 24h + 21h
+    const lastBeijing5am=()=>{
+      const H21=21*3600*1000, DAY=24*3600*1000;
+      return Math.floor((Date.now()-H21)/DAY)*DAY+H21;
     };
-    fetchLive();
-    const t=setInterval(fetchLive,5*60*1000);
-    return()=>clearInterval(t);
+    const tryCache=()=>{
+      try{
+        const raw=localStorage.getItem(CACHE_KEY);
+        if(!raw) return null;
+        const {data,ts}=JSON.parse(raw);
+        if(ts>=lastBeijing5am()) return data; // 缓存在上次5点之后，仍有效
+      }catch{}
+      return null;
+    };
+    const cached=tryCache();
+    if(cached){
+      setLiveData(cached);
+      setLiveTs(new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
+      return;
+    }
+    apiFetch("/live_data").then(d=>{
+      if(d?.data){
+        setLiveData(d.data);
+        setLiveTs(new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
+        try{ localStorage.setItem(CACHE_KEY,JSON.stringify({data:d.data,ts:Date.now()})); }catch{}
+      }
+    });
   },[]);
 
   useEffect(()=>{
@@ -1621,7 +1644,13 @@ export default function App() {
   const topPerf    = [...active].sort((a,b)=>(b.ytd_return||0)-(a.ytd_return||0)).slice(0,5);
 
   // 合并 liveData 到各基金数组
-  const mergeLive = useCallback((arr)=>arr.map(f=>({...f,...(liveData[f.code]||{})})),[liveData]);
+  // 只合并非 null 字段，API 失败时保留静态兜底值
+  const mergeLive = useCallback((arr)=>arr.map(f=>{
+    const live=liveData[f.code];
+    if(!live) return f;
+    const patch=Object.fromEntries(Object.entries(live).filter(([,v])=>v!=null));
+    return {...f,...patch};
+  }),[liveData]);
   const nasdaqM = useMemo(()=>mergeLive(nasdaq),[nasdaq,mergeLive]);
   const sp500M  = useMemo(()=>mergeLive(sp500), [sp500, mergeLive]);
   const activeM = useMemo(()=>mergeLive(active),[active,mergeLive]);
@@ -1652,7 +1681,7 @@ export default function App() {
   const renderDayChange = v => {
     if(v==null) return <span style={{color:C.textDim,fontSize:11}}>—</span>;
     const n=parseFloat(v);
-    const color = n>0?C.red : n<0?"#1a9e4a":C.textDim;
+    const color = n>0?C.green : n<0?C.red:C.textDim;
     return <span style={{color,fontWeight:700,fontSize:12}}>{n>0?"+":""}{n.toFixed(2)}%</span>;
   };
   const renderRolling1y = v => {
@@ -1669,7 +1698,7 @@ export default function App() {
     {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
     {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据，每5分钟更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
-    {key:"day_change",label:"昨日涨跌",tip:"红色=上涨，绿色=下跌，与天天基金保持一致",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
+    {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小越紧密",align:"right",render:v=>v!=null?<span style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
     {key:"daily_limit",label:"申购上限",tip:"每日单笔最大申购金额",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
     {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
@@ -1682,7 +1711,7 @@ export default function App() {
     {key:"scale",  label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
     {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
-    {key:"day_change",label:"昨日涨跌",tip:"红色=上涨，绿色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
+    {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
     {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
   ];
@@ -1694,7 +1723,7 @@ export default function App() {
     {key:"scale", label:"规模(亿)",tip:"基金总规模，越大流动性越好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
     {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
-    {key:"day_change",label:"昨日涨跌",tip:"红色=上涨，绿色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
+    {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
     {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价。>1%注意；>2%偏高；>3%极高",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
@@ -1732,8 +1761,13 @@ export default function App() {
       }}>
         <div style={{maxWidth:1440,margin:"0 auto",padding:"0 40px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <a href="/" onClick={e=>{e.preventDefault();switchTab("overview");}} style={{textDecoration:"none",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
-            <div style={{width:34,height:34,borderRadius:9,background:`linear-gradient(135deg,${C.accent},#5856d6)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:15,color:"#fff",boxShadow:`0 2px 14px ${C.accent}45`}}>W</div>
-            <span style={{fontSize:17,fontWeight:800,letterSpacing:-0.5,color:C.text}}>Wise<span style={{color:C.accent}}>ETF</span></span>
+            <svg width="32" height="32" viewBox="0 0 28 28" fill="none">
+              <rect width="28" height="28" rx="7" fill="url(#logobg)"/>
+              <polyline points="4,20 9,13 14,16 19,8 24,11" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+              <circle cx="24" cy="11" r="2" fill="white"/>
+              <defs><linearGradient id="logobg" x1="0" y1="0" x2="28" y2="28"><stop stopColor="#007aff"/><stop offset="1" stopColor="#5856d6"/></linearGradient></defs>
+            </svg>
+            <span style={{fontSize:17,fontWeight:800,letterSpacing:-0.5,color:C.text}}>Wise <span style={{color:C.accent}}>ETF</span></span>
           </a>
 
           {/* Sliding tab nav */}
