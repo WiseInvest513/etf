@@ -1738,6 +1738,7 @@ export default function App() {
   };
 
   return (
+    <>
     <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif"}}>
       {showDisclaimer&&<DisclaimerModal onClose={dismissDisclaimer}/>}
       {showBriefing&&!showDisclaimer&&(
@@ -2199,5 +2200,6 @@ export default function App() {
       `}</style>
     </div>
     <Analytics />
+    </>
   );
 }
