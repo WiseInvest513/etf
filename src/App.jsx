@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line } from "recharts";
+import { Analytics } from "@vercel/analytics/react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 async function apiFetch(path) {
@@ -2197,5 +2198,6 @@ export default function App() {
         }
       `}</style>
     </div>
+    <Analytics />
   );
 }
