@@ -1735,9 +1735,11 @@ export default function App() {
           <div onClick={e=>e.stopPropagation()}
             style={{background:C.card,borderRadius:16,padding:"28px 32px",boxShadow:"0 20px 60px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",alignItems:"center",gap:16,minWidth:240}}>
             <div style={{fontSize:15,fontWeight:700,color:C.text}}>微信公众号</div>
-            <img src="/公众号.png" alt="微信公众号二维码"
-              style={{width:180,height:180,borderRadius:8,objectFit:"contain",border:`1px solid ${C.border}`}}
-              onError={e=>{e.currentTarget.style.display="none";}}/>
+            <div style={{borderRadius:16,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
+              <img src="/公众号.png" alt="微信公众号二维码"
+                style={{width:420,height:"auto",display:"block"}}
+                onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
+            </div>
             <div style={{fontSize:12,color:C.textDim}}>扫码关注，获取最新资讯</div>
             <button onClick={()=>setShowWechat(false)}
               style={{padding:"6px 20px",borderRadius:8,border:`1px solid ${C.border}`,background:"none",color:C.textMuted,fontSize:13,cursor:"pointer"}}>
