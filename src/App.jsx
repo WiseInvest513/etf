@@ -1491,6 +1491,7 @@ export default function App() {
   const [usdcny,setUsdcny]=useState(null);
   const [compareList,setCompareList]=useState([]);
   const [showCompare,setShowCompare]=useState(false);
+  const [showWechat,setShowWechat]=useState(false);
   const navRef=useRef(null);
   const [indicator,setIndicator]=useState({left:0,width:0,opacity:0});
 
@@ -1727,6 +1728,24 @@ export default function App() {
     <>
     <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif"}}>
       {showDisclaimer&&<DisclaimerModal onClose={dismissDisclaimer}/>}
+      {/* 微信公众号二维码弹窗 */}
+      {showWechat&&(
+        <div onClick={()=>setShowWechat(false)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:C.card,borderRadius:16,padding:"28px 32px",boxShadow:"0 20px 60px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",alignItems:"center",gap:16,minWidth:240}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text}}>微信公众号</div>
+            <img src="/wechat-qr.png" alt="微信公众号二维码"
+              style={{width:180,height:180,borderRadius:8,objectFit:"contain",border:`1px solid ${C.border}`}}
+              onError={e=>{e.currentTarget.style.display="none";}}/>
+            <div style={{fontSize:12,color:C.textDim}}>扫码关注，获取最新资讯</div>
+            <button onClick={()=>setShowWechat(false)}
+              style={{padding:"6px 20px",borderRadius:8,border:`1px solid ${C.border}`,background:"none",color:C.textMuted,fontSize:13,cursor:"pointer"}}>
+              关闭
+            </button>
+          </div>
+        </div>
+      )}
       {showBriefing&&!showDisclaimer&&(
         <DailyBriefing
           etfs={etfs} nasdaq={nasdaq} sp500={sp500} active={active}
@@ -1783,6 +1802,26 @@ export default function App() {
               onMouseEnter={e=>{e.currentTarget.style.background=C.accentBg;e.currentTarget.style.color=C.accent;e.currentTarget.style.borderColor=C.accent+"44";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
               <span style={{fontSize:13}}>📋</span> 今日简报
+            </button>
+            {/* Twitter / X */}
+            <a href="https://x.com/WiseInvest513" target="_blank" rel="noopener noreferrer"
+              title="关注博主 Twitter"
+              style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,textDecoration:"none",transition:"all 0.18s",flexShrink:0}}
+              onMouseEnter={e=>{e.currentTarget.style.background="#000";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#000";}}
+              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+            </a>
+            {/* WeChat 公众号 */}
+            <button onClick={()=>setShowWechat(true)}
+              title="微信公众号"
+              style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,cursor:"pointer",transition:"all 0.18s",flexShrink:0}}
+              onMouseEnter={e=>{e.currentTarget.style.background="#07c160";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#07c160";}}
+              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-7.062-6.122zm-3.74 2.632c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983zm5.08 0c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983z"/>
+              </svg>
             </button>
             {lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap"}}>更新于 {lastUpdate}</span>}
             {/* Hamburger (mobile only) */}
