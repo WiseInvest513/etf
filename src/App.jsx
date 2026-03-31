@@ -1498,8 +1498,27 @@ export default function App() {
   const [sp500, setSp500 ]=useState(FALLBACK.sp500_passive);
   const [active,setActive]=useState(FALLBACK.us_active);
   const [etfs,  setEtfs  ]=useState(FALLBACK.etfs);
-  const [liveData,setLiveData]=useState({});
-  const [liveTs,setLiveTs]=useState(null);
+  // 同步读缓存，避免首屏 loading 闪烁
+  const [liveData,setLiveData]=useState(()=>{
+    try{
+      const raw=localStorage.getItem("wise_etf_live");
+      if(!raw) return {};
+      const {data,ts}=JSON.parse(raw);
+      const H21=21*3600*1000,DAY=24*3600*1000;
+      if(ts>=Math.floor((Date.now()-H21)/DAY)*DAY+H21) return data;
+    }catch{}
+    return {};
+  });
+  const [liveTs,setLiveTs]=useState(()=>{
+    try{
+      const raw=localStorage.getItem("wise_etf_live");
+      if(!raw) return null;
+      const {liveTs,ts}=JSON.parse(raw);
+      const H21=21*3600*1000,DAY=24*3600*1000;
+      if(ts>=Math.floor((Date.now()-H21)/DAY)*DAY+H21) return liveTs||null;
+    }catch{}
+    return null;
+  });
 
   useEffect(()=>{
     const h=()=>{setScrolled(window.scrollY>8);setShowBackToTop(window.scrollY>400);};
@@ -1546,32 +1565,19 @@ export default function App() {
   // 数据每日在北京时间凌晨5点（美股收盘后）更新一次，缓存到下一个北京时间5点再失效
   useEffect(()=>{
     const CACHE_KEY="wise_etf_live";
-    // 上一个北京时间凌晨5点对应的 UTC 时间戳
-    // 北京5:00 = UTC 21:00 前一天，公式：floor((now - 21h) / 24h) * 24h + 21h
-    const lastBeijing5am=()=>{
-      const H21=21*3600*1000, DAY=24*3600*1000;
-      return Math.floor((Date.now()-H21)/DAY)*DAY+H21;
-    };
-    const tryCache=()=>{
-      try{
-        const raw=localStorage.getItem(CACHE_KEY);
-        if(!raw) return null;
-        const {data,ts}=JSON.parse(raw);
-        if(ts>=lastBeijing5am()) return data; // 缓存在上次5点之后，仍有效
-      }catch{}
-      return null;
-    };
-    const cached=tryCache();
-    if(cached){
-      setLiveData(cached);
-      setLiveTs(new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
-      return;
-    }
+    const H21=21*3600*1000,DAY=24*3600*1000;
+    const lastBeijing5am=()=>Math.floor((Date.now()-H21)/DAY)*DAY+H21;
+    // 已在 useState 初始化时同步加载缓存；这里只在缓存失效时重新拉取
+    try{
+      const raw=localStorage.getItem(CACHE_KEY);
+      if(raw){const {ts}=JSON.parse(raw);if(ts>=lastBeijing5am()) return;}
+    }catch{}
     apiFetch("/live_data").then(d=>{
       if(d?.data){
+        const timeStr=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
         setLiveData(d.data);
-        setLiveTs(new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
-        try{ localStorage.setItem(CACHE_KEY,JSON.stringify({data:d.data,ts:Date.now()})); }catch{}
+        setLiveTs(timeStr);
+        try{ localStorage.setItem(CACHE_KEY,JSON.stringify({data:d.data,ts:Date.now(),liveTs:timeStr})); }catch{}
       }
     });
   },[]);
