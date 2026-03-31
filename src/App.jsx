@@ -1487,7 +1487,7 @@ export default function App() {
   });
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
   const [lastUpdate,setLastUpdate]=useState(null);
-  const [dataLoading,setDataLoading]=useState(true);
+  const [dataLoading,setDataLoading]=useState(false);
   const [usdcny,setUsdcny]=useState(null);
   const [compareList,setCompareList]=useState([]);
   const [showCompare,setShowCompare]=useState(false);
@@ -1537,28 +1537,8 @@ export default function App() {
   },[activeTab]);
 
   useEffect(()=>{
-    (async()=>{
-      setDataLoading(true);
-      const ov=await apiFetch("/overview");
-      const [n,s,a,e]=await Promise.all([
-        apiFetch("/funds/nasdaq_passive"),apiFetch("/funds/sp500_passive"),
-        apiFetch("/funds/us_active"),apiFetch("/etfs"),
-      ]);
-      // 合并：以 FALLBACK 为底（含费率/规模/跟踪误差），用 API 实时数据覆盖动态字段
-      const merge=(fallback,apiData)=>{
-        if(!apiData?.data?.length) return fallback;
-        return fallback.map(fb=>{
-          const live=apiData.data.find(d=>d.code===fb.code);
-          return live?{...fb,...live}:fb;
-        });
-      };
-      setNasdaq(merge(FALLBACK.nasdaq_passive,n));
-      setSp500 (merge(FALLBACK.sp500_passive, s));
-      setActive(merge(FALLBACK.us_active,     a));
-      setEtfs  (merge(FALLBACK.etfs,          e));
-      if(ov?.last_update) setLastUpdate(ov.last_update);
-      setDataLoading(false);
-    })();
+    // 仅拉取 overview 时间戳，不阻塞渲染（基金静态数据已内置 FALLBACK）
+    apiFetch("/overview").then(ov=>{ if(ov?.last_update) setLastUpdate(ov.last_update); });
   },[]);
 
   // ── 实时行情（day_change / rolling_1y / buy_status / daily_limit）
