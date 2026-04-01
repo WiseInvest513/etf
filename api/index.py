@@ -77,20 +77,28 @@ def _cache_set(key: str, data: any, ttl: int):
     except Exception as e:
         logger.warning(f"[redis:set] {key}: {e}")
 
-# 兼容旧代码调用（_mem_get/_mem_set 重定向到 Redis）
 def _mem_get(key: str, kind: str) -> Optional[any]:
     return _cache_get(key)
 
 def _mem_set(key: str, data: any):
-    _cache_set(key, data, CACHE_TTL.get(
-        next((k for k in CACHE_TTL if key.startswith(k.split("_")[0])), "funds"), 12 * 3600
-    ))
+    ttl = CACHE_TTL.get(kind_of(key), 12 * 3600)
+    _cache_set(key, data, ttl)
 
 def _file_save(key: str, data: any):
-    _cache_set(key, data, 24 * 3600)
+    pass  # Redis 已持久化，无需额外写文件
 
 def _file_load(key: str) -> Optional[any]:
     return _cache_get(key)
+
+def kind_of(key: str) -> str:
+    """根据 key 推断缓存类型"""
+    if key.startswith("funds_"):        return "funds"
+    if key.startswith("prem_hist_"):    return "premium_history"
+    if key == "etfs":                   return "etfs"
+    if key == "live_data":              return "live_data"
+    if key == "fx_history":             return "fx_history"
+    if key == "news":                   return "news"
+    return "funds"
 
 # ─── 静态数据（与 App.jsx FALLBACK 严格同步）─────────────────────────────────
 # 这些是不变字段：费率、规模、跟踪误差、每日限额
@@ -707,24 +715,18 @@ def get_news(response: Response):
 
 @app.get("/api/cron/refresh")
 def cron_refresh():
-    """
-    Vercel Cron Job 调用（UTC 02:00 / 北京 10:00）。
-    强制清除内存缓存，重新拉取全部数据并写入文件缓存。
-    """
+    """Vercel Cron Job（UTC 01:30 / 北京 09:30）：拉取全量最新数据写入 Redis"""
     results: dict = {}
 
     for category in STATIC_FUNDS:
-        key = f"funds_{category}"
-        pass  # Redis 无需手动清除，直接覆盖写入
         try:
             data, source = _build_funds(category)
             if source != "none":
-                _cache_set(key, data, CACHE_TTL["funds"])
+                _cache_set(f"funds_{category}", data, CACHE_TTL["funds"])
             results[category] = {"count": len(data), "source": source}
         except Exception as e:
             results[category] = {"error": str(e)}
 
-    pass
     try:
         data, source = _build_etfs()
         if source != "none":
@@ -733,28 +735,20 @@ def cron_refresh():
     except Exception as e:
         results["etfs"] = {"error": str(e)}
 
-    # 预热 live_data（昨日涨跌/申购状态）
-    pass
     try:
         data = _build_live_data()
         if data:
-            _mem_set("live_data", data)
-            _file_save("live_data", data)
+            _cache_set("live_data", data, CACHE_TTL["live_data"])
         results["live_data"] = {"count": len(data), "source": "live" if data else "empty"}
     except Exception as e:
         results["live_data"] = {"error": str(e)}
 
-    # 预热溢价率历史（10只ETF）
-    ETF_CODES = [e["code"] for e in STATIC_ETFS]
     prem_results = {}
-    for code in ETF_CODES:
-        cache_key = f"prem_hist_{code}"
-        pass
+    for code in [e["code"] for e in STATIC_ETFS]:
         try:
             hist = fetch_premium_history(code)
             if hist:
-                _mem_set(cache_key, hist)
-                _file_save(cache_key, hist)
+                _cache_set(f"prem_hist_{code}", hist, CACHE_TTL["premium_history"])
             prem_results[code] = len(hist)
         except Exception as e:
             prem_results[code] = str(e)
@@ -981,12 +975,9 @@ def get_live_data(response: Response):
 
     data = _build_live_data()
     if data:
-        _mem_set("live_data", data)
-        _file_save("live_data", data)
+        _cache_set("live_data", data, CACHE_TTL["live_data"])
     else:
-        file_data = _file_load("live_data")
-        if file_data:
-            data = file_data
+        data = _cache_get("live_data") or {}
 
     _cache_header(response, 43200)
     return {"data": data, "source": "live" if data else "empty"}
