@@ -1586,10 +1586,20 @@ export default function App() {
     if(sortKey===k) setSortDir(d=>d==="asc"?"desc":"asc");
     else{setSortKey(k);setSortDir("desc");}
   };
+  const parseDailyLimit = v => {
+    if(!v||v==="暂停申购") return -1;
+    if(v==="不限额") return Infinity;
+    const n = parseFloat(String(v).replace(/[^\d.]/g,""));
+    return isNaN(n)?-1:n;
+  };
   const sortData = data => {
     if(!sortKey) return data;
     return [...data].sort((a,b)=>{
       const av=a[sortKey],bv=b[sortKey];
+      if(sortKey==="daily_limit"){
+        const na=parseDailyLimit(av),nb=parseDailyLimit(bv);
+        return sortDir==="asc"?na-nb:nb-na;
+      }
       if(typeof av==="number"&&typeof bv==="number") return sortDir==="asc"?av-bv:bv-av;
       return sortDir==="asc"?String(av||"").localeCompare(String(bv||"")):String(bv||"").localeCompare(String(av||""));
     });
