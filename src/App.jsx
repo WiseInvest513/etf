@@ -59,16 +59,16 @@ const FALLBACK = {
   ],
   // 场内ETF — 名称经 fundgz 实测验证（2026-03-27），premium 为实际市场水平
   etfs: [
-    { code:"513100",name:"国泰纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:220.0,ytd_return:21.0,premium:4.94,volume:3.6, change_pct:0.0,fee_rate:0.80,track_error:1.07},
-    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",      tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.32,volume:1.5, change_pct:0.0,fee_rate:1.00,track_error:1.04},
-    { code:"159941",name:"广发纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:200.0,ytd_return:21.1,premium:4.35,volume:7.8, change_pct:0.0,fee_rate:1.00,track_error:1.03},
-    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:45.0, ytd_return:20.9,premium:3.73,volume:3.1, change_pct:0.0,fee_rate:0.80,track_error:2.53},
-    { code:"159659",name:"招商纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:120.0,ytd_return:21.3,premium:3.62,volume:1.3, change_pct:0.0,fee_rate:0.65,track_error:1.08},
-    { code:"159632",name:"华安纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:85.0, ytd_return:21.0,premium:3.27,volume:1.9, change_pct:0.0,fee_rate:0.80,track_error:1.24},
-    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)",tracking_index:"纳斯达克科技市值加权",scale:160.0,ytd_return:28.0,premium:16.9,volume:5.3, change_pct:0.0,fee_rate:1.00,track_error:1.88},
-    { code:"513500",name:"博时标普500ETF",              tracking_index:"标普500",             scale:95.0, ytd_return:15.8,premium:4.54,volume:2.3, change_pct:0.0,fee_rate:0.80,track_error:1.07},
-    { code:"159612",name:"国泰标普500ETF(QDII)",        tracking_index:"标普500",             scale:55.0, ytd_return:15.4,premium:4.63,volume:0.1, change_pct:0.0,fee_rate:0.75,track_error:1.01},
-    { code:"513650",name:"南方标普500ETF(QDII)",        tracking_index:"标普500",             scale:45.0, ytd_return:15.5,premium:3.06,volume:1.0, change_pct:0.0,fee_rate:0.75,track_error:1.05},
+    { code:"513100",name:"国泰纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:167.9,ytd_return:16.99,premium:4.94,volume:3.6, change_pct:0.0,fee_rate:0.80,track_error:1.07},
+    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",      tracking_index:"纳斯达克100",         scale:41.6, ytd_return:16.60,premium:3.32,volume:1.5, change_pct:0.0,fee_rate:1.00,track_error:1.04},
+    { code:"159941",name:"广发纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:297.8,ytd_return:16.41,premium:4.35,volume:7.8, change_pct:0.0,fee_rate:1.00,track_error:1.03},
+    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:112.5,ytd_return:14.72,premium:3.73,volume:3.1, change_pct:0.0,fee_rate:0.80,track_error:2.53},
+    { code:"159659",name:"招商纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:79.3, ytd_return:17.42,premium:3.62,volume:1.3, change_pct:0.0,fee_rate:0.65,track_error:1.08},
+    { code:"159632",name:"华安纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:97.8, ytd_return:16.28,premium:3.27,volume:1.9, change_pct:0.0,fee_rate:0.80,track_error:1.24},
+    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)",tracking_index:"纳斯达克科技市值加权",scale:123.3,ytd_return:27.55,premium:16.9,volume:5.3, change_pct:0.0,fee_rate:1.00,track_error:1.88},
+    { code:"513500",name:"博时标普500ETF",              tracking_index:"标普500",             scale:223.2,ytd_return:13.89,premium:4.54,volume:2.3, change_pct:0.0,fee_rate:0.80,track_error:1.07},
+    { code:"159612",name:"国泰标普500ETF(QDII)",        tracking_index:"标普500",             scale:7.9,  ytd_return:13.74,premium:4.63,volume:0.1, change_pct:0.0,fee_rate:0.75,track_error:1.01},
+    { code:"513650",name:"南方标普500ETF(QDII)",        tracking_index:"标普500",             scale:46.8, ytd_return:13.82,premium:3.06,volume:1.0, change_pct:0.0,fee_rate:0.75,track_error:1.05},
   ],
 };
 
