@@ -1,21 +1,20 @@
 """
-Wise-ETF Serverless API  v3.0
+Wise-ETF Serverless API  v4.0
 ==============================
-缓存策略（三层递增容错）：
-  1. 内存缓存    — Lambda 热实例复用，响应 < 1ms
-  2. 文件缓存    — /tmp/wise_etf_last_good.json，当天数据持久化，次日备用
-  3. 静态兜底    — 代码内嵌精准数据，永不返回空
+缓存策略（Redis 持久化）：
+  1. Redis (Upstash) — 持久化存储，cron 每日写入，永不丢失
+  2. 静态兜底        — 代码内嵌数据，Redis 不可用时保底
 
-数据分层（只刷新会变动的字段）：
-  不变字段: code / name / fee_rate / scale / track_error / daily_limit / tracking_index
-  日更字段: ytd_return / nav / nav_date / buy_status          → 缓存 TTL 6h
-  实时字段: ETF market_price / nav / premium / volume / change_pct  → 缓存 TTL 5min
+数据分层：
+  不变字段: code / name / fee_rate / scale / track_error / tracking_index
+  日更字段: ytd_return / nav / nav_date / buy_status / live_data  → cron 09:30 更新
+  实时字段: ETF market_price / nav / premium / volume / change_pct → 5min TTL
 
 定时预热（vercel.json crons）：
-  UTC 02:00 / 北京 10:00 — /api/cron/refresh 预热全部缓存
+  UTC 01:30 / 北京 09:30 — /api/cron/refresh 写入 Redis
 """
 
-import json, re, logging, time, xml.etree.ElementTree as ET
+import json, os, re, logging, time, xml.etree.ElementTree as ET
 import urllib3; urllib3.disable_warnings()
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
@@ -25,65 +24,73 @@ from typing import Optional, Dict, List
 import requests
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from upstash_redis import Redis
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# ─── 缓存层 ────────────────────────────────────────────────────────────────────
+# ─── Redis 缓存层 ───────────────────────────────────────────────────────────────
 
-_MEM_CACHE: Dict[str, dict] = {}        # 热实例内存缓存
-_LAST_GOOD_FILE = "/tmp/wise_etf_last_good.json"
+_redis: Optional[Redis] = None
+
+def _get_redis() -> Optional[Redis]:
+    global _redis
+    if _redis is None:
+        url   = os.environ.get("KV_REST_API_URL")
+        token = os.environ.get("KV_REST_API_TOKEN")
+        if url and token:
+            try:
+                _redis = Redis(url=url, token=token)
+            except Exception as e:
+                logger.warning(f"[redis] init failed: {e}")
+    return _redis
 
 CACHE_TTL = {
-    "funds":           6 * 3600,   # 基金净值深夜更新，6h 有效
-    "etfs":            5 * 60,     # ETF 溢价率盘中实时，5min 有效
-    "fx_history":      6 * 3600,   # 汇率/指数历史，6h 有效
+    "funds":           12 * 3600,  # cron 每日更新，12h 有效
+    "etfs":            5  * 60,    # ETF 实时行情，5min 有效
+    "fx_history":      24 * 3600,  # 汇率历史，24h 有效
     "news":            30 * 60,    # 市场新闻，30min 缓存
-    "premium_history": 12 * 3600,  # 溢价率历史，cron 每日预热，12h 有效
-    "live_data":       12 * 3600,  # 昨日涨跌/申购状态，cron 每日预热，12h 有效
+    "premium_history": 12 * 3600,  # 溢价率历史，cron 每日更新
+    "live_data":       12 * 3600,  # 昨日涨跌/申购状态，cron 每日更新
 }
 
-def _mem_get(key: str, kind: str) -> Optional[list]:
-    entry = _MEM_CACHE.get(key)
-    if entry and (time.time() - entry["ts"]) < CACHE_TTL[kind]:
-        logger.info(f"[cache:mem] hit {key}")
-        return entry["data"]
+def _cache_get(key: str) -> Optional[any]:
+    r = _get_redis()
+    if not r:
+        return None
+    try:
+        val = r.get(key)
+        if val:
+            logger.info(f"[redis] hit {key}")
+            return json.loads(val) if isinstance(val, str) else val
+    except Exception as e:
+        logger.warning(f"[redis:get] {key}: {e}")
     return None
 
-def _mem_set(key: str, data: list):
-    _MEM_CACHE[key] = {"data": data, "ts": time.time()}
-
-def _file_save(key: str, data: list):
-    """成功数据写入 /tmp，作为次日冷启动备用"""
+def _cache_set(key: str, data: any, ttl: int):
+    r = _get_redis()
+    if not r:
+        return
     try:
-        store: dict = {}
-        try:
-            with open(_LAST_GOOD_FILE) as f:
-                store = json.load(f)
-        except Exception:
-            pass
-        store[key] = {"data": data, "saved_at": datetime.now().isoformat()}
-        with open(_LAST_GOOD_FILE, "w") as f:
-            json.dump(store, f, ensure_ascii=False)
+        r.set(key, json.dumps(data, ensure_ascii=False), ex=ttl)
+        logger.info(f"[redis] set {key} ttl={ttl}s")
     except Exception as e:
-        logger.warning(f"[cache:file] write failed: {e}")
+        logger.warning(f"[redis:set] {key}: {e}")
 
-def _file_load(key: str) -> Optional[list]:
-    try:
-        with open(_LAST_GOOD_FILE) as f:
-            store = json.load(f)
-        entry = store.get(key, {})
-        data = entry.get("data")
-        if data:
-            logger.info(f"[cache:file] hit {key} (saved {entry.get('saved_at','')})")
-        return data
-    except Exception:
-        return None
+# 兼容旧代码调用（_mem_get/_mem_set 重定向到 Redis）
+def _mem_get(key: str, kind: str) -> Optional[any]:
+    return _cache_get(key)
 
-def _cache_set(key: str, data: list):
-    """同时写内存缓存 + 文件缓存"""
-    _mem_set(key, data)
-    _file_save(key, data)
+def _mem_set(key: str, data: any):
+    _cache_set(key, data, CACHE_TTL.get(
+        next((k for k in CACHE_TTL if key.startswith(k.split("_")[0])), "funds"), 12 * 3600
+    ))
+
+def _file_save(key: str, data: any):
+    _cache_set(key, data, 24 * 3600)
+
+def _file_load(key: str) -> Optional[any]:
+    return _cache_get(key)
 
 # ─── 静态数据（与 App.jsx FALLBACK 严格同步）─────────────────────────────────
 # 这些是不变字段：费率、规模、跟踪误差、每日限额
@@ -466,7 +473,7 @@ def get_funds(category: str, response: Response):
     results, source = _build_funds(category)
 
     if source in ("live", "partial"):
-        _cache_set(cache_key, results)
+        _cache_set(cache_key, results, CACHE_TTL["funds"])
     else:
         # 3. 文件缓存（上次成功数据）
         file_data = _file_load(cache_key)
@@ -498,7 +505,7 @@ def get_etfs(response: Response):
     results, source = _build_etfs()
 
     if source in ("live", "partial"):
-        _cache_set(cache_key, results)
+        _cache_set(cache_key, results, CACHE_TTL["funds"])
     else:
         file_data = _file_load(cache_key)
         if file_data:
@@ -550,7 +557,7 @@ def get_fx_index_history(response: Response):
                   for m in months]
         source = "live"
         logger.info(f"[fx-history] {len(data)} months from Yahoo Finance")
-        _cache_set(cache_key, data)
+        _cache_set(cache_key, data, CACHE_TTL["fx_history"])
     except Exception as e:
         logger.warning(f"[fx-history] Yahoo Finance fallback ({e})")
         file_data = _file_load(cache_key)
@@ -708,26 +715,26 @@ def cron_refresh():
 
     for category in STATIC_FUNDS:
         key = f"funds_{category}"
-        _MEM_CACHE.pop(key, None)   # 清除旧缓存，强制重新拉取
+        pass  # Redis 无需手动清除，直接覆盖写入
         try:
             data, source = _build_funds(category)
             if source != "none":
-                _cache_set(key, data)
+                _cache_set(key, data, CACHE_TTL["funds"])
             results[category] = {"count": len(data), "source": source}
         except Exception as e:
             results[category] = {"error": str(e)}
 
-    _MEM_CACHE.pop("etfs", None)
+    pass
     try:
         data, source = _build_etfs()
         if source != "none":
-            _cache_set("etfs", data)
+            _cache_set("etfs", data, CACHE_TTL["etfs"])
         results["etfs"] = {"count": len(data), "source": source}
     except Exception as e:
         results["etfs"] = {"error": str(e)}
 
     # 预热 live_data（昨日涨跌/申购状态）
-    _MEM_CACHE.pop("live_data", None)
+    pass
     try:
         data = _build_live_data()
         if data:
@@ -742,7 +749,7 @@ def cron_refresh():
     prem_results = {}
     for code in ETF_CODES:
         cache_key = f"prem_hist_{code}"
-        _MEM_CACHE.pop(cache_key, None)
+        pass
         try:
             hist = fetch_premium_history(code)
             if hist:
