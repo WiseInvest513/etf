@@ -72,27 +72,20 @@ const FALLBACK = {
   ],
 };
 
-const genPremiumHistory = (code, days=30) => {
-  const base = FALLBACK.etfs.find(e=>e.code===code)?.premium||1;
-  return Array.from({length:days},(_,i)=>{
-    const d=new Date(); d.setDate(d.getDate()-(days-i));
-    return {date:`${d.getMonth()+1}/${d.getDate()}`,premium:+(base+(Math.random()-0.4)*3).toFixed(2)};
-  });
-};
-// 过去12个月真实月度收益（来源：Slickcharts / FRED，2024-04 ~ 2025-03，美元口径价格收益）
+// 过去12个月月度收益（来源：Yahoo Finance，2025-04 ~ 2026-03，美元口径，NDX/GSPC 月收盘价计算）
 const MONTHLY_12M = [
-  {month:"4月",  nasdaq:-4.46, sp500:-4.23},
-  {month:"5月",  nasdaq: 6.28, sp500: 4.94},
-  {month:"6月",  nasdaq: 6.18, sp500: 3.08},
-  {month:"7月",  nasdaq:-1.63, sp500: 0.94},
-  {month:"8月",  nasdaq: 1.10, sp500: 2.00},
-  {month:"9月",  nasdaq: 2.48, sp500: 2.46},
-  {month:"10月", nasdaq:-0.85, sp500:-0.91},
-  {month:"11月", nasdaq: 5.23, sp500: 5.40},
-  {month:"12月", nasdaq: 0.39, sp500:-2.62},
-  {month:"1月",  nasdaq: 2.22, sp500: 2.33},
-  {month:"2月",  nasdaq:-2.76, sp500:-0.25},
-  {month:"3月",  nasdaq:-7.69, sp500:-5.97},
+  {month:"4月",  nasdaq: 1.52, sp500:-0.76},
+  {month:"5月",  nasdaq: 9.04, sp500: 6.15},
+  {month:"6月",  nasdaq: 6.27, sp500: 4.96},
+  {month:"7月",  nasdaq: 2.38, sp500: 2.17},
+  {month:"8月",  nasdaq: 0.85, sp500: 1.91},
+  {month:"9月",  nasdaq: 5.40, sp500: 3.53},
+  {month:"10月", nasdaq: 4.77, sp500: 2.27},
+  {month:"11月", nasdaq:-1.64, sp500: 0.13},
+  {month:"12月", nasdaq:-0.73, sp500:-0.05},
+  {month:"1月",  nasdaq: 1.20, sp500: 1.37},
+  {month:"2月",  nasdaq:-2.32, sp500:-0.87},
+  {month:"3月",  nasdaq:-4.89, sp500:-5.09},
 ];
 
 // ─── FX / Index Historical Data ───────────────────────────────────────────────
@@ -1606,7 +1599,16 @@ export default function App() {
   };
   const switchTab = id=>{setActiveTab(id);setSortKey(null);setSearch("");setStatusFilter("all");window.scrollTo({top:0,behavior:"smooth"});};
 
-  const premHist = useMemo(()=>genPremiumHistory(selETF),[selETF]);
+  const [premHist, setPremHist] = useState([]);
+  const [premHistLoading, setPremHistLoading] = useState(false);
+  useEffect(()=>{
+    setPremHistLoading(true);
+    setPremHist([]);
+    apiFetch(`/premium_history/${selETF}`).then(d=>{
+      if(d?.data?.length) setPremHist(d.data);
+      setPremHistLoading(false);
+    });
+  },[selETF]);
 
   const filterData = data => {
     let filtered = data;
@@ -1919,7 +1921,7 @@ export default function App() {
               <Reveal delay={0.05}>
                 <Card style={{padding:"24px 26px"}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
-                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>2024年4月 — 2025年3月（美元口径）</div>
+                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>2025年4月 — 2026年3月（美元口径）</div>
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={MONTHLY_12M} barGap={3} barCategoryGap="25%">
                       <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
@@ -1940,13 +1942,22 @@ export default function App() {
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                     <div>
                       <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF溢价走势</div>
-                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>近30天</div>
+                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>近30交易日 · 真实市价/净值计算</div>
                     </div>
                     <select value={selETF} onChange={e=>setSelETF(e.target.value)}
                       style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 10px",fontSize:12,outline:"none",cursor:"pointer"}}>
                       {etfs.map(e=><option key={e.code} value={e.code}>{e.code} {e.name}</option>)}
                     </select>
                   </div>
+                  {premHistLoading?(
+                    <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
+                      正在加载真实溢价率数据…
+                    </div>
+                  ):premHist.length===0?(
+                    <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
+                      暂无历史数据
+                    </div>
+                  ):(
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={premHist} margin={{top:16,right:0,left:0,bottom:0}}>
                       <defs>
@@ -1963,6 +1974,7 @@ export default function App() {
                       <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad)" strokeWidth={2} dot={false}/>
                     </AreaChart>
                   </ResponsiveContainer>
+                  )}
                 </Card>
               </Reveal>
             </div>
@@ -2091,14 +2103,23 @@ export default function App() {
             <Card style={{marginTop:24,padding:"24px 26px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>溢价率历史走势（近30天）</div>
-                  <div style={{fontSize:12,color:C.textDim,marginTop:2}}>橙色虚线为 1.5% 警戒线</div>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>溢价率历史走势（近30交易日）</div>
+                  <div style={{fontSize:12,color:C.textDim,marginTop:2}}>真实市价/净值计算 · 来源：新浪财经 + 东方财富</div>
                 </div>
                 <select value={selETF} onChange={e=>setSelETF(e.target.value)}
                   style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 12px",fontSize:12,outline:"none"}}>
                   {etfs.map(e=><option key={e.code} value={e.code}>{e.code} {e.name}</option>)}
                 </select>
               </div>
+              {premHistLoading?(
+                <div style={{height:280,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
+                  正在加载真实溢价率数据…
+                </div>
+              ):premHist.length===0?(
+                <div style={{height:280,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
+                  暂无历史数据
+                </div>
+              ):(
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={premHist} margin={{top:20,right:0,left:0,bottom:0}}>
                   <defs>
@@ -2116,6 +2137,7 @@ export default function App() {
                   <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad2)" strokeWidth={2} dot={{r:2,fill:C.orange,strokeWidth:0}}/>
                 </AreaChart>
               </ResponsiveContainer>
+              )}
             </Card>
             <TipBox color={C.orange} text="溢价 < 1%：正常，可正常买入。溢价 1~2%：注意，考虑申购场外联接替代。溢价 2~3%：偏高，建议等待收窄。溢价 > 3%：极高，强烈建议避开或改买场外联接基金。"/>
           </Reveal>
