@@ -817,7 +817,7 @@ def _fetch_live_one(code: str) -> tuple:
 
 _SINA_KL_HEADERS = {
     "User-Agent": HEADERS["User-Agent"],
-    "Referer":    "http://finance.sina.com.cn/",
+    "Referer":    "https://finance.sina.com.cn/",
 }
 
 def fetch_premium_history(code: str, days: int = 35) -> list:
@@ -852,7 +852,7 @@ def fetch_premium_history(code: str, days: int = 35) -> list:
     price_map: Dict[str, float] = {}
     try:
         resp = _get(
-            "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
+            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
             params={"symbol": f"{prefix}{code}", "scale": 240, "ma": "no", "datalen": days + 5},
             headers=_SINA_KL_HEADERS,
             timeout=(3, 6),
