@@ -46,7 +46,7 @@ def _get_redis() -> Optional[Redis]:
     return _redis
 
 CACHE_TTL = {
-    "funds":           4  * 3600,  # cron 每日三次更新，4h TTL 兜底（过期自动重拉）
+    "funds":           14 * 3600,  # cron 每日 09:30 更新，14h TTL 覆盖到次日 cron
     "etfs":            5  * 60,    # ETF 实时行情，5min 有效
     "fx_history":      24 * 3600,  # 汇率历史，24h 有效
     "news":            30 * 60,    # 市场新闻，30min 缓存
