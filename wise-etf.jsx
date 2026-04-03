@@ -14,69 +14,9 @@ async function apiFetch(path) {
   return null;
 }
 
-// ─── Fallback Static Data (实测 2026-04-04) ──────────────────────────────────
-const FALLBACK = {
-  nasdaq_passive: [
-    { code: "019524", name: "华泰柏瑞纳斯达克100ETF联接(QDII)A", fee_rate: 0.65, scale: 6.8, ytd_return: 16.66, track_error: 1.65, daily_limit: "100元", buy_status: "open" },
-    { code: "019547", name: "招商纳斯达克100ETF联接(QDII)A", fee_rate: 0.65, scale: 15.8, ytd_return: 16.22, track_error: 1.72, daily_limit: "100元", buy_status: "open" },
-    { code: "539001", name: "建信纳斯达克100指数QDIIA", fee_rate: 1.00, scale: 13.2, ytd_return: 16.21, track_error: 2.17, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "018966", name: "汇添富纳斯达克100ETF联接(QDII)A", fee_rate: 0.65, scale: 11.3, ytd_return: 15.49, track_error: 2.08, daily_limit: "50000元", buy_status: "open" },
-    { code: "016452", name: "南方纳斯达克100指数(QDII)A", fee_rate: 0.65, scale: 33.3, ytd_return: 17.26, track_error: 1.64, daily_limit: "50元", buy_status: "open" },
-    { code: "000834", name: "大成纳斯达克100指数(QDII)A", fee_rate: 1.00, scale: 38.8, ytd_return: 16.76, track_error: 1.51, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "019172", name: "摩根纳斯达克100指数(QDII)A", fee_rate: 0.60, scale: 26.1, ytd_return: 17.66, track_error: 2.15, daily_limit: "10元", buy_status: "open" },
-    { code: "270042", name: "广发纳斯达克100ETF联接(QDII)", fee_rate: 1.00, scale: 108.4, ytd_return: 17.04, track_error: 1.10, daily_limit: "10元", buy_status: "open" },
-    { code: "019441", name: "万家纳斯达克100指数发起式(QDII)", fee_rate: 0.65, scale: 5.0, ytd_return: 16.86, track_error: 1.75, daily_limit: "10元", buy_status: "open" },
-    { code: "161130", name: "易方达纳斯达克100ETF联接(QDII-LOF)A", fee_rate: 0.60, scale: 16.1, ytd_return: 16.58, track_error: 1.55, daily_limit: "10元", buy_status: "open" },
-    { code: "040046", name: "华安纳斯达克100指数(QDII)", fee_rate: 0.80, scale: 55.2, ytd_return: 15.37, track_error: 2.06, daily_limit: "10元", buy_status: "open" },
-    { code: "160213", name: "国泰纳斯达克100指数(QDII)", fee_rate: 1.00, scale: 18.6, ytd_return: 17.58, track_error: 1.03, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "016055", name: "博时纳斯达克100ETF联接(QDII)A", fee_rate: 0.65, scale: 15.6, ytd_return: 17.32, track_error: 1.52, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "018043", name: "天弘纳斯达克100指数(QDII)A", fee_rate: 0.60, scale: 26.2, ytd_return: 17.49, track_error: 1.55, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "019736", name: "宝盈纳斯达克100指数(QDII)A", fee_rate: 0.65, scale: 6.8, ytd_return: 17.19, track_error: 1.55, daily_limit: "2000元", buy_status: "open" },
-    { code: "016532", name: "嘉实纳斯达克100联接(QDII)A", fee_rate: 0.60, scale: 21.1, ytd_return: 16.4, track_error: 1.60, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "015299", name: "华夏纳斯达克100ETF联接(QDII)A", fee_rate: 0.80, scale: 3.8, ytd_return: 15.74, track_error: 2.69, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "017091", name: "景顺长城纳斯达克科技市值加权ETF联接A", fee_rate: 1.00, scale: 25.8, ytd_return: 24.22, track_error: 3.11, daily_limit: "100元", buy_status: "open" },
-  ],
-  sp500_passive: [
-    { code: "017641", name: "摩根标普500指数(QDII)A", fee_rate: 0.65, scale: 31.6, ytd_return: 11.75, track_error: 2.57, daily_limit: "100元", buy_status: "open" },
-    { code: "161125", name: "易方达标普500指数(QDII-LOF)A", fee_rate: 1.00, scale: 14.7, ytd_return: 11.74, track_error: 2.39, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "017028", name: "国泰标普500ETF联接(QDII)A", fee_rate: 0.75, scale: 1.6, ytd_return: 11.71, track_error: 1.87, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "050025", name: "博时标普500ETF联接(QDII)A", fee_rate: 0.80, scale: 67.6, ytd_return: 12.14, track_error: 1.31, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "007721", name: "天弘标普500(QDII-FOF)A", fee_rate: 0.80, scale: 26.5, ytd_return: 11.16, track_error: null, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "018064", name: "华夏标普500ETF联接(QDII)A", fee_rate: 0.75, scale: 4.1, ytd_return: 10.38, track_error: 1.10, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "096001", name: "大成标普500等权重指数(QDII)A", fee_rate: 1.20, scale: 6.1, ytd_return: 7.17, track_error: 1.69, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "161128", name: "易方达标普信息科技指数(QDII-FOF)A", fee_rate: 1.00, scale: 36.8, ytd_return: 22.13, track_error: 10.85, daily_limit: "暂停申购", buy_status: "suspended" },
-  ],
-  us_active: [
-    { code: "100055", name: "富国全球科技互联网股票(QDII)A", fee_rate: 1.40, scale: 10.2, ytd_return: 37.81, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "016701", name: "银华海外数字经济量化选股混合(QDII)A", fee_rate: 1.40, scale: 11.2, ytd_return: 27.21, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "005698", name: "华夏全球科技先锋混合(QDII)", fee_rate: 1.40, scale: 26.3, ytd_return: 52.49, daily_limit: "暂停申购", buy_status: "suspended" },
-    { code: "017144", name: "华宝海外新能源汽车股票(QDII)A", fee_rate: 1.40, scale: 2.6, ytd_return: 24.08, daily_limit: "10000元", buy_status: "open" },
-    { code: "270023", name: "广发全球精选股票(QDII)A", fee_rate: 1.40, scale: 104.5, ytd_return: 32.39, daily_limit: "5000元", buy_status: "open" },
-    { code: "008253", name: "华宝致远混合(QDII)A", fee_rate: 1.40, scale: 1.7, ytd_return: 47.82, daily_limit: "3000元", buy_status: "open" },
-    { code: "017436", name: "华宝纳斯达克精选股票(QDII)A", fee_rate: 1.40, scale: 46.2, ytd_return: 26.08, daily_limit: "3000元", buy_status: "open" },
-    { code: "501312", name: "华宝海外科技股票(QDII-FOF-LOF)A", fee_rate: 1.20, scale: 8.1, ytd_return: 31.04, daily_limit: "2000元", buy_status: "open" },
-    { code: "501226", name: "长城全球新能源汽车股票(QDII-LOF)A", fee_rate: 1.40, scale: 4.7, ytd_return: 48.21, daily_limit: "不限额", buy_status: "open" },
-    { code: "006555", name: "浦银安盛全球智能科技股票(QDII)A", fee_rate: 1.40, scale: 8.7, ytd_return: 43.81, daily_limit: "3000元", buy_status: "open" },
-    { code: "017730", name: "嘉实全球产业升级股票(QDII)A", fee_rate: 1.40, scale: 7.2, ytd_return: 75.36, daily_limit: "100元", buy_status: "open" },
-    { code: "006373", name: "国富全球科技互联混合(QDII)人民币A", fee_rate: 1.40, scale: 24.3, ytd_return: 53.48, daily_limit: "100元", buy_status: "open" },
-    { code: "000043", name: "嘉实美国成长股票(QDII)", fee_rate: 1.40, scale: 50.1, ytd_return: 20.01, daily_limit: "100元", buy_status: "open" },
-    { code: "012920", name: "易方达全球成长精选混合(QDII)A", fee_rate: 1.40, scale: 28.3, ytd_return: 107.95, daily_limit: "50元", buy_status: "open" },
-    { code: "539002", name: "建信新兴市场优选混合(QDII)A", fee_rate: 1.40, scale: 4.6, ytd_return: 92.11, daily_limit: "暂停申购", buy_status: "suspended" },
-  ],
-  etfs: [
-    { code: "513100", name: "纳斯达克ETF", tracking_index: "纳斯达克100", scale: 352.8, ytd_return: 21.45, premium: 2.35, volume: 48.7 },
-    { code: "159941", name: "纳指ETF", tracking_index: "纳斯达克100", scale: 198.5, ytd_return: 21.12, premium: 1.87, volume: 35.2 },
-    { code: "159632", name: "纳斯达克科技ETF", tracking_index: "纳斯达克科技市值加权", scale: 85.3, ytd_return: 24.56, premium: 3.12, volume: 22.1 },
-    { code: "513300", name: "纳指100ETF", tracking_index: "纳斯达克100", scale: 45.6, ytd_return: 20.89, premium: 1.54, volume: 12.8 },
-    { code: "513500", name: "标普500ETF", tracking_index: "标普500", scale: 285.3, ytd_return: 15.78, premium: 0.85, volume: 28.9 },
-    { code: "159612", name: "标普ETF", tracking_index: "标普500", scale: 120.7, ytd_return: 15.42, premium: 1.12, volume: 18.4 },
-    { code: "513650", name: "标普消费ETF", tracking_index: "标普500消费", scale: 32.4, ytd_return: 12.34, premium: 0.67, volume: 5.6 },
-    { code: "159509", name: "纳斯达克100ETF", tracking_index: "纳斯达克100", scale: 68.9, ytd_return: 21.33, premium: 2.05, volume: 15.3 },
-  ],
-};
 
-const generatePremiumHistory = (code, days = 30) => {
-  const base = FALLBACK.etfs.find(e => e.code === code)?.premium || 1;
+const generatePremiumHistory = (code, days = 30, etfList = []) => {
+  const base = etfList.find(e => e.code === code)?.premium || 1;
   return Array.from({ length: days }, (_, i) => {
     const date = new Date(); date.setDate(date.getDate() - (days - i));
     return { date: `${date.getMonth() + 1}/${date.getDate()}`, premium: +(base + (Math.random() - 0.4) * 3).toFixed(2) };
@@ -181,37 +121,43 @@ export default function WiseETFDashboard() {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("desc");
   const [selectedETF, setSelectedETF] = useState("513100");
-  const [dataSource, setDataSource] = useState("static"); // "api" or "static"
   const [isUpdating, setIsUpdating] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
-  // Data state
-  const [nasdaqData, setNasdaqData] = useState(FALLBACK.nasdaq_passive);
-  const [sp500Data, setSp500Data] = useState(FALLBACK.sp500_passive);
-  const [activeData, setActiveData] = useState(FALLBACK.us_active);
-  const [etfData, setEtfData] = useState(FALLBACK.etfs);
-  const [lastUpdate, setLastUpdate] = useState("2026-03-28 16:00 (静态数据)");
+  // Data state — 全部从 API 获取，无本地静态兜底
+  const [nasdaqData, setNasdaqData] = useState([]);
+  const [sp500Data, setSp500Data] = useState([]);
+  const [activeData, setActiveData] = useState([]);
+  const [etfData, setEtfData] = useState([]);
+  const [lastUpdate, setLastUpdate] = useState("");
 
-  // Try fetching from API on mount
   useEffect(() => {
-    async function tryAPI() {
-      const overview = await apiFetch("/overview");
-      if (overview) {
-        setDataSource("api");
-        // Fetch all categories
-        const [nasdaq, sp500, active, etfs] = await Promise.all([
+    async function loadAll() {
+      try {
+        const [overview, nasdaq, sp500, active, etfs] = await Promise.all([
+          apiFetch("/overview"),
           apiFetch("/funds/nasdaq_passive"),
           apiFetch("/funds/sp500_passive"),
           apiFetch("/funds/us_active"),
           apiFetch("/etfs"),
         ]);
+        if (!nasdaq?.data?.length && !sp500?.data?.length) {
+          setLoadError(true);
+          return;
+        }
         if (nasdaq?.data?.length) setNasdaqData(nasdaq.data);
         if (sp500?.data?.length) setSp500Data(sp500.data);
         if (active?.data?.length) setActiveData(active.data);
         if (etfs?.data?.length) setEtfData(etfs.data);
-        setLastUpdate(overview.last_update || "API已连接");
+        setLastUpdate(overview?.last_update || new Date().toLocaleString("zh-CN"));
+      } catch {
+        setLoadError(true);
+      } finally {
+        setLoading(false);
       }
     }
-    tryAPI();
+    loadAll();
   }, []);
 
   const handleSort = (key) => {
@@ -235,7 +181,7 @@ export default function WiseETFDashboard() {
     setIsUpdating(false);
   };
 
-  const premiumHistory = useMemo(() => generatePremiumHistory(selectedETF), [selectedETF]);
+  const premiumHistory = useMemo(() => generatePremiumHistory(selectedETF, 30, etfData), [selectedETF, etfData]);
   const returnComparison = useMemo(() => generateReturnComparison(), []);
 
   // Computed stats
@@ -276,6 +222,22 @@ export default function WiseETFDashboard() {
     { key: "volume", label: "日均成交(亿)", align: "right" },
   ];
 
+  if (loading) return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, fontFamily: "'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif" }}>
+      <div style={{ width: 40, height: 40, borderRadius: "50%", border: `3px solid ${C.accent}30`, borderTopColor: C.accent, animation: "spin 0.8s linear infinite" }} />
+      <span style={{ color: C.textMuted, fontSize: 14 }}>正在加载基金数据...</span>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+
+  if (loadError) return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, fontFamily: "'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif" }}>
+      <span style={{ fontSize: 32 }}>⚠</span>
+      <span style={{ color: C.textMuted, fontSize: 14 }}>数据加载失败，请刷新页面重试</span>
+      <button onClick={() => window.location.reload()} style={{ marginTop: 8, padding: "8px 20px", borderRadius: 8, background: C.accent + "20", color: C.accent, border: `1px solid ${C.accent}30`, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>刷新</button>
+    </div>
+  );
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif" }}>
       {/* Header */}
@@ -289,13 +251,13 @@ export default function WiseETFDashboard() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, background: dataSource === "api" ? C.greenBg : C.orangeBg, border: `1px solid ${dataSource === "api" ? C.green : C.orange}30` }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: dataSource === "api" ? C.green : C.orange, animation: "pulse 2s infinite" }} />
-              <span style={{ fontSize: 11, color: dataSource === "api" ? C.green : C.orange, fontWeight: 600 }}>
-                {dataSource === "api" ? "API已连接" : "静态数据"}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, background: loading ? C.orangeBg : loadError ? C.redBg : C.greenBg, border: `1px solid ${loading ? C.orange : loadError ? C.red : C.green}30` }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: loading ? C.orange : loadError ? C.red : C.green, animation: loading ? "pulse 2s infinite" : "none" }} />
+              <span style={{ fontSize: 11, color: loading ? C.orange : loadError ? C.red : C.green, fontWeight: 600 }}>
+                {loading ? "加载中..." : loadError ? "加载失败" : "数据已更新"}
               </span>
             </div>
-            {dataSource === "api" && (
+            {!loading && !loadError && (
               <button onClick={handleManualUpdate} disabled={isUpdating} style={{ background: C.accent + "20", color: C.accent, border: `1px solid ${C.accent}30`, borderRadius: 8, padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: isUpdating ? "wait" : "pointer" }}>
                 {isUpdating ? "更新中..." : "手动更新"}
               </button>
