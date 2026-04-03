@@ -130,7 +130,7 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"161125","name":"易方达标普500指数(QDII-LOF)A","fee_rate":1.00,"scale":14.7,"ytd_return":11.74,"track_error":2.39,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"017028","name":"国泰标普500ETF联接(QDII)A","fee_rate":0.75,"scale":1.6,"ytd_return":11.71,"track_error":1.87,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"050025","name":"博时标普500ETF联接(QDII)A","fee_rate":0.80,"scale":67.6,"ytd_return":12.14,"track_error":1.31,"daily_limit":"暂停申购","buy_status":"suspended"},
-        {"code":"007721","name":"天弘标普500(QDII-FOF)A","fee_rate":0.80,"scale":26.5,"ytd_return":11.16,"track_error":None,"daily_limit":"暂停申购","buy_status":"suspended"},
+        {"code":"007721","name":"天弘标普500(QDII-FOF)A","fee_rate":0.80,"scale":26.5,"ytd_return":11.16,"track_error":None,"daily_limit":"1000元","buy_status":"open"},
         {"code":"018064","name":"华夏标普500ETF联接(QDII)A","fee_rate":0.75,"scale":4.1,"ytd_return":10.38,"track_error":1.10,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"096001","name":"大成标普500等权重指数(QDII)A","fee_rate":1.20,"scale":6.1,"ytd_return":7.17,"track_error":1.69,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"161128","name":"易方达标普信息科技指数(QDII-FOF)A","fee_rate":1.00,"scale":36.8,"ytd_return":22.13,"track_error":10.85,"daily_limit":"暂停申购","buy_status":"suspended"},
@@ -296,16 +296,18 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
             d = r.json().get("Datas", {})
             if d:
                 sgzt = d.get("SGZT", "")
+                maxsg = d.get("MAXSG", "")
                 if sgzt:
-                    result["buy_status"] = "suspended" if "暂停" in sgzt else "open"
-                    maxsg = d.get("MAXSG", "")
-                    if "暂停" in sgzt:
+                    # 有 MAXSG 正值时，即使 SGZT 含"暂停"也是限额开放（非完全暂停）
+                    has_limit = maxsg and maxsg not in ("", "--", "0", None)
+                    truly_suspended = "暂停" in sgzt and not has_limit
+                    result["buy_status"] = "suspended" if truly_suspended else "open"
+                    if truly_suspended:
                         result["daily_limit"] = "暂停申购"
-                    elif "开放" in sgzt or not maxsg or maxsg in ("", "--", "0", None):
+                    elif not has_limit or "开放" in sgzt:
                         result["daily_limit"] = "不限额"
                     else:
                         try:
-                            # 超过1亿视为不限额（接口有时返回天文数字）
                             result["daily_limit"] = "不限额" if int(maxsg) >= 100_000_000 else f"{maxsg}元"
                         except (ValueError, TypeError):
                             result["daily_limit"] = f"{maxsg}元"
@@ -863,11 +865,13 @@ def _fetch_live_one(code: str) -> tuple:
                         rolling_1y = float(syl1n)
                     # 申购状态 & 申购上限（每日可能变化）
                     sgzt = data.get("SGZT", "")
-                    buy_status = "suspended" if "暂停" in sgzt else "open"
                     maxsg = data.get("MAXSG", "")
-                    if "暂停" in sgzt:
+                    has_limit = maxsg and maxsg not in ("", "--", "0", None)
+                    truly_suspended = "暂停" in sgzt and not has_limit
+                    buy_status = "suspended" if truly_suspended else "open"
+                    if truly_suspended:
                         daily_limit = "暂停申购"
-                    elif maxsg and maxsg not in ("", "--", "0", None):
+                    elif has_limit:
                         daily_limit = f"{maxsg}元"
                     else:
                         daily_limit = "不限额"
