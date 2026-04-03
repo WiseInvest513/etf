@@ -393,9 +393,12 @@ def _build_funds(category: str) -> tuple:
     codes = [f["code"] for f in static]
     live_map: Dict[str, dict] = {}
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    ex = ThreadPoolExecutor(max_workers=10)
+    try:
         fs = {ex.submit(fetch_one_fund, code, category): code for code in codes}
-        done, _ = wait(fs, timeout=18)      # 每只基金 3 个串行接口，最多等 18 秒
+        done, not_done = wait(fs, timeout=18)   # 每只基金 3 个串行接口，最多等 18 秒
+        for fut in not_done:
+            fut.cancel()
         for fut in done:
             try:
                 item = fut.result()
@@ -403,6 +406,8 @@ def _build_funds(category: str) -> tuple:
                     live_map[item["code"]] = item
             except Exception:
                 pass
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)  # 不阻塞等待超时线程
 
     success_rate = len(live_map) / len(codes)
     logger.info(f"[{category}] {len(live_map)}/{len(codes)} live ({success_rate:.0%})")
@@ -431,13 +436,16 @@ def _build_etfs() -> tuple:
     sina_map: Dict[str, dict] = {}
     nav_map:  Dict[str, float] = {}
 
-    with ThreadPoolExecutor(max_workers=12) as ex:
+    ex = ThreadPoolExecutor(max_workers=12)
+    try:
         sina_fut = ex.submit(fetch_etfs_sina_batch, codes)
         nav_futs: Dict = {ex.submit(fetch_fund_realtime, c): c for c in codes}
 
         all_futs = [sina_fut] + list(nav_futs.keys())
-        done, _  = wait(all_futs, timeout=8)
+        done, not_done = wait(all_futs, timeout=8)
 
+        for fut in not_done:
+            fut.cancel()
         for fut in done:
             if fut is sina_fut:
                 try:
@@ -453,6 +461,8 @@ def _build_etfs() -> tuple:
                         nav_map[code] = nav
                 except Exception:
                     pass
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
     live_count = 0
     results    = []
