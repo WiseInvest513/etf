@@ -46,12 +46,12 @@ def _get_redis() -> Optional[Redis]:
     return _redis
 
 CACHE_TTL = {
-    "funds":           12 * 3600,  # cron 每日更新，12h 有效
+    "funds":           4  * 3600,  # cron 每日三次更新，4h TTL 兜底（过期自动重拉）
     "etfs":            5  * 60,    # ETF 实时行情，5min 有效
     "fx_history":      24 * 3600,  # 汇率历史，24h 有效
     "news":            30 * 60,    # 市场新闻，30min 缓存
     "premium_history": 12 * 3600,  # 溢价率历史，cron 每日更新
-    "live_data":       12 * 3600,  # 昨日涨跌/申购状态，cron 每日更新
+    "live_data":       4  * 3600,
 }
 
 def _cache_get(key: str) -> Optional[any]:
