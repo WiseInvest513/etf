@@ -780,19 +780,37 @@ def cron_refresh():
             except Exception as e:
                 results[f"error_{id(fut)}"] = str(e)
 
-    # ETF 溢价率历史（顺序跑，数量少）
-    prem_results = {}
-    for code in [e["code"] for e in STATIC_ETFS]:
+    return {"ts": datetime.now().isoformat(), "results": results}
+
+
+@app.get("/api/cron/prem")
+def cron_prem():
+    """独立 cron：只刷溢价率历史（数据量大，单独跑避免主 cron 超时）"""
+    results = {}
+    for etf in STATIC_ETFS:
+        code = etf["code"]
         try:
             hist = fetch_premium_history(code)
             if hist:
                 _cache_set(f"prem_hist_{code}", hist, CACHE_TTL["premium_history"])
-            prem_results[code] = len(hist)
+            results[code] = len(hist)
         except Exception as e:
-            prem_results[code] = str(e)
-    results["premium_history"] = prem_results
-
+            results[code] = str(e)
     return {"ts": datetime.now().isoformat(), "results": results}
+
+
+@app.get("/api/cron/clear")
+def cron_clear():
+    """清空 Redis 基金缓存，下次用户请求时自动重拉（用于强制刷新）"""
+    r = _get_redis()
+    if not r:
+        return {"ok": False, "msg": "Redis unavailable"}
+    keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs"]
+    try:
+        r.delete(*keys)
+        return {"ok": True, "cleared": keys}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
 
 
 # ─── 实时行情：昨日涨跌 + 近1年滚动涨幅 ──────────────────────────────────────
