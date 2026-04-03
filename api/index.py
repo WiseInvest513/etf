@@ -395,7 +395,7 @@ def _build_funds(category: str) -> tuple:
 
     with ThreadPoolExecutor(max_workers=10) as ex:
         fs = {ex.submit(fetch_one_fund, code, category): code for code in codes}
-        done, _ = wait(fs, timeout=8)       # 整批最多等 8 秒
+        done, _ = wait(fs, timeout=18)      # 每只基金 3 个串行接口，最多等 18 秒
         for fut in done:
             try:
                 item = fut.result()
