@@ -484,8 +484,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 def _cache_header(response: Response, seconds: int):
-    response.headers["Cache-Control"] = \
-        f"s-maxage={seconds}, stale-while-revalidate={seconds * 24}"
+    # 不做 CDN 边缘缓存，避免 Vercel Edge 提供过期数据
+    # 缓存由函数内部 Redis 层控制，每次请求必须打到 serverless 函数
+    response.headers["Cache-Control"] = "no-store"
 
 
 @app.get("/api/funds/{category}")
