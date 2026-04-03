@@ -256,8 +256,8 @@ def fetch_fund_performance(code: str) -> list:
     return []
 
 
-# 只包含会变动的字段（静态字段 fee_rate/scale/track_error/daily_limit 由调用方保留）
-_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "ytd_return"}
+# 只包含会变动的字段（fee_rate/scale/track_error 不变；daily_limit/buy_status 每日可能变化）
+_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "ytd_return", "daily_limit"}
 
 
 def fetch_one_fund(code: str, category: str) -> Optional[dict]:
@@ -284,6 +284,28 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
     # ytd_return = 0 说明接口未返回，不覆盖静态保底值
     if ytd_return != 0:
         result["ytd_return"] = ytd_return
+
+    # 实时申购状态 & 每日限额（SGZT/MAXSG）
+    try:
+        r = _get(
+            "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation",
+            params={"FCODE": code, "deviceid": "wise-etf",
+                    "plat": "Wap", "product": "EFund", "version": "6.5.0"},
+            headers=_MOBILE_HEADERS, timeout=(3, 8))
+        if r and r.ok:
+            d = r.json().get("Datas", {})
+            if d:
+                sgzt = d.get("SGZT", "")
+                if sgzt:
+                    result["buy_status"] = "suspended" if "暂停" in sgzt else "open"
+                    maxsg = d.get("MAXSG", "")
+                    if "暂停" in sgzt:
+                        result["daily_limit"] = "暂停申购"
+                    elif maxsg and maxsg not in ("", "--", "0", None):
+                        result["daily_limit"] = f"{maxsg}元"
+    except Exception:
+        pass
+
     return result
 
 
@@ -717,6 +739,16 @@ def get_news(response: Response):
 def cron_refresh():
     """Vercel Cron Job（UTC 01:30 / 北京 09:30）：拉取全量最新数据写入 Redis"""
     results: dict = {}
+
+    # 先删掉旧缓存，确保新数据立即生效（不被旧 TTL 阻挡）
+    r = _get_redis()
+    if r:
+        try:
+            old_keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data"]
+            r.delete(*old_keys)
+            logger.info(f"[cron] cleared {len(old_keys)} stale cache keys")
+        except Exception as e:
+            logger.warning(f"[cron] cache clear failed: {e}")
 
     for category in STATIC_FUNDS:
         try:
