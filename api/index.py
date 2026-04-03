@@ -740,41 +740,40 @@ def cron_refresh():
     """Vercel Cron Job（UTC 01:30 / 北京 09:30）：拉取全量最新数据写入 Redis"""
     results: dict = {}
 
-    # 先删掉旧缓存，确保新数据立即生效（不被旧 TTL 阻挡）
+    # 先删掉旧缓存，确保新数据立即生效
     r = _get_redis()
     if r:
         try:
-            old_keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data"]
+            old_keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs"]
             r.delete(*old_keys)
             logger.info(f"[cron] cleared {len(old_keys)} stale cache keys")
         except Exception as e:
             logger.warning(f"[cron] cache clear failed: {e}")
 
-    for category in STATIC_FUNDS:
-        try:
-            data, source = _build_funds(category)
-            if source != "none":
-                _cache_set(f"funds_{category}", data, CACHE_TTL["funds"])
-            results[category] = {"count": len(data), "source": source}
-        except Exception as e:
-            results[category] = {"error": str(e)}
+    # 三个基金分类 + ETF 并行构建
+    def _refresh_category(category: str):
+        data, source = _build_funds(category)
+        if source != "none":
+            _cache_set(f"funds_{category}", data, CACHE_TTL["funds"])
+        return category, {"count": len(data), "source": source}
 
-    try:
+    def _refresh_etfs():
         data, source = _build_etfs()
         if source != "none":
             _cache_set("etfs", data, CACHE_TTL["etfs"])
-        results["etfs"] = {"count": len(data), "source": source}
-    except Exception as e:
-        results["etfs"] = {"error": str(e)}
+        return "etfs", {"count": len(data), "source": source}
 
-    try:
-        data = _build_live_data()
-        if data:
-            _cache_set("live_data", data, CACHE_TTL["live_data"])
-        results["live_data"] = {"count": len(data), "source": "live" if data else "empty"}
-    except Exception as e:
-        results["live_data"] = {"error": str(e)}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = [ex.submit(_refresh_category, cat) for cat in STATIC_FUNDS]
+        futs.append(ex.submit(_refresh_etfs))
+        for fut in futs:
+            try:
+                key, val = fut.result(timeout=25)
+                results[key] = val
+            except Exception as e:
+                results[f"error_{id(fut)}"] = str(e)
 
+    # ETF 溢价率历史（顺序跑，数量少）
     prem_results = {}
     for code in [e["code"] for e in STATIC_ETFS]:
         try:
