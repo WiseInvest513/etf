@@ -409,7 +409,7 @@ def _build_funds(category: str) -> tuple:
             except Exception:
                 pass
     finally:
-        ex.shutdown(wait=False, cancel_futures=True)  # 不阻塞等待超时线程
+        ex.shutdown(wait=False)  # 不阻塞等待超时线程
 
     success_rate = len(live_map) / len(codes)
     logger.info(f"[{category}] {len(live_map)}/{len(codes)} live ({success_rate:.0%})")
@@ -464,7 +464,7 @@ def _build_etfs() -> tuple:
                 except Exception:
                     pass
     finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+        ex.shutdown(wait=False)
 
     live_count = 0
     results    = []
@@ -792,7 +792,7 @@ def cron_refresh():
             except Exception as e:
                 results[f"error_{id(fut)}"] = str(e)
 
-    return {"ts": datetime.now().isoformat(), "results": results}
+    return {"ts": datetime.now().isoformat(), "v": "v5", "results": results}
 
 
 @app.get("/api/cron/prem")
