@@ -104,6 +104,7 @@ def kind_of(key: str) -> str:
 # 这些是不变字段：费率、规模、跟踪误差、每日限额
 # 动态字段（ytd_return/nav/buy_status）会被实时数据覆盖，此处为保底值
 
+# 静态基金数据 — 2026-04-09 更新
 STATIC_FUNDS: Dict[str, List[dict]] = {
     "nasdaq_passive": [
         {"code":"019524","name":"华泰柏瑞纳斯达克100ETF联接(QDII)A","fee_rate":0.65,"scale":6.8,"ytd_return":16.66,"track_error":1.65,"daily_limit":"100元","buy_status":"open",  "code_c":"019525"},
