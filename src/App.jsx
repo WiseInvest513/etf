@@ -11,34 +11,34 @@ async function apiFetch(path) {
 // ─── Static Data ──────────────────────────────────────────────────────────────
 const FALLBACK = {
   nasdaq_passive: [
-    { code:"019524",name:"华泰柏瑞纳斯达克100ETF联接(QDII)A",fee_rate:0.65,scale:6.8,ytd_return:16.66,track_error:1.65,daily_limit:"100元",buy_status:"open"},
-    { code:"019547",name:"招商纳斯达克100ETF联接(QDII)A",fee_rate:0.65,scale:15.8,ytd_return:16.22,track_error:1.72,daily_limit:"100元",buy_status:"open"},
-    { code:"539001",name:"建信纳斯达克100指数QDIIA",fee_rate:1.00,scale:13.2,ytd_return:16.21,track_error:2.17,daily_limit:"100元",buy_status:"open"},
-    { code:"018966",name:"汇添富纳斯达克100ETF联接(QDII)A",fee_rate:0.65,scale:11.3,ytd_return:15.49,track_error:2.08,daily_limit:"100元",buy_status:"open"},
-    { code:"016452",name:"南方纳斯达克100指数(QDII)A",fee_rate:0.65,scale:33.3,ytd_return:17.26,track_error:1.64,daily_limit:"50元",buy_status:"open"},
-    { code:"000834",name:"大成纳斯达克100指数(QDII)A",fee_rate:1.00,scale:38.8,ytd_return:16.76,track_error:1.51,daily_limit:"50元",buy_status:"open"},
-    { code:"019172",name:"摩根纳斯达克100指数(QDII)A",fee_rate:0.60,scale:26.1,ytd_return:17.66,track_error:2.15,daily_limit:"10元",buy_status:"open"},
-    { code:"270042",name:"广发纳斯达克100ETF联接(QDII)",fee_rate:1.00,scale:108.4,ytd_return:17.04,track_error:1.10,daily_limit:"10元",buy_status:"open"},
-    { code:"019441",name:"万家纳斯达克100指数发起式(QDII)",fee_rate:0.65,scale:5.0,ytd_return:16.86,track_error:1.75,daily_limit:"10元",buy_status:"open"},
-    { code:"161130",name:"易方达纳斯达克100ETF联接(QDII-LOF)A",fee_rate:0.60,scale:16.1,ytd_return:16.58,track_error:1.55,daily_limit:"10元",buy_status:"open"},
-    { code:"040046",name:"华安纳斯达克100指数(QDII)",fee_rate:0.80,scale:55.2,ytd_return:15.37,track_error:2.06,daily_limit:"10元",buy_status:"open"},
-    { code:"160213",name:"国泰纳斯达克100指数(QDII)",fee_rate:1.00,scale:18.6,ytd_return:17.58,track_error:1.03,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"016055",name:"博时纳斯达克100ETF联接(QDII)A",fee_rate:0.65,scale:15.6,ytd_return:17.32,track_error:1.52,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"018043",name:"天弘纳斯达克100指数(QDII)A",fee_rate:0.60,scale:26.2,ytd_return:17.49,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"019736",name:"宝盈纳斯达克100指数(QDII)A",fee_rate:0.65,scale:6.8,ytd_return:17.19,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"016532",name:"嘉实纳斯达克100联接(QDII)A",fee_rate:0.60,scale:21.1,ytd_return:16.4,track_error:1.60,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"015299",name:"华夏纳斯达克100ETF联接(QDII)A",fee_rate:0.80,scale:3.8,ytd_return:15.74,track_error:2.69,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"017091",name:"景顺长城纳斯达克科技市值加权ETF联接A",fee_rate:1.00,scale:25.8,ytd_return:24.22,track_error:3.11,daily_limit:"100元",buy_status:"open"},
+    { code:"019524",name:"华泰柏瑞纳斯达克100ETF联接(QDII)A",  fee_rate:0.65,scale:6.8,  ytd_return:16.66,track_error:1.65,daily_limit:"100元",  buy_status:"open",     code_c:"019525"},
+    { code:"019547",name:"招商纳斯达克100ETF联接(QDII)A",      fee_rate:0.65,scale:15.8, ytd_return:16.22,track_error:1.72,daily_limit:"100元",  buy_status:"open",     code_c:"019548"},
+    { code:"539001",name:"建信纳斯达克100指数QDIIA",            fee_rate:1.00,scale:13.2, ytd_return:16.21,track_error:2.17,daily_limit:"100元",  buy_status:"open",     code_c:"012752"},
+    { code:"018966",name:"汇添富纳斯达克100ETF联接(QDII)A",    fee_rate:0.65,scale:11.3, ytd_return:15.49,track_error:2.08,daily_limit:"100元",  buy_status:"open",     code_c:"018967"},
+    { code:"016452",name:"南方纳斯达克100指数(QDII)A",          fee_rate:0.65,scale:33.3, ytd_return:17.26,track_error:1.64,daily_limit:"50元",   buy_status:"open",     code_c:"016453"},
+    { code:"000834",name:"大成纳斯达克100指数(QDII)A",          fee_rate:1.00,scale:38.8, ytd_return:16.76,track_error:1.51,daily_limit:"50元",   buy_status:"open",     code_c:"008971"},
+    { code:"019172",name:"摩根纳斯达克100指数(QDII)A",          fee_rate:0.60,scale:26.1, ytd_return:17.66,track_error:2.15,daily_limit:"10元",   buy_status:"open",     code_c:"019173"},
+    { code:"270042",name:"广发纳斯达克100ETF联接(QDII)",        fee_rate:1.00,scale:108.4,ytd_return:17.04,track_error:1.10,daily_limit:"10元",   buy_status:"open",     code_c:"006479"},
+    { code:"019441",name:"万家纳斯达克100指数发起式(QDII)",     fee_rate:0.65,scale:5.0,  ytd_return:16.86,track_error:1.75,daily_limit:"10元",   buy_status:"open",     code_c:"019442"},
+    { code:"161130",name:"易方达纳斯达克100ETF联接(QDII-LOF)A",fee_rate:0.60,scale:16.1, ytd_return:16.58,track_error:1.55,daily_limit:"10元",   buy_status:"open",     code_c:"012870"},
+    { code:"040046",name:"华安纳斯达克100指数(QDII)",           fee_rate:0.80,scale:55.2, ytd_return:15.37,track_error:2.06,daily_limit:"10元",   buy_status:"open",     code_c:"014978"},
+    { code:"160213",name:"国泰纳斯达克100指数(QDII)",           fee_rate:1.00,scale:18.6, ytd_return:17.58,track_error:1.03,daily_limit:"暂停申购",buy_status:"suspended",code_c:null},
+    { code:"016055",name:"博时纳斯达克100ETF联接(QDII)A",       fee_rate:0.65,scale:15.6, ytd_return:17.32,track_error:1.52,daily_limit:"暂停申购",buy_status:"suspended",code_c:"016057"},
+    { code:"018043",name:"天弘纳斯达克100指数(QDII)A",          fee_rate:0.60,scale:26.2, ytd_return:17.49,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended",code_c:"018044"},
+    { code:"019736",name:"宝盈纳斯达克100指数(QDII)A",          fee_rate:0.65,scale:6.8,  ytd_return:17.19,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended",code_c:"019737"},
+    { code:"016532",name:"嘉实纳斯达克100联接(QDII)A",          fee_rate:0.60,scale:21.1, ytd_return:16.4, track_error:1.60,daily_limit:"暂停申购",buy_status:"suspended",code_c:"016533"},
+    { code:"015299",name:"华夏纳斯达克100ETF联接(QDII)A",       fee_rate:0.80,scale:3.8,  ytd_return:15.74,track_error:2.69,daily_limit:"暂停申购",buy_status:"suspended",code_c:"015300"},
+    { code:"017091",name:"景顺长城纳斯达克科技市值加权ETF联接A", fee_rate:1.00,scale:25.8, ytd_return:24.22,track_error:3.11,daily_limit:"100元",  buy_status:"open",     code_c:"017093"},
   ],
   sp500_passive: [
-    { code:"017641",name:"摩根标普500指数(QDII)A",fee_rate:0.65,scale:31.6,ytd_return:11.75,track_error:2.57,daily_limit:"50元",buy_status:"open"},
-    { code:"161125",name:"易方达标普500指数(QDII-LOF)A",fee_rate:1.00,scale:14.7,ytd_return:11.74,track_error:2.39,daily_limit:"10元",buy_status:"open"},
-    { code:"017028",name:"国泰标普500ETF联接(QDII)A",fee_rate:0.75,scale:1.6,ytd_return:11.71,track_error:1.87,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"050025",name:"博时标普500ETF联接(QDII)A",fee_rate:0.80,scale:67.6,ytd_return:12.14,track_error:1.31,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"007721",name:"天弘标普500(QDII-FOF)A",fee_rate:0.80,scale:26.5,ytd_return:11.16,track_error:null,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"018064",name:"华夏标普500ETF联接(QDII)A",fee_rate:0.75,scale:4.1,ytd_return:10.38,track_error:1.10,daily_limit:"暂停申购",buy_status:"suspended"},
-    { code:"096001",name:"大成标普500等权重指数(QDII)A",fee_rate:1.20,scale:6.1,ytd_return:7.17,track_error:1.69,daily_limit:"50元",buy_status:"open"},
-    { code:"161128",name:"易方达标普信息科技指数(QDII-FOF)A",fee_rate:1.00,scale:36.8,ytd_return:22.13,track_error:10.85,daily_limit:"10元",buy_status:"open"},
+    { code:"017641",name:"摩根标普500指数(QDII)A",           fee_rate:0.65,scale:31.6,ytd_return:11.75,track_error:2.57, daily_limit:"50元",   buy_status:"open",     code_c:"019305"},
+    { code:"161125",name:"易方达标普500指数(QDII-LOF)A",     fee_rate:1.00,scale:14.7,ytd_return:11.74,track_error:2.39, daily_limit:"10元",   buy_status:"open",     code_c:"012860"},
+    { code:"017028",name:"国泰标普500ETF联接(QDII)A",        fee_rate:0.75,scale:1.6, ytd_return:11.71,track_error:1.87, daily_limit:"暂停申购",buy_status:"suspended",code_c:"017030"},
+    { code:"050025",name:"博时标普500ETF联接(QDII)A",        fee_rate:0.80,scale:67.6,ytd_return:12.14,track_error:1.31, daily_limit:"暂停申购",buy_status:"suspended",code_c:"006075"},
+    { code:"007721",name:"天弘标普500(QDII-FOF)A",           fee_rate:0.80,scale:26.5,ytd_return:11.16,track_error:null, daily_limit:"暂停申购",buy_status:"suspended",code_c:"007722"},
+    { code:"018064",name:"华夏标普500ETF联接(QDII)A",        fee_rate:0.75,scale:4.1, ytd_return:10.38,track_error:1.10, daily_limit:"暂停申购",buy_status:"suspended",code_c:"018065"},
+    { code:"096001",name:"大成标普500等权重指数(QDII)A",     fee_rate:1.20,scale:6.1, ytd_return:7.17, track_error:1.69, daily_limit:"50元",   buy_status:"open",     code_c:"008401"},
+    { code:"161128",name:"易方达标普信息科技指数(QDII-FOF)A",fee_rate:1.00,scale:36.8,ytd_return:22.13,track_error:10.85,daily_limit:"10元",   buy_status:"open",     code_c:null},
   ],
   us_active: [
     { code:"100055",name:"富国全球科技互联网股票(QDII)A",fee_rate:1.40,scale:10.2,ytd_return:37.81,daily_limit:"不限额",buy_status:"open"},
@@ -57,18 +57,24 @@ const FALLBACK = {
     { code:"012920",name:"易方达全球成长精选混合(QDII)A",fee_rate:1.40,scale:28.3,ytd_return:107.95,daily_limit:"50元",buy_status:"open"},
     { code:"539002",name:"建信新兴市场优选混合(QDII)A",fee_rate:1.40,scale:4.6,ytd_return:92.11,daily_limit:"50元",buy_status:"open"},
   ],
-  // 场内ETF — 名称经 fundgz 实测验证（2026-03-27），premium 为实际市场水平
+  // 场内ETF — 名称经 fundgz 实测验证，premium 为实际市场水平
   etfs: [
-    { code:"513100",name:"国泰纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:167.9,ytd_return:16.99,premium:4.94,volume:3.6, change_pct:0.0,fee_rate:0.80,track_error:1.07},
-    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",      tracking_index:"纳斯达克100",         scale:41.6, ytd_return:16.60,premium:3.32,volume:1.5, change_pct:0.0,fee_rate:1.00,track_error:1.04},
-    { code:"159941",name:"广发纳斯达克100ETF",          tracking_index:"纳斯达克100",         scale:297.8,ytd_return:16.41,premium:4.35,volume:7.8, change_pct:0.0,fee_rate:1.00,track_error:1.03},
-    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:112.5,ytd_return:14.72,premium:3.73,volume:3.1, change_pct:0.0,fee_rate:0.80,track_error:2.53},
-    { code:"159659",name:"招商纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:79.3, ytd_return:17.42,premium:3.62,volume:1.3, change_pct:0.0,fee_rate:0.65,track_error:1.08},
-    { code:"159632",name:"华安纳斯达克100ETF(QDII)",    tracking_index:"纳斯达克100",         scale:97.8, ytd_return:16.28,premium:3.27,volume:1.9, change_pct:0.0,fee_rate:0.80,track_error:1.24},
-    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)",tracking_index:"纳斯达克科技市值加权",scale:123.3,ytd_return:27.55,premium:16.9,volume:5.3, change_pct:0.0,fee_rate:1.00,track_error:1.88},
-    { code:"513500",name:"博时标普500ETF",              tracking_index:"标普500",             scale:223.2,ytd_return:13.89,premium:4.54,volume:2.3, change_pct:0.0,fee_rate:0.80,track_error:1.07},
-    { code:"159612",name:"国泰标普500ETF(QDII)",        tracking_index:"标普500",             scale:7.9,  ytd_return:13.74,premium:4.63,volume:0.1, change_pct:0.0,fee_rate:0.75,track_error:1.01},
-    { code:"513650",name:"南方标普500ETF(QDII)",        tracking_index:"标普500",             scale:46.8, ytd_return:13.82,premium:3.06,volume:1.0, change_pct:0.0,fee_rate:0.75,track_error:1.05},
+    { code:"513100",name:"国泰纳斯达克100ETF",           tracking_index:"纳斯达克100",         scale:167.9,ytd_return:16.99,premium:4.94,volume:3.6, change_pct:0.0,fee_rate:0.80,track_error:1.07},
+    { code:"513110",name:"华泰柏瑞纳斯达克100ETF",       tracking_index:"纳斯达克100",         scale:41.6, ytd_return:16.60,premium:3.32,volume:1.5, change_pct:0.0,fee_rate:1.00,track_error:1.04},
+    { code:"159941",name:"广发纳斯达克100ETF",           tracking_index:"纳斯达克100",         scale:297.8,ytd_return:16.41,premium:4.35,volume:7.8, change_pct:0.0,fee_rate:1.00,track_error:1.03},
+    { code:"513300",name:"华夏纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:112.5,ytd_return:14.72,premium:3.73,volume:3.1, change_pct:0.0,fee_rate:0.80,track_error:2.53},
+    { code:"159659",name:"招商纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:79.3, ytd_return:17.42,premium:3.62,volume:1.3, change_pct:0.0,fee_rate:0.65,track_error:1.08},
+    { code:"159632",name:"华安纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:97.8, ytd_return:16.28,premium:3.27,volume:1.9, change_pct:0.0,fee_rate:0.80,track_error:1.24},
+    { code:"513870",name:"富国纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:20.2, ytd_return:17.41,premium:0.0, volume:0.0, change_pct:0.0,fee_rate:0.63,track_error:0.86},
+    { code:"159696",name:"易方达纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:39.7, ytd_return:17.37,premium:0.0, volume:0.0, change_pct:0.0,fee_rate:0.63,track_error:0.86},
+    { code:"159660",name:"汇添富纳斯达克100ETF(QDII)",   tracking_index:"纳斯达克100",         scale:37.7, ytd_return:17.24,premium:0.0, volume:0.0, change_pct:0.0,fee_rate:0.66,track_error:0.88},
+    { code:"159501",name:"嘉实纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:100.7,ytd_return:17.14,premium:0.0, volume:0.0, change_pct:0.0,fee_rate:0.61,track_error:0.86},
+    { code:"513390",name:"博时纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:35.6, ytd_return:17.12,premium:0.0, volume:0.0, change_pct:0.0,fee_rate:0.69,track_error:0.91},
+    { code:"159513",name:"大成纳斯达克100ETF(QDII)",     tracking_index:"纳斯达克100",         scale:59.7, ytd_return:16.50,premium:0.0, volume:0.0, change_pct:0.0,fee_rate:1.01,track_error:0.88},
+    { code:"159509",name:"景顺长城纳斯达克科技ETF(QDII)", tracking_index:"纳斯达克科技市值加权",scale:123.3,ytd_return:27.55,premium:16.9,volume:5.3, change_pct:0.0,fee_rate:1.00,track_error:1.88},
+    { code:"513500",name:"博时标普500ETF",               tracking_index:"标普500",             scale:223.2,ytd_return:13.89,premium:4.54,volume:2.3, change_pct:0.0,fee_rate:0.80,track_error:1.07},
+    { code:"159612",name:"国泰标普500ETF(QDII)",         tracking_index:"标普500",             scale:7.9,  ytd_return:13.74,premium:4.63,volume:0.1, change_pct:0.0,fee_rate:0.75,track_error:1.01},
+    { code:"513650",name:"南方标普500ETF(QDII)",         tracking_index:"标普500",             scale:46.8, ytd_return:13.82,premium:3.06,volume:1.0, change_pct:0.0,fee_rate:0.75,track_error:1.05},
   ],
 };
 
@@ -412,6 +418,50 @@ function TipBox({color,text}) {  const [h,hProps] = useHover();
   return (
     <div {...hProps} style={{marginTop:20,padding:"16px 20px",borderRadius:14,background:color+"0a",border:`1px solid ${color}1a`,borderLeft:`3px solid ${color}`,fontSize:13,color:C.textMuted,lineHeight:1.8,transition:"all 0.25s",boxShadow:h?`0 4px 20px ${color}12`:"none",transform:h?"translateX(3px)":"translateX(0)"}}>
       <strong style={{color}}>提示：</strong>{text}
+    </div>
+  );
+}
+
+// ─── A/C 类说明框 ─────────────────────────────────────────────────────────────
+function AcInfoBox() {
+  const [open,setOpen]=useState(false);
+  return (
+    <div style={{marginTop:12,borderRadius:12,border:`1px solid ${C.borderLight}`,overflow:"hidden",fontSize:13}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 16px",cursor:"pointer",background:C.cardBg,userSelect:"none"}}>
+        <span style={{color:C.textMuted,fontWeight:600}}>A类 vs C类 — 如何选择？</span>
+        <span style={{color:C.textDim,fontSize:11,transition:"transform 0.2s",display:"inline-block",transform:open?"rotate(180deg)":"rotate(0deg)"}}>▼</span>
+      </div>
+      {open&&(
+        <div style={{padding:"14px 20px",background:C.bg,lineHeight:2,color:C.textMuted}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.borderLight}`}}>
+                <th style={{textAlign:"left",padding:"4px 8px",color:C.textDim,fontWeight:600}}>对比项</th>
+                <th style={{textAlign:"center",padding:"4px 8px",color:C.accent,fontWeight:600}}>A 类</th>
+                <th style={{textAlign:"center",padding:"4px 8px",color:C.cyan,fontWeight:600}}>C 类</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["申购费","有（0.1%~1.5%，持有越长越低）","无"],
+                ["销售服务费","无","年化 0.2%~0.4%（每日计提）"],
+                ["赎回费","短期持有有赎回费","短期持有有赎回费"],
+                ["适合持有期","＞1 年（长期省费）","≤1 年（免申购费更灵活）"],
+                ["临界点","通常约 1~2 年后 A 类总费更低","不频繁赎回时可选 C 类"],
+              ].map(([k,a,c],i)=>(
+                <tr key={i} style={{borderBottom:`1px solid ${C.borderLight}22`,background:i%2===0?"transparent":C.cardBg+"66"}}>
+                  <td style={{padding:"5px 8px",color:C.textDim,fontWeight:500}}>{k}</td>
+                  <td style={{padding:"5px 8px",textAlign:"center",color:C.text}}>{a}</td>
+                  <td style={{padding:"5px 8px",textAlign:"center",color:C.text}}>{c}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{marginTop:10,fontSize:11,color:C.textDim}}>
+            同一基金 A/C 类底层持仓完全相同，仅收费结构不同。
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1695,6 +1745,8 @@ export default function App() {
     actionsCol(C.accent),
     {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.accent,fontWeight:700,fontSize:12}}>{v}</span>},
     {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12,color:C.text}}>{v}</span>},
+    {key:"code_c", label:"C类代码", sortable:false, tip:"同基金的C类份额：无申购费，有年化0.2%~0.4%销售服务费。持有≤1年选C类可省申购费，持有＞1年A类总费更低。",align:"center",
+     render:v=>v?<span style={{fontFamily:"monospace",fontSize:11,color:C.cyan,background:C.cyan+"18",padding:"2px 7px",borderRadius:4,fontWeight:700,letterSpacing:"0.5px"}}>{v}</span>:<span style={{color:C.textDim,fontSize:11}}>—</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），不含申购赎回费，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
     {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
@@ -2060,6 +2112,7 @@ export default function App() {
             </div>
             {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.accent} text="综合费率最低的有天弘(018043, 0.70%)和嘉实(016532, 0.70%)，但目前均暂停申购。可申购中费率较低的是摩根(019172, 0.72%)和易方达(161130, 0.72%)。广发(270042)规模最大(108亿)，跟踪误差最小(1.10%)。"/>
+            <AcInfoBox/>
           </Reveal>
         )}
 
@@ -2073,6 +2126,7 @@ export default function App() {
             </div>
             {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.cyan} text="博时(050025)规模最大(67.56亿)、跟踪误差最小(1.31%)，但暂停申购。可申购推荐摩根(017641, 0.77%)和易方达(161125)。注意161128跟踪标普信息科技指数，波动更大。"/>
+            <AcInfoBox/>
           </Reveal>
         )}
 
