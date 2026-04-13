@@ -481,14 +481,35 @@ def _build_etfs() -> tuple:
         sina  = sina_map.get(code, {})
         nav   = nav_map.get(code, 0.0)
         mp    = sina.get("market_price", 0.0)
-        premium = round((mp - nav) / nav * 100, 2) if nav > 0 and mp > 0 else 0.0
 
-        if mp > 0:
+        nav_ok = nav > 0
+        mp_ok  = mp > 0
+        if nav_ok and mp_ok:
+            premium: Optional[float] = round((mp - nav) / nav * 100, 2)
+        elif mp_ok:
+            # 有市价但 NAV 拉取失败 → 不保留过期溢价，显示 N/A
+            premium = None
+        else:
+            # 市场休市或双侧均失败 → 保留静态兜底值（不覆盖）
+            premium = 0.0  # sentinel: 过滤掉，由静态数据兜底
+
+        if mp_ok:
             live_count += 1
 
         live_update = {**sina, "nav": nav, "premium": premium}
-        # 只覆盖有效值（不用 0 覆盖静态兜底）
-        merged = {**fb, **{k: v for k, v in live_update.items() if v != 0}}
+        # 只覆盖有效非零值；premium=None 时显式写入 None（前端渲染为 "—"）
+        patch: dict = {}
+        for k, v in live_update.items():
+            if k == "premium":
+                if v is None:
+                    patch[k] = None          # NAV 失败，清除过期溢价
+                elif v != 0.0 or nav_ok:     # 成功计算（含溢价恰好为0的情况）
+                    patch[k] = v
+                # else: 休市 sentinel(0.0)，跳过，保留静态兜底
+            else:
+                if v != 0:
+                    patch[k] = v
+        merged = {**fb, **patch}
         results.append(merged)
 
     success_rate = live_count / len(codes) if codes else 0
@@ -562,7 +583,7 @@ def get_etfs(response: Response):
     results, source = _build_etfs()
 
     if source in ("live", "partial"):
-        _cache_set(cache_key, results, CACHE_TTL["funds"])
+        _cache_set(cache_key, results, CACHE_TTL["etfs"])
     else:
         file_data = _file_load(cache_key)
         if file_data:
