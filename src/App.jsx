@@ -177,6 +177,16 @@ function useScrollReveal(threshold=0.12) {
   return [ref, visible];
 }
 
+function useWindowWidth() {
+  const [width, setWidth] = useState(typeof window!=="undefined"?window.innerWidth:1280);
+  useEffect(()=>{
+    const h=()=>setWidth(window.innerWidth);
+    window.addEventListener("resize",h,{passive:true});
+    return ()=>window.removeEventListener("resize",h);
+  },[]);
+  return width;
+}
+
 function useHover() {
   const [hovered, setHovered] = useState(false);
   return [hovered, {onMouseEnter:()=>setHovered(true), onMouseLeave:()=>setHovered(false)}];
@@ -286,11 +296,11 @@ function PremiumBadge({value}) {
 function SectionHeader({title,subtitle,count,color=C.accent,timestamp}) {
   return (
     <div style={{marginBottom:24}}>
-      <div style={{display:"flex",alignItems:"center",gap:12}}>
-        <div style={{width:3,height:20,borderRadius:2,background:`linear-gradient(180deg,${color},${color}60)`}}/>
-        <h2 style={{fontSize:20,fontWeight:800,color:C.text,margin:0,letterSpacing:-0.4}}>{title}</h2>
-        {count!=null&&<span style={{background:color+"18",color,padding:"2px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{count}只</span>}
-        {timestamp&&<span style={{marginLeft:"auto",fontSize:11,color:C.textDim}}>行情更新：{timestamp}</span>}
+      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",minWidth:0}}>
+        <div style={{width:3,height:20,borderRadius:2,background:`linear-gradient(180deg,${color},${color}60)`,flexShrink:0}}/>
+        <h2 style={{fontSize:20,fontWeight:800,color:C.text,margin:0,letterSpacing:-0.4,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</h2>
+        {count!=null&&<span style={{background:color+"18",color,padding:"2px 10px",borderRadius:20,fontSize:12,fontWeight:700,flexShrink:0}}>{count}只</span>}
+        {timestamp&&<span style={{fontSize:11,color:C.textDim,flexShrink:0}}>行情更新：{timestamp}</span>}
       </div>
       {subtitle&&<p style={{fontSize:13,color:C.textDim,margin:"7px 0 0 15px"}}>{subtitle}</p>}
     </div>
@@ -1524,7 +1534,13 @@ export default function App() {
   const [scrolled,setScrolled]=useState(false);
   const [showBackToTop,setShowBackToTop]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
-  const [showDisclaimer,setShowDisclaimer]=useState(()=>!localStorage.getItem("etf-disclaimer"));
+  const [showDisclaimer,setShowDisclaimer]=useState(()=>{
+    if(typeof window!=="undefined"&&window.innerWidth<=768){
+      localStorage.setItem("etf-disclaimer","1");
+      return false;
+    }
+    return !localStorage.getItem("etf-disclaimer");
+  });
   const [showBriefing,setShowBriefing]=useState(()=>{
     if(!localStorage.getItem("etf-disclaimer")) return false;
     return localStorage.getItem("briefing_date")!==new Date().toDateString();
@@ -1538,6 +1554,9 @@ export default function App() {
   const [showWechat,setShowWechat]=useState(false);
   const navRef=useRef(null);
   const [indicator,setIndicator]=useState({left:0,width:0,opacity:0});
+
+  const windowWidth = useWindowWidth();
+  const isMobile = windowWidth <= 768;
 
   const [nasdaq,setNasdaq]=useState(FALLBACK.nasdaq_passive);
   const [sp500, setSp500 ]=useState(FALLBACK.sp500_passive);
@@ -1783,6 +1802,12 @@ export default function App() {
     {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好",align:"right"},
   ];
 
+  // 移动端隐藏次要列，保留核心信息
+  const _mobileHide = new Set(["code_c","fee_rate","ytd_return","track_error"]);
+  const passiveColsF = isMobile ? passiveCols.filter(c=>!_mobileHide.has(c.key)) : passiveCols;
+  const activeColsF  = isMobile ? activeCols.filter(c=>c.key!=="fee_rate") : activeCols;
+  const etfColsF     = isMobile ? etfCols.filter(c=>!["fee_rate","track_error"].includes(c.key)) : etfCols;
+
   const dismissDisclaimer = ()=>{
     localStorage.setItem("etf-disclaimer","1");
     setShowDisclaimer(false);
@@ -1791,7 +1816,7 @@ export default function App() {
 
   return (
     <>
-    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif",overflowX:"hidden"}}>
       {showDisclaimer&&<DisclaimerModal onClose={dismissDisclaimer}/>}
       {/* 微信公众号二维码弹窗 */}
       {showWechat&&(
@@ -1833,7 +1858,7 @@ export default function App() {
         position:"sticky",top:0,zIndex:100,
         transition:"box-shadow 0.35s ease, border-color 0.35s ease",
       }}>
-        <div style={{maxWidth:1440,margin:"0 auto",padding:"0 40px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"0 16px":"0 40px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <a href="/" onClick={e=>{e.preventDefault();switchTab("overview");}} style={{textDecoration:"none",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
             <svg width="32" height="32" viewBox="0 0 28 28" fill="none">
               <rect width="28" height="28" rx="7" fill="url(#logobg)"/>
@@ -1857,21 +1882,21 @@ export default function App() {
           </nav>
 
           <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:12}}>
-            {usdcny&&(
+            {!isMobile&&usdcny&&(
               <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:8,background:C.accentBg,border:`1px solid ${C.accent}22`}}>
                 <span style={{fontSize:10,color:C.textDim,letterSpacing:0.3}}>USD/CNY</span>
                 <span style={{fontSize:13,fontWeight:700,color:C.accent,fontFamily:"monospace",letterSpacing:0.5}}>{usdcny}</span>
               </div>
             )}
-            <button onClick={()=>setShowBriefing(true)}
+            {!isMobile&&<button onClick={()=>setShowBriefing(true)}
               title="今日简报"
               style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
               onMouseEnter={e=>{e.currentTarget.style.background=C.accentBg;e.currentTarget.style.color=C.accent;e.currentTarget.style.borderColor=C.accent+"44";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
               <span style={{fontSize:13}}>📋</span> 今日简报
-            </button>
+            </button>}
             {/* Twitter / X */}
-            <a href="https://x.com/WiseInvest513" target="_blank" rel="noopener noreferrer"
+            {!isMobile&&<a href="https://x.com/WiseInvest513" target="_blank" rel="noopener noreferrer"
               title="关注博主 Twitter"
               style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,textDecoration:"none",transition:"all 0.18s",flexShrink:0}}
               onMouseEnter={e=>{e.currentTarget.style.background="#000";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#000";}}
@@ -1879,9 +1904,9 @@ export default function App() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
               </svg>
-            </a>
+            </a>}
             {/* WeChat 公众号 */}
-            <button onClick={()=>setShowWechat(true)}
+            {!isMobile&&<button onClick={()=>setShowWechat(true)}
               title="微信公众号"
               style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,cursor:"pointer",transition:"all 0.18s",flexShrink:0}}
               onMouseEnter={e=>{e.currentTarget.style.background="#07c160";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#07c160";}}
@@ -1889,8 +1914,8 @@ export default function App() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-7.062-6.122zm-3.74 2.632c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983zm5.08 0c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983z"/>
               </svg>
-            </button>
-            {lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap"}}>更新于 {lastUpdate}</span>}
+            </button>}
+            {!isMobile&&lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap"}}>更新于 {lastUpdate}</span>}
             {/* Hamburger (mobile only) */}
             <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn"
               aria-label="菜单"
@@ -1915,7 +1940,7 @@ export default function App() {
       </header>
 
       {/* ── Content ── */}
-      <main style={{maxWidth:1440,margin:"0 auto",padding:"36px 40px 100px"}}>
+      <main style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"16px 12px 80px":"36px 40px 100px"}}>
         <div key={activeTab} className="tab-content">
 
         {/* ════ WATCHLIST ════ */}
@@ -1929,25 +1954,25 @@ export default function App() {
                 {nasdaq.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0}><div style={{marginBottom:28}}>
                     <SectionHeader title="纳指被动" color={C.accent}/>
-                    <DataTable columns={passiveCols} data={nasdaqM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={passiveColsF} data={nasdaqM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
                 {sp500M.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0.05}><div style={{marginBottom:28}}>
                     <SectionHeader title="标普500被动" color={C.cyan}/>
-                    <DataTable columns={passiveCols} data={sp500M.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={passiveColsF} data={sp500M.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
                 {activeM.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0.1}><div style={{marginBottom:28}}>
                     <SectionHeader title="美股主动" color={C.purple}/>
-                    <DataTable columns={activeCols} data={activeM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={activeColsF} data={activeM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
                 {etfsM.filter(f=>favorites.includes(f.code)).length>0&&(
                   <Reveal delay={0.15}><div style={{marginBottom:28}}>
                     <SectionHeader title="场内ETF" color={C.orange}/>
-                    <DataTable columns={etfCols} data={etfsM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
+                    <DataTable columns={etfColsF} data={etfsM.filter(f=>favorites.includes(f.code))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>
                   </div></Reveal>
                 )}
               </>
@@ -1959,7 +1984,7 @@ export default function App() {
         {activeTab==="overview"&&(
           <>
             {/* Stat row */}
-            <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:36}}>
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[
                 {label:"纳指均涨幅",value:`+${avg(nasdaq,"ytd_return")}%`,sub:"近一年",color:C.accent},
                 {label:"标普均涨幅",value:`+${avg(sp500,"ytd_return")}%`,sub:"近一年",color:C.cyan},
@@ -1970,7 +1995,7 @@ export default function App() {
             </div>
 
             {/* Charts */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:28}}>
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?16:28}}>
               <Reveal delay={0.05}>
                 <Card style={{padding:"24px 26px"}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
@@ -2040,9 +2065,9 @@ export default function App() {
 
             {/* Top 5 */}            <Reveal delay={0.08}>
               <SectionHeader title="近一年涨幅 TOP 5 · 主动型" color={C.purple}/>
-              <div style={{display:"flex",gap:16,marginBottom:36,flexWrap:"wrap"}}>
+              <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:36}}>
                 {topPerf.map((f,i)=>(
-                  <Card key={f.code} style={{flex:1,minWidth:200,padding:"20px 22px",position:"relative",overflow:"hidden"}}>
+                  <Card key={f.code} style={{padding:isMobile?"14px 16px":"20px 22px",position:"relative",overflow:"hidden"}}>
                     <div style={{position:"absolute",top:-10,right:-10,fontSize:80,fontWeight:900,color:C.accent+(i===0?"10":"07"),lineHeight:1,userSelect:"none"}}>
                       {i+1}
                     </div>
@@ -2064,12 +2089,12 @@ export default function App() {
             {/* ETF warning */}
             <Reveal delay={0.1}>
               <SectionHeader title="场内ETF溢价预警" subtitle="溢价 >1% 注意 · >2% 偏高 · >3% 极高建议等待收窄" color={C.orange}/>
-              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+              <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:16}}>
                 {etfs.map(e=>{
                   const prem = e.premium||0;
                   const barColor = prem>3?C.red:prem>2?"#ff6b35":prem>1?C.orange:C.green;
                   return (
-                  <Card key={e.code} style={{minWidth:200,flex:1,padding:"18px 22px",borderColor:prem>3?`${C.red}40`:prem>2?`#ff6b3530`:C.border}}>
+                  <Card key={e.code} style={{padding:isMobile?"14px 16px":"18px 22px",borderColor:prem>3?`${C.red}40`:prem>2?`#ff6b3530`:C.border}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                       <div>
                         <div style={{fontSize:11,color:C.textDim,fontFamily:"monospace",marginBottom:4}}>{e.code}</div>
@@ -2110,7 +2135,7 @@ export default function App() {
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.accent} text="综合费率最低的有天弘(018043, 0.70%)和嘉实(016532, 0.70%)，但目前均暂停申购。可申购中费率较低的是摩根(019172, 0.72%)和易方达(161130, 0.72%)。广发(270042)规模最大(108亿)，跟踪误差最小(1.10%)。"/>
             <AcInfoBox/>
           </Reveal>
@@ -2124,7 +2149,7 @@ export default function App() {
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveCols} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.cyan} text="博时(050025)规模最大(67.56亿)、跟踪误差最小(1.31%)，但暂停申购。可申购推荐摩根(017641, 0.77%)和易方达(161125)。注意161128跟踪标普信息科技指数，波动更大。"/>
             <AcInfoBox/>
           </Reveal>
@@ -2138,7 +2163,7 @@ export default function App() {
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeCols} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.purple} text="主动型管理费较高(~1.55%)，但优秀经理可带来超额收益。易方达全球成长(012920)近一年+100.44%，但限额仅50元/日。申购限额越低说明额度越紧张。"/>
           </Reveal>
         )}
@@ -2150,7 +2175,7 @@ export default function App() {
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfCols} data={sortData(filterData(etfsM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM).length===0&&<EmptyResult query={search}/>}</>}
+            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfColsF} data={sortData(filterData(etfsM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM).length===0&&<EmptyResult query={search}/>}</>}
             <Card style={{marginTop:24,padding:"24px 26px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div>
@@ -2210,7 +2235,7 @@ export default function App() {
 
       {/* ── Footer ── */}
       <footer style={{background:"#fff",borderTop:`1px solid ${C.border}`}}>
-        <div style={{maxWidth:1440,margin:"0 auto",padding:"56px 40px 48px",display:"grid",gridTemplateColumns:"1fr auto auto",gap:"60px 80px"}}>
+        <div style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"32px 16px 24px":"56px 40px 48px",display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr auto auto",gap:isMobile?"32px":"60px 80px"}}>
           <div style={{maxWidth:340}}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
               <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.accent},#5856d6)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:14,color:"#fff"}}>W</div>
@@ -2255,7 +2280,7 @@ export default function App() {
         </div>
 
         <div style={{borderTop:`1px solid ${C.border}`}}/>
-        <div style={{maxWidth:1440,margin:"0 auto",padding:"18px 40px",display:"flex",justifyContent:"center",flexDirection:"column",alignItems:"center",gap:5}}>
+        <div style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"14px 16px":"18px 40px",display:"flex",justifyContent:"center",flexDirection:"column",alignItems:"center",gap:5}}>
           <div style={{fontSize:12,color:C.textDim}}>© 2026 wise-etf.com · All rights reserved</div>
           <div style={{fontSize:12,color:C.textDim}}>仅提供信息参考，不构成任何投资建议</div>
         </div>
@@ -2303,9 +2328,24 @@ export default function App() {
         ::-webkit-scrollbar-thumb:hover{background:${C.textDim}}
 
         @media(max-width:900px){
-          header nav{display:none}
-          .hamburger-btn{display:flex !important}
+          header nav{flex:1;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+          header nav::-webkit-scrollbar{display:none}
+          header nav button{padding:0 14px;font-size:13px}
+          .hamburger-btn{display:none !important}
           .mobile-menu{display:block}
+        }
+
+        @media(max-width:768px){
+          html,body{overflow-x:hidden;max-width:100vw}
+          /* 表格单元格紧凑 */
+          .table-row td{padding:9px 10px !important;font-size:12px !important;white-space:nowrap}
+          table thead th{padding:9px 10px !important;font-size:10px !important}
+          /* StatCard 字号缩小 */
+          .stat-card{padding:16px 14px !important;border-radius:14px !important}
+          /* 卡片圆角收小 */
+          .lift-card{border-radius:14px !important}
+          /* 搜索框与筛选条换行 */
+          .search-filter-row{flex-direction:column}
         }
       `}</style>
     </div>

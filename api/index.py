@@ -305,9 +305,10 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
                 sgzt = d.get("SGZT", "")
                 maxsg = d.get("MAXSG", "")
                 if sgzt:
-                    # 有 MAXSG 正值时，即使 SGZT 含"暂停"也是限额开放（非完全暂停）
+                    # 只有 SGZT 明确含"限大额"时才视为限额开放；"暂停申购"即使有 MAXSG 也是暂停
                     has_limit = maxsg and maxsg not in ("", "--", "0", None)
-                    truly_suspended = "暂停" in sgzt and not has_limit
+                    is_limit_mode = "限大额" in sgzt
+                    truly_suspended = "暂停" in sgzt and not is_limit_mode
                     result["buy_status"] = "suspended" if truly_suspended else "open"
                     if truly_suspended:
                         result["daily_limit"] = "暂停申购"
@@ -874,7 +875,8 @@ def _fetch_live_one(code: str) -> tuple:
                     sgzt = data.get("SGZT", "")
                     maxsg = data.get("MAXSG", "")
                     has_limit = maxsg and maxsg not in ("", "--", "0", None)
-                    truly_suspended = "暂停" in sgzt and not has_limit
+                    is_limit_mode = "限大额" in sgzt
+                    truly_suspended = "暂停" in sgzt and not is_limit_mode
                     buy_status = "suspended" if truly_suspended else "open"
                     if truly_suspended:
                         daily_limit = "暂停申购"
