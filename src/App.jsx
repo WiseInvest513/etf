@@ -495,225 +495,44 @@ function ChartTooltip({active,payload,label,unit="%"}) {
 
 // ─── Disclaimer Modal ─────────────────────────────────────────────────────────
 // ─── Daily Briefing Modal ─────────────────────────────────────────────────────
-function DailyBriefing({etfs, nasdaq, sp500, active, usdcny, favorites, onClose, onNavigate}) {
-  const today = new Date().toLocaleDateString("zh-CN",{month:"long",day:"numeric",weekday:"short"});
-  const [news, setNews] = useState([]);
-
-  // 新闻：组件挂载时拉取
-  useEffect(()=>{
-    apiFetch("/news").then(d=>{ if(d?.data?.length) setNews(d.data.slice(0,4)); });
-  },[]);
-
-  // 额度变化：对比 localStorage 快照（只报真实发生的切换）
-  const statusChanges = useMemo(()=>{
-    const prev = JSON.parse(localStorage.getItem("fund_status_snapshot")||"{}");
-    if(!Object.keys(prev).length) return [];
-    const all = [...nasdaq,...sp500,...active];
-    return all
-      .filter(f=> prev[f.code] && prev[f.code] !== f.buy_status)
-      .map(f=>({
-        code: f.code, name: f.name,
-        from: prev[f.code], to: f.buy_status,
-        cat: nasdaq.some(x=>x.code===f.code)?"nasdaq"
-          : sp500.some(x=>x.code===f.code)?"sp500":"active",
-      }))
-      .sort((a,b)=>(favorites.includes(a.code)?0:1)-(favorites.includes(b.code)?0:1));
-  }, [nasdaq, sp500, active, favorites]);
-
-  // 溢价率异动：对比 localStorage 快照，只报变化量 >= 0.8% 的
-  const premChanges = useMemo(()=>{
-    const prevPrem = JSON.parse(localStorage.getItem("etf_premium_snapshot")||"{}");
-    if(!Object.keys(prevPrem).length) return [];
-    return etfs
-      .map(e=>({ ...e, delta: +((e.premium||0) - (prevPrem[e.code]!=null?prevPrem[e.code]:(e.premium||0))).toFixed(2) }))
-      .filter(e=> Math.abs(e.delta) >= 0.8)
-      .sort((a,b)=> Math.abs(b.delta) - Math.abs(a.delta))
-      .slice(0, 4);
-  }, [etfs]);
-
-  // 保存快照（状态 + 溢价率，关闭时统一调用）
-  const saveSnapshot = () => {
-    const all = [...nasdaq,...sp500,...active];
-    localStorage.setItem("fund_status_snapshot",
-      JSON.stringify(Object.fromEntries(all.map(f=>[f.code, f.buy_status]))));
-    localStorage.setItem("etf_premium_snapshot",
-      JSON.stringify(Object.fromEntries(etfs.map(e=>[e.code, e.premium||0]))));
-  };
-
-  const handleDismissToday = () => {
-    saveSnapshot();
+function GroupChatModal({onClose}) {
+  const handleClose = () => {
     localStorage.setItem("briefing_date", new Date().toDateString());
     onClose();
   };
-  const handleXClose = () => { saveSnapshot(); onClose(); };
-  const handleNavigate = tab => { handleDismissToday(); onNavigate(tab); };
-
-  const lastMonth = MONTHLY_12M[MONTHLY_12M.length-1];
-  const nqChange  = lastMonth.nasdaq;
-  const spChange  = lastMonth.sp500;
-
-  const Section = ({title, color="#6e6e73", children}) => (
-    <div style={{marginBottom:20}}>
-      <div style={{fontSize:11,fontWeight:700,color,letterSpacing:1,textTransform:"uppercase",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
-        <span style={{width:3,height:12,borderRadius:2,background:color,display:"inline-block"}}/>
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-
-  const hasAlerts = statusChanges.length>0 || premChanges.length>0;
-
-  // 新闻发布时间格式化
-  const fmtAge = h => {
-    if(h==null) return "";
-    if(h<1) return "刚刚";
-    if(h<24) return `${Math.floor(h)}小时前`;
-    return `${Math.floor(h/24)}天前`;
-  };
-
   return (
-    <div style={{position:"fixed",inset:0,zIndex:1100,background:"rgba(0,0,0,0.35)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
-      onClick={e=>e.target===e.currentTarget&&handleXClose()}>
-      <div style={{background:"#fff",borderRadius:22,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 32px 80px rgba(0,0,0,0.18)",animation:"fadeInUp 0.3s ease both"}}>
-
+    <div style={{position:"fixed",inset:0,zIndex:1100,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={e=>e.target===e.currentTarget&&handleClose()}>
+      <div style={{background:"#fff",borderRadius:22,width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,0.2)",animation:"fadeInUp 0.3s ease both",overflow:"hidden"}}>
         {/* Header */}
-        <div style={{padding:"22px 24px 16px",borderBottom:`1px solid ${C.borderLight}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{padding:"22px 24px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${C.borderLight}`}}>
           <div>
-            <div style={{fontSize:12,color:C.textDim,marginBottom:4}}>{today}</div>
-            <div style={{fontSize:18,fontWeight:800,color:C.text,letterSpacing:-0.4}}>今日市场简报</div>
+            <div style={{fontSize:11,color:"#07c160",fontWeight:700,letterSpacing:0.5,marginBottom:3}}>WISEINVEST 社区</div>
+            <div style={{fontSize:17,fontWeight:800,color:C.text,letterSpacing:-0.4}}>欢迎加入官方微信群聊</div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-            <button onClick={handleDismissToday}
-              style={{background:"none",border:"none",fontSize:11,color:C.textDim,cursor:"pointer",padding:"4px 0",textDecoration:"underline",textDecorationStyle:"dotted",textUnderlineOffset:3,whiteSpace:"nowrap"}}>
-              今日不再提示
-            </button>
-            <button onClick={handleXClose}
-              style={{width:32,height:32,borderRadius:"50%",border:"none",background:C.bg,color:C.textMuted,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+          <button onClick={handleClose}
+            style={{width:32,height:32,borderRadius:"50%",border:"none",background:C.bg,color:C.textMuted,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
+        </div>
+        {/* QR Code */}
+        <div style={{padding:"24px 24px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
+          <div style={{borderRadius:16,overflow:"hidden",border:`1px solid ${C.borderLight}`,width:"100%"}}>
+            <img src="/群聊.png" alt="WiseInvest 微信群聊二维码"
+              style={{width:"100%",height:"auto",display:"block"}}
+              onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
+          </div>
+          <div style={{fontSize:13,color:C.textDim,textAlign:"center",lineHeight:1.7}}>
+            扫码加入群聊，与志同道合的投资者一起交流
           </div>
         </div>
-
-        <div style={{padding:"20px 24px 24px"}}>
-
-          {/* ① 市场快讯 */}
-          <Section title="市场快讯" color={C.accent}>
-            <div style={{padding:"12px 16px",borderRadius:12,background:C.bg,fontSize:13,lineHeight:1.8,color:C.text}}>
-              上月纳指{" "}
-              <span style={{fontWeight:700,color:nqChange>=0?C.green:C.red}}>{nqChange>0?"+":""}{nqChange}%</span>
-              {" "}，标普{" "}
-              <span style={{fontWeight:700,color:spChange>=0?C.green:C.red}}>{spChange>0?"+":""}{spChange}%</span>
-              {" "}· USD/CNY{" "}
-              <span style={{fontWeight:700,fontFamily:"monospace",color:C.text}}>{usdcny||"—"}</span>
-            </div>
-          </Section>
-
-          {/* ② 额度变化（只有真实发生切换才显示） */}
-          {statusChanges.length>0&&(
-            <Section title="额度变化" color={C.green}>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {statusChanges.map(c=>{
-                  const opened = c.to==="open";
-                  const isWatched = favorites.includes(c.code);
-                  const tabMap = {nasdaq:"nasdaq",sp500:"sp500",active:"active"};
-                  return (
-                    <div key={c.code}
-                      onClick={()=>handleNavigate(tabMap[c.cat]||"nasdaq")}
-                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",borderRadius:10,background:opened?C.greenBg:C.redBg,border:`1px solid ${opened?C.green:C.red}22`,cursor:"pointer"}}
-                      onMouseEnter={e=>e.currentTarget.style.opacity="0.8"}
-                      onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
-                      <div style={{display:"flex",alignItems:"center",gap:5}}>
-                        {isWatched&&<span style={{color:C.orange,fontSize:12}}>★</span>}
-                        <div>
-                          <span style={{fontSize:11,fontFamily:"monospace",color:C.textDim,marginRight:6}}>{c.code}</span>
-                          <span style={{fontSize:13,fontWeight:600,color:C.text}}>{c.name}</span>
-                        </div>
-                      </div>
-                      <span style={{fontSize:12,fontWeight:700,color:opened?C.green:C.red,flexShrink:0}}>
-                        {opened?"✓ 恢复申购":"✗ 暂停申购"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </Section>
-          )}
-
-          {/* ③ 溢价率异动（只报变化量 ≥ 0.8%） */}
-          {premChanges.length>0&&(
-            <Section title="溢价率异动" color={C.orange}>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {premChanges.map(e=>{
-                  const rising = e.delta > 0;
-                  return (
-                    <div key={e.code}
-                      onClick={()=>handleNavigate("etf")}
-                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",borderRadius:10,background:rising?C.redBg:C.greenBg,border:`1px solid ${rising?C.red:C.green}22`,cursor:"pointer"}}
-                      onMouseEnter={ev=>ev.currentTarget.style.opacity="0.8"}
-                      onMouseLeave={ev=>ev.currentTarget.style.opacity="1"}>
-                      <div>
-                        <span style={{fontSize:11,fontFamily:"monospace",color:C.textDim,marginRight:6}}>{e.code}</span>
-                        <span style={{fontSize:13,fontWeight:600,color:C.text}}>{e.name}</span>
-                      </div>
-                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                        <span style={{fontSize:12,color:C.textDim,fontFamily:"monospace"}}>{e.premium}%</span>
-                        <span style={{fontSize:12,fontWeight:700,color:rising?C.red:C.green}}>
-                          {rising?"↑":""}{!rising?"↓":""}{e.delta>0?"+":""}{e.delta}%
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div style={{fontSize:11,color:C.textDim,marginTop:2}}>
-                  {premChanges.some(e=>e.delta>0)?"溢价上升，谨慎追高 · ":""}
-                  {premChanges.some(e=>e.delta<0)?"溢价回落，可关注 · ":""}
-                  点击跳转场内ETF
-                </div>
-              </div>
-            </Section>
-          )}
-
-          {/* ④ 市场动态（新闻） */}
-          {news.length>0&&(
-            <Section title="市场动态" color={C.purple}>
-              <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                {news.map((n,i)=>{
-                  const sentMap = {
-                    bullish: {label:"利好", color:C.green, bg:C.greenBg},
-                    bearish: {label:"利空", color:C.red,   bg:C.redBg},
-                    neutral: {label:"中性", color:C.textDim,bg:C.bg},
-                  };
-                  const sent = sentMap[n.sentiment] || sentMap.neutral;
-                  return (
-                    <a key={i} href={n.link} target="_blank" rel="noopener noreferrer"
-                      style={{display:"flex",flexDirection:"column",gap:6,padding:"10px 14px",borderRadius:10,background:C.bg,border:`1px solid ${C.borderLight}`,textDecoration:"none"}}
-                      onMouseEnter={e=>e.currentTarget.style.background=C.purpleBg}
-                      onMouseLeave={e=>e.currentTarget.style.background=C.bg}>
-                      <span style={{fontSize:12,color:C.text,lineHeight:1.55}}>{n.title}</span>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <span style={{fontSize:10,fontWeight:700,color:sent.color,background:sent.bg,padding:"2px 7px",borderRadius:4,border:`1px solid ${sent.color}30`}}>
-                          {sent.label}
-                        </span>
-                        {n.age_hours!=null&&(
-                          <span style={{fontSize:10,color:C.textDim}}>{fmtAge(n.age_hours)}</span>
-                        )}
-                      </div>
-                    </a>
-                  );
-                })}
-              </div>
-            </Section>
-          )}
-
-          {/* 无异动 */}
-          {!hasAlerts&&!news.length&&(
-            <div style={{textAlign:"center",padding:"16px 0",color:C.textDim,fontSize:13}}>
-              今日暂无重要异动
-            </div>
-          )}
-
-          <button onClick={handleDismissToday}
-            style={{width:"100%",marginTop:4,padding:"12px 0",borderRadius:12,border:"none",background:`linear-gradient(135deg,${C.accent},${C.accentDim})`,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",letterSpacing:0.2}}>
-            开始查看
+        {/* Footer */}
+        <div style={{padding:"12px 24px 24px",display:"flex",flexDirection:"column",gap:10}}>
+          <button onClick={handleClose}
+            style={{width:"100%",padding:"12px 0",borderRadius:12,border:"none",background:"#07c160",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",letterSpacing:0.2}}>
+            进入平台
+          </button>
+          <button onClick={handleClose}
+            style={{background:"none",border:"none",fontSize:12,color:C.textDim,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted",textUnderlineOffset:3}}>
+            今日不再提示
           </button>
         </div>
       </div>
@@ -1603,6 +1422,8 @@ export default function App() {
   useEffect(()=>{
     // 仅拉取 overview 时间戳，不阻塞渲染（基金静态数据已内置 FALLBACK）
     apiFetch("/overview").then(ov=>{ if(ov?.last_update) setLastUpdate(ov.last_update); });
+    // 拉取场内ETF实时行情（含溢价率），以 FALLBACK 为兜底
+    apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
   },[]);
 
   // ── 实时行情（day_change / rolling_1y / buy_status / daily_limit）
@@ -1839,12 +1660,7 @@ export default function App() {
         </div>
       )}
       {showBriefing&&!showDisclaimer&&(
-        <DailyBriefing
-          etfs={etfs} nasdaq={nasdaq} sp500={sp500} active={active}
-          usdcny={usdcny} favorites={favorites}
-          onClose={()=>setShowBriefing(false)}
-          onNavigate={switchTab}
-        />
+        <GroupChatModal onClose={()=>setShowBriefing(false)}/>
       )}
       <BackToTop visible={showBackToTop} offset={compareList.length>0?84:32}/>
 
@@ -1889,11 +1705,11 @@ export default function App() {
               </div>
             )}
             {!isMobile&&<button onClick={()=>setShowBriefing(true)}
-              title="今日简报"
+              title="加入群聊"
               style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
-              onMouseEnter={e=>{e.currentTarget.style.background=C.accentBg;e.currentTarget.style.color=C.accent;e.currentTarget.style.borderColor=C.accent+"44";}}
+              onMouseEnter={e=>{e.currentTarget.style.background="#07c16014";e.currentTarget.style.color="#07c160";e.currentTarget.style.borderColor="#07c16044";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
-              <span style={{fontSize:13}}>📋</span> 今日简报
+              <span style={{fontSize:13}}>💬</span> 加入群聊
             </button>}
             {/* Twitter / X */}
             {!isMobile&&<a href="https://x.com/WiseInvest513" target="_blank" rel="noopener noreferrer"

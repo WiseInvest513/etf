@@ -490,14 +490,13 @@ def _build_etfs() -> tuple:
             # 有市价但 NAV 拉取失败 → 不保留过期溢价，显示 N/A
             premium = None
         else:
-            # 市场休市或双侧均失败 → 保留静态兜底值（不覆盖）
-            premium = 0.0  # sentinel: 过滤掉，由静态数据兜底
+            # 市场休市或双侧均失败 → 保留静态兜底值
+            premium = 0.0  # sentinel：过滤掉，由静态数据兜底
 
         if mp_ok:
             live_count += 1
 
         live_update = {**sina, "nav": nav, "premium": premium}
-        # 只覆盖有效非零值；premium=None 时显式写入 None（前端渲染为 "—"）
         patch: dict = {}
         for k, v in live_update.items():
             if k == "premium":
@@ -505,7 +504,7 @@ def _build_etfs() -> tuple:
                     patch[k] = None          # NAV 失败，清除过期溢价
                 elif v != 0.0 or nav_ok:     # 成功计算（含溢价恰好为0的情况）
                     patch[k] = v
-                # else: 休市 sentinel(0.0)，跳过，保留静态兜底
+                # else: 休市 sentinel，跳过，保留静态兜底
             else:
                 if v != 0:
                     patch[k] = v
