@@ -497,7 +497,11 @@ function ChartTooltip({active,payload,label,unit="%"}) {
 // ─── Daily Briefing Modal ─────────────────────────────────────────────────────
 function GroupChatModal({onClose}) {
   const handleClose = () => {
-    localStorage.setItem("briefing_date", new Date().toDateString());
+    localStorage.setItem("group_chat_last_shown", String(Date.now()));
+    onClose();
+  };
+  const handleNoShow = () => {
+    localStorage.setItem("group_chat_no_show", new Date().toDateString());
     onClose();
   };
   return (
@@ -530,7 +534,7 @@ function GroupChatModal({onClose}) {
             style={{width:"100%",padding:"12px 0",borderRadius:12,border:"none",background:"#07c160",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",letterSpacing:0.2}}>
             进入平台
           </button>
-          <button onClick={handleClose}
+          <button onClick={handleNoShow}
             style={{background:"none",border:"none",fontSize:12,color:C.textDim,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted",textUnderlineOffset:3}}>
             今日不再提示
           </button>
@@ -598,17 +602,7 @@ function StatusFilterBar({value, onChange, color}) {
 }
 
 // ─── Back To Top Button ───────────────────────────────────────────────────────
-function BackToTop({visible, offset=32}) {
-  return (
-    <button onClick={()=>window.scrollTo({top:0,behavior:"smooth"})}
-      aria-label="回到顶部"
-      style={{position:"fixed",bottom:offset,right:32,zIndex:200,width:44,height:44,borderRadius:"50%",background:"#0071e3",border:"none",color:"#fff",cursor:"pointer",boxShadow:"0 4px 20px rgba(0,113,227,0.4)",opacity:visible?1:0,transform:visible?"translateY(0) scale(1)":"translateY(12px) scale(0.8)",transition:"opacity 0.3s ease, transform 0.3s ease, bottom 0.3s ease",pointerEvents:visible?"auto":"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="18 15 12 9 6 15"/>
-      </svg>
-    </button>
-  );
-}
+
 
 // ─── FX Analysis Card ────────────────────────────────────────────────────────
 // ─── 负收益年原因 ──────────────────────────────────────────────────────────────
@@ -1340,6 +1334,420 @@ const TABS=[
   {id:"watchlist", label:"自选"},
 ];
 
+// ─── Canvas Export Utilities ──────────────────────────────────────────────────
+const EC={
+  bg:'#07090f',card:'#0d1320',dim:'#131d2e',border:'#182033',head:'#0b1524',
+  blue:'#3d82ff',green:'#26c258',red:'#ff3b30',orange:'#ff9a00',
+  purple:'#a04cf5',cyan:'#14c8b4',white:'#edf0f9',muted:'#5e6270',
+  F:'"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif',
+};
+
+function _rr(c,x,y,w,h,r=8){
+  c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.arcTo(x+w,y,x+w,y+r,r);
+  c.lineTo(x+w,y+h-r);c.arcTo(x+w,y+h,x+w-r,y+h,r);c.lineTo(x+r,y+h);
+  c.arcTo(x,y+h,x,y+h-r,r);c.lineTo(x,y+r);c.arcTo(x,y,x+r,y,r);c.closePath();
+}
+
+function _fit(c,v,maxW){
+  if(v==null)return'—';const s=String(v);
+  if(c.measureText(s).width<=maxW)return s;
+  let t=s;while(t.length>1&&c.measureText(t+'…').width>maxW)t=t.slice(0,-1);
+  return t+'…';
+}
+
+function drawTableCanvas({titleParts,date,cols,rows}){
+  const W=1080,SC=2,PX=20;
+  const F=EC.F;
+  const BRAND_H=46,TITLE_H=88,CH=44,RH=40,FH=44;
+  const H=BRAND_H+TITLE_H+CH+rows.length*RH+FH;
+  const cvs=document.createElement('canvas');
+  cvs.width=W*SC;cvs.height=H*SC;
+  const c=cvs.getContext('2d');c.scale(SC,SC);
+
+  // White background
+  c.fillStyle='#FFFFFF';c.fillRect(0,0,W,H);
+
+  // Top accent bar
+  const ag=c.createLinearGradient(0,0,W,0);
+  ag.addColorStop(0,'#1a56db');ag.addColorStop(1,'#7c3aed');
+  c.fillStyle=ag;c.fillRect(0,0,W,5);
+
+  // Brand row
+  c.fillStyle='#f0f6ff';c.fillRect(0,5,W,BRAND_H-5);
+  c.font=`bold 15px ${F}`;c.fillStyle='#1a56db';
+  c.fillText('Wise 定投致富 整理',PX+4,32);
+  c.font=`12px ${F}`;c.fillStyle='#9ca3af';
+  c.textAlign='right';c.fillText('Wise-etf.org',W-PX,32);c.textAlign='left';
+
+  // Title row
+  c.fillStyle='#FFFFFF';c.fillRect(0,BRAND_H,W,TITLE_H);
+  c.font=`bold 30px ${F}`;
+  let tx=PX+4;
+  const TY=BRAND_H+46;
+  (titleParts||[]).forEach(p=>{
+    c.fillStyle=p.color||'#0f172a';
+    c.fillText(p.text,tx,TY);
+    tx+=c.measureText(p.text).width;
+  });
+  // Date appended inline in blue
+  c.font=`bold 22px ${F}`;c.fillStyle='#1a56db';
+  // Format date for display: 2026/04/15 → 2026.4.15
+  const dd=date.replace(/\//g,'.');c.fillText(`  (${dd})`,tx,TY);
+
+  // Subtitle
+  c.font=`12px ${F}`;c.fillStyle='#9ca3af';
+  c.fillText('数据仅供参考，不构成投资建议',PX+4,BRAND_H+72);
+
+  // Header separator
+  c.strokeStyle='#dde3f0';c.lineWidth=1;
+  c.beginPath();c.moveTo(0,BRAND_H+TITLE_H);c.lineTo(W,BRAND_H+TITLE_H);c.stroke();
+
+  const tableY=BRAND_H+TITLE_H;
+  const xp=[];let cx2=PX;for(const col of cols){xp.push(cx2);cx2+=col.w;}
+
+  // Table header — blue gradient
+  const hg=c.createLinearGradient(0,tableY,0,tableY+CH);
+  hg.addColorStop(0,'#1e40af');hg.addColorStop(1,'#1a56db');
+  c.fillStyle=hg;c.fillRect(0,tableY,W,CH);
+
+  c.font=`bold 13px ${F}`;
+  cols.forEach((col,i)=>{
+    c.fillStyle='#FFFFFF';
+    c.textAlign=col.right?'right':'left';
+    c.fillText(col.label,col.right?xp[i]+col.w-8:xp[i]+8,tableY+CH/2+5);
+  });
+  c.textAlign='left';
+
+  rows.forEach((row,ri)=>{
+    const ry=tableY+CH+ri*RH;
+    c.fillStyle=ri%2===0?'#FFFFFF':'#eef3ff';c.fillRect(0,ry,W,RH);
+    c.strokeStyle='#dde3f0';c.lineWidth=0.5;
+    c.beginPath();c.moveTo(0,ry+RH);c.lineTo(W,ry+RH);c.stroke();
+    cols.forEach((col,ci)=>{
+      const v=row[col.key];
+      const cell=col.render?col.render(v,row):{text:v??'—'};
+      const{text='—',color='#1a1a2e',bold=false,pill=false,pillBg=null}=cell;
+      const cX=xp[ci],cW=col.w,ty=ry+RH/2+5;
+      if(pill){
+        c.font=`bold 11px ${F}`;
+        const tw=c.measureText(text).width,pw=tw+20,ph=20;
+        const px2=col.right?cX+cW-pw-6:cX+6,py2=ry+(RH-ph)/2;
+        _rr(c,px2,py2,pw,ph,ph/2);c.fillStyle=pillBg||'#dbeafe';c.fill();
+        c.fillStyle=color;c.textAlign='center';
+        c.fillText(text,px2+pw/2,py2+14);c.textAlign='left';
+      }else{
+        c.font=`${bold?'bold ':''}13px ${F}`;
+        c.textAlign=col.right?'right':'left';c.fillStyle=color;
+        c.fillText(_fit(c,text,cW-10),col.right?cX+cW-8:cX+8,ty);
+        c.textAlign='left';
+      }
+    });
+  });
+
+  const fy=tableY+CH+rows.length*RH;
+  c.fillStyle='#f0f6ff';c.fillRect(0,fy,W,FH);
+  c.strokeStyle='#dde3f0';c.lineWidth=1;
+  c.beginPath();c.moveTo(0,fy);c.lineTo(W,fy);c.stroke();
+  c.font=`12px ${F}`;c.fillStyle='#9ca3af';c.textAlign='center';
+  c.fillText(`Wise-etf.org  ·  @Wise 定投致富 整理  ·  ${dd}`,W/2,fy+FH/2+5);
+  c.textAlign='left';
+  return cvs;
+}
+
+function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
+  const W=900,SC=2,PX=28,GAP=14;
+  const F=EC.F;
+  const avg=(arr,k)=>{const vs=arr.map(e=>e[k]).filter(v=>v!=null);return vs.length?(vs.reduce((a,b)=>a+b,0)/vs.length).toFixed(2):'—';};
+  const nasdaqAvg=avg(nasdaq,'ytd_return');
+  const sp500Avg=avg(sp500,'ytd_return');
+  const activeAvg=avg(active,'ytd_return');
+  const etfAvg=avg(etfs,'premium');
+  const openCount=[...nasdaq,...sp500,...active].filter(f=>f.buy_status==='open').length;
+  const totalCount=nasdaq.length+sp500.length+active.length;
+
+  const HEADER_H=108,STATS_H=188,CHART_H=280,HIST_H=316,FX_H=268,FOOTER_H=56;
+  const H=HEADER_H+STATS_H+CHART_H+HIST_H+FX_H+FOOTER_H;
+
+  const cvs=document.createElement('canvas');
+  cvs.width=W*SC;cvs.height=H*SC;
+  const c=cvs.getContext('2d');c.scale(SC,SC);
+
+  c.fillStyle=EC.bg;c.fillRect(0,0,W,H);
+
+  // Header
+  const hg=c.createLinearGradient(0,0,W,0);
+  hg.addColorStop(0,'#0c1e3a');hg.addColorStop(1,'#0e0b24');
+  c.fillStyle=hg;c.fillRect(0,0,W,HEADER_H);
+  const ag=c.createLinearGradient(0,0,0,HEADER_H);
+  ag.addColorStop(0,EC.blue);ag.addColorStop(1,EC.purple);
+  c.fillStyle=ag;c.fillRect(0,0,5,HEADER_H);
+
+  c.font=`bold 13px ${F}`;c.fillStyle=EC.blue;c.fillText('Wise ETF',PX+10,30);
+  c.font=`bold 38px ${F}`;c.fillStyle=EC.white;c.fillText('每日市场快照',PX+10,74);
+  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+  c.font=`15px ${F}`;c.fillStyle=EC.muted;c.fillText(today,PX+10,96);
+  if(usdcny){
+    c.textAlign='right';
+    c.font=`bold 22px ${F}`;c.fillStyle=EC.orange;c.fillText(`¥${usdcny}`,W-PX,68);
+    c.font=`12px ${F}`;c.fillStyle=EC.muted;c.fillText('USD/CNY',W-PX,90);
+    c.textAlign='left';
+  }
+
+  // Stat cards
+  const statData=[
+    {label:'纳指均涨幅',value:`+${nasdaqAvg}%`,sub:'近一年',color:EC.blue},
+    {label:'标普均涨幅',value:`+${sp500Avg}%`,sub:'近一年',color:EC.cyan},
+    {label:'主动均涨幅',value:`+${activeAvg}%`,sub:'近一年',color:EC.purple},
+    {label:'ETF均溢价',value:`${etfAvg}%`,sub:'当前',color:EC.orange},
+    {label:'可申购数',value:`${openCount}`,sub:`共${totalCount}只`,color:EC.green},
+  ];
+  const cW=(W-PX*2-GAP*4)/5,cH=128,sy=HEADER_H+22;
+  statData.forEach((s,i)=>{
+    const cx=PX+i*(cW+GAP);
+    _rr(c,cx,sy,cW,cH,10);c.fillStyle=EC.card;c.fill();
+    c.strokeStyle=EC.border;c.lineWidth=0.5;c.stroke();
+    const bg=c.createLinearGradient(cx,sy,cx,sy+4);
+    bg.addColorStop(0,s.color);bg.addColorStop(1,s.color+'00');
+    _rr(c,cx,sy,cW,4,2);c.fillStyle=bg;c.fill();
+    c.font=`bold 26px ${F}`;c.fillStyle=s.color;c.textAlign='center';
+    c.fillText(s.value,cx+cW/2,sy+52);
+    c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText(s.sub,cx+cW/2,sy+72);
+    c.font=`bold 12px ${F}`;c.fillStyle=EC.white;c.fillText(s.label,cx+cW/2,sy+98);
+    c.textAlign='left';
+  });
+
+  // Chart section
+  const charty=HEADER_H+STATS_H;
+  c.font=`bold 16px ${F}`;c.fillStyle=EC.white;c.fillText('纳指 vs 标普 · 近12月收益率',PX,charty+28);
+  c.font=`12px ${F}`;c.fillStyle=EC.muted;c.fillText('美元口径（2025.04 – 2026.03）',PX,charty+48);
+  c.textAlign='right';
+  c.fillStyle=EC.blue;c.fillRect(W-PX-126,charty+18,12,12);
+  c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText('纳斯达克100',W-PX,charty+29);
+  c.fillStyle=EC.cyan;c.fillRect(W-PX-56,charty+18,12,12);
+  c.fillText('标普500',W-PX-36+6,charty+29);
+  c.textAlign='left';
+
+  const chartX=PX+44,chartTopY=charty+58,chartW=W-PX*2-44,chartH2=176;
+  const allVals=[...MONTHLY_12M.map(d=>d.nasdaq),...MONTHLY_12M.map(d=>d.sp500)];
+  const maxV=Math.ceil(Math.max(...allVals.map(v=>Math.abs(v)))/5)*5||10;
+  const zeroY=chartTopY+chartH2/2;
+
+  // Grid lines
+  [maxV,maxV/2,0,-maxV/2,-maxV].forEach(v=>{
+    const yy=chartTopY+chartH2*(1-v/maxV)/2;
+    c.strokeStyle=EC.border+(v===0?'ff':'60');c.lineWidth=v===0?1:0.5;
+    c.beginPath();c.moveTo(chartX,yy);c.lineTo(chartX+chartW,yy);c.stroke();
+    c.font=`10px ${F}`;c.fillStyle=EC.muted;c.textAlign='right';
+    c.fillText(v===0?'0':v+'%',chartX-4,yy+4);
+  });
+  c.textAlign='left';
+
+  const groupW=chartW/MONTHLY_12M.length;
+  const bW=Math.floor(groupW*0.26);
+  MONTHLY_12M.forEach((d,i)=>{
+    const gx=chartX+i*groupW;
+    const nx=gx+(groupW-bW*2-3)/2;
+    const nh=Math.max(Math.abs(d.nasdaq)/maxV*chartH2/2,1);
+    const ny=d.nasdaq>=0?zeroY-nh:zeroY;
+    _rr(c,nx,ny,bW,nh,2);c.fillStyle=d.nasdaq>=0?EC.blue:EC.blue+'99';c.fill();
+    const sx2=nx+bW+3;
+    const sh=Math.max(Math.abs(d.sp500)/maxV*chartH2/2,1);
+    const sy2=d.sp500>=0?zeroY-sh:zeroY;
+    _rr(c,sx2,sy2,bW,sh,2);c.fillStyle=d.sp500>=0?EC.cyan:EC.cyan+'99';c.fill();
+    c.font=`10px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';
+    c.fillText(d.month,gx+groupW/2,chartTopY+chartH2+18);
+    c.textAlign='left';
+  });
+
+  // ─── Section 3: 35年复利曲线（对数坐标）
+  const histY=HEADER_H+STATS_H+CHART_H;
+
+  // Compute cumulative returns from 1990
+  const years=Object.keys(INDEX_ANNUAL.nasdaq).map(Number).sort();
+  let nV=100,sV=100;
+  const cumPts=[[1989,100,100]];
+  years.forEach(y=>{nV*=(1+(INDEX_ANNUAL.nasdaq[y]||0)/100);sV*=(1+(INDEX_ANNUAL.sp500[y]||0)/100);cumPts.push([y,+nV.toFixed(1),+sV.toFixed(1)]);});
+  const nFinal=cumPts[cumPts.length-1][1],sFinal=cumPts[cumPts.length-1][2];
+
+  // Draw section bg + divider
+  c.fillStyle=EC.bg;c.fillRect(0,histY,W,HIST_H);
+  c.strokeStyle=EC.border;c.lineWidth=1;c.beginPath();c.moveTo(0,histY);c.lineTo(W,histY);c.stroke();
+
+  // Section title
+  c.font=`bold 16px ${F}`;c.fillStyle=EC.white;
+  c.fillText('纳指 & 标普 · 35年复利增长',PX,histY+30);
+  c.font=`12px ${F}`;c.fillStyle=EC.muted;
+  c.fillText(`1990–2025  ·  以100为起点  ·  对数坐标`,PX,histY+50);
+  // legends
+  c.textAlign='right';
+  c.fillStyle=EC.blue;c.fillRect(W-PX-120,histY+18,10,10);
+  c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText(`纳指 →${nFinal.toFixed(0)}x`,W-PX,histY+28);
+  c.fillStyle=EC.cyan;c.fillRect(W-PX-50,histY+18,10,10);
+  c.fillText(`标普 →${sFinal.toFixed(0)}x`,W-PX,histY+44);
+  c.textAlign='left';
+
+  const hcX=PX+44,hcY=histY+62,hcW=W-PX*2-44,hcH=210;
+  const logMin=Math.log10(60),logMax=Math.log10(Math.max(nFinal,sFinal)*1.3);
+  const toY2=v=>hcY+hcH*(1-(Math.log10(Math.max(v,1))-logMin)/(logMax-logMin));
+
+  // Grid lines (log scale levels)
+  [100,300,1000,3000,10000,30000].forEach(v=>{
+    const yy=toY2(v);
+    if(yy<hcY-4||yy>hcY+hcH+4) return;
+    c.strokeStyle=EC.border+(v===100?'ff':'50');c.lineWidth=v===100?1:0.5;
+    c.beginPath();c.moveTo(hcX,yy);c.lineTo(hcX+hcW,yy);c.stroke();
+    c.font=`9px ${F}`;c.fillStyle=EC.muted;c.textAlign='right';
+    c.fillText(v>=1000?`${v/1000}k`:String(v),hcX-4,yy+3);
+  });
+  c.textAlign='left';
+
+  // X axis labels (every 5 years)
+  const xYrs=[1990,1995,2000,2005,2010,2015,2020,2025];
+  xYrs.forEach(y=>{
+    const xx=hcX+(y-1989)/(2025-1989)*hcW;
+    c.font=`9px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';c.fillText(String(y),xx,hcY+hcH+14);
+  });
+  c.textAlign='left';
+
+  // 2008/2020 recession markers
+  [{y:2000,label:'科网泡沫'},{y:2008,label:'金融危机'},{y:2020,label:'新冠'}].forEach(({y,label})=>{
+    const xx=hcX+(y-1989)/(2025-1989)*hcW;
+    c.strokeStyle=EC.border+'80';c.lineWidth=0.5;c.setLineDash([3,3]);
+    c.beginPath();c.moveTo(xx,hcY);c.lineTo(xx,hcY+hcH);c.stroke();
+    c.setLineDash([]);
+    c.font=`8px ${F}`;c.fillStyle=EC.muted+'99';c.textAlign='center';c.fillText(label,xx,hcY+hcH+26);
+  });
+  c.textAlign='left';
+
+  // Nasdaq fill area
+  c.beginPath();
+  cumPts.forEach(([y,n],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(n);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+  c.lineTo(hcX+hcW,hcY+hcH);c.lineTo(hcX,hcY+hcH);c.closePath();
+  const nasFill=c.createLinearGradient(0,hcY,0,hcY+hcH);
+  nasFill.addColorStop(0,EC.blue+'55');nasFill.addColorStop(1,EC.blue+'08');
+  c.fillStyle=nasFill;c.fill();
+
+  // SP500 fill area
+  c.beginPath();
+  cumPts.forEach(([y,,s],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(s);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+  c.lineTo(hcX+hcW,hcY+hcH);c.lineTo(hcX,hcY+hcH);c.closePath();
+  const spFill=c.createLinearGradient(0,hcY,0,hcY+hcH);
+  spFill.addColorStop(0,EC.cyan+'40');spFill.addColorStop(1,EC.cyan+'05');
+  c.fillStyle=spFill;c.fill();
+
+  // Nasdaq line
+  c.strokeStyle=EC.blue;c.lineWidth=2.5;c.beginPath();
+  cumPts.forEach(([y,n],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(n);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+  c.stroke();
+
+  // SP500 line
+  c.strokeStyle=EC.cyan;c.lineWidth=2;c.beginPath();
+  cumPts.forEach(([y,,s],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(s);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+  c.stroke();
+
+  // ─── Section 4: 汇率影响剥离分析（2015年起）
+  const fxY=histY+HIST_H;
+  c.strokeStyle=EC.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fxY);c.lineTo(W,fxY);c.stroke();
+  c.fillStyle=EC.bg;c.fillRect(0,fxY,W,FX_H);
+
+  // Section title
+  c.font=`bold 16px ${F}`;c.fillStyle=EC.white;c.fillText('汇率影响剥离分析',PX,fxY+30);
+  c.font=`12px ${F}`;c.fillStyle=EC.muted;c.fillText('2015–2025  ·  人民币持有 vs 美元持有  ·  以100为基准，差距即汇率净贡献',PX,fxY+50);
+
+  // Compute FX-adjusted cumulative
+  const fxYrs=Object.keys(FX_ANNUAL).map(Number).sort();
+  let nuSD=100,nuCNY=100,suSD=100,suCNY=100;
+  const fxPts=[[2014,100,100,100,100]];
+  fxYrs.forEach(y=>{
+    const[startFX2,endFX]=FX_ANNUAL[y];
+    const fx=endFX/startFX2;
+    const nr=1+(INDEX_ANNUAL.nasdaq[y]||0)/100;
+    const sr=1+(INDEX_ANNUAL.sp500[y]||0)/100;
+    nuSD*=nr;nuCNY*=nr*fx;suSD*=sr;suCNY*=sr*fx;
+    fxPts.push([y,+nuSD.toFixed(1),+nuCNY.toFixed(1),+suSD.toFixed(1),+suCNY.toFixed(1)]);
+  });
+  const lastFX=fxPts[fxPts.length-1];
+  const nUSDv=lastFX[1],nCNYv=lastFX[2],sUSDv=lastFX[3],sCNYv=lastFX[4];
+  const nFXc=+(nCNYv-nUSDv).toFixed(1);
+  const sFXc=+(sCNYv-sUSDv).toFixed(1);
+
+  // Stat cards (4 across)
+  const statCard=(x,y,w,h,label,sub,val,col,bg)=>{
+    _rr(c,x,y,w,h,8);c.fillStyle=bg;c.fill();
+    c.strokeStyle=EC.border;c.lineWidth=0.5;c.stroke();
+    c.font=`bold 22px ${F}`;c.fillStyle=col;c.textAlign='center';c.fillText(val,x+w/2,y+38);
+    c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText(sub,x+w/2,y+55);
+    c.font=`bold 11px ${F}`;c.fillStyle=EC.white;c.fillText(label,x+w/2,y+75);
+    c.textAlign='left';
+  };
+  const scW=(W-PX*2-GAP*3)/4,scH=88,scY=fxY+64;
+  statCard(PX,scY,scW,scH,'纳指·美元累计',`+${(nUSDv-100).toFixed(0)}%`,`${nUSDv.toFixed(0)}`,EC.blue,EC.card);
+  statCard(PX+scW+GAP,scY,scW,scH,'纳指·人民币累计',`+${(nCNYv-100).toFixed(0)}%`,`${nCNYv.toFixed(0)}`,EC.blue,EC.card);
+  statCard(PX+(scW+GAP)*2,scY,scW,scH,'标普·美元累计',`+${(sUSDv-100).toFixed(0)}%`,`${sUSDv.toFixed(0)}`,EC.cyan,EC.card);
+  statCard(PX+(scW+GAP)*3,scY,scW,scH,'标普·人民币累计',`+${(sCNYv-100).toFixed(0)}%`,`${sCNYv.toFixed(0)}`,EC.cyan,EC.card);
+
+  // FX contribution labels
+  const fxCol=nFXc>=0?EC.green:EC.red;
+  const fxColS=sFXc>=0?EC.green:EC.red;
+  c.font=`11px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';
+  c.fillText(`纳指汇率贡献: ${nFXc>=0?'+':''}${nFXc}%`,PX+scW,scY+scH+16);
+  c.fillStyle=fxCol;c.fillText(nFXc>=0?'▲':'▼',PX+scW-20,scY+scH+16);
+  c.fillStyle=EC.muted;c.fillText(`标普汇率贡献: ${sFXc>=0?'+':''}${sFXc}%`,PX+(scW+GAP)*3,scY+scH+16);
+  c.fillStyle=fxColS;c.fillText(sFXc>=0?'▲':'▼',PX+(scW+GAP)*3-20,scY+scH+16);
+  c.textAlign='left';
+
+  // Mini dual line chart for FX divergence (纳指)
+  const fc2X=PX+44,fc2Y=fxY+176,fc2W=W/2-PX-60,fc2H=68;
+  const fc3X=W/2+16,fc3Y=fxY+176,fc3W=W/2-PX-36,fc3H=68;
+  const allVals2=[...fxPts.map(p=>p[1]),...fxPts.map(p=>p[2]),...fxPts.map(p=>p[3]),...fxPts.map(p=>p[4])];
+  const fvMin=Math.min(...allVals2)*0.95,fvMax=Math.max(...allVals2)*1.02;
+  const toFY=(v,top,h)=>top+h*(1-(v-fvMin)/(fvMax-fvMin));
+
+  const drawFXMini=(cx,cy,cw,ch,usdIdx,cnyIdx,col,titleStr)=>{
+    c.font=`bold 11px ${F}`;c.fillStyle=col;c.fillText(titleStr,cx,cy-4);
+    c.strokeStyle=EC.border+'50';c.lineWidth=0.5;
+    c.beginPath();c.moveTo(cx,cy);c.lineTo(cx,cy+ch);c.lineTo(cx+cw,cy+ch);c.stroke();
+    // USD line
+    c.strokeStyle=col;c.lineWidth=1.5;c.beginPath();
+    fxPts.forEach(([,nuSD2,nuCNY2,suSD2,suCNY2],i)=>{
+      const vals=[nuSD2,nuCNY2,suSD2,suCNY2];
+      const xx=cx+i/(fxPts.length-1)*cw;
+      const yy=toFY(vals[usdIdx],cy,ch);
+      if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);
+    });c.stroke();
+    // CNY line (dashed)
+    c.strokeStyle=EC.orange;c.lineWidth=1.5;c.setLineDash([4,3]);c.beginPath();
+    fxPts.forEach(([,nuSD2,nuCNY2,suSD2,suCNY2],i)=>{
+      const vals=[nuSD2,nuCNY2,suSD2,suCNY2];
+      const xx=cx+i/(fxPts.length-1)*cw;
+      const yy=toFY(vals[cnyIdx],cy,ch);
+      if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);
+    });c.stroke();c.setLineDash([]);
+    // year labels
+    c.font=`8px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';
+    [2015,2018,2021,2025].forEach((y,i)=>{
+      const idx=fxPts.findIndex(p=>p[0]===y);
+      if(idx<0)return;
+      const xx=cx+idx/(fxPts.length-1)*cw;
+      c.fillText(String(y),xx,cy+ch+12);
+    });
+    c.textAlign='left';
+    // legend
+    c.font=`9px ${F}`;c.fillStyle=col;c.fillText('美元',cx+cw+4,cy+10);
+    c.fillStyle=EC.orange;c.fillText('人民币',cx+cw+4,cy+24);
+  };
+  drawFXMini(fc2X,fc2Y,fc2W,fc2H,0,1,EC.blue,'纳指100  美元 vs 人民币');
+  drawFXMini(fc3X,fc3Y,fc3W,fc3H,2,3,EC.cyan,'标普500  美元 vs 人民币');
+
+  // Footer
+  const fy=H-FOOTER_H;
+  c.fillStyle=EC.head;c.fillRect(0,fy,W,FOOTER_H);
+  c.font=`12px ${F}`;c.fillStyle=EC.muted+'80';c.textAlign='center';
+  c.fillText('Wise-etf.org  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
+  c.textAlign='left';
+  return cvs;
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   if(window.location.pathname==="/admin") return <AdminPage/>;
@@ -1351,7 +1759,6 @@ export default function App() {
   const [statusFilter,setStatusFilter]=useState("all");
   const [selETF,setSelETF]=useState("513100");
   const [scrolled,setScrolled]=useState(false);
-  const [showBackToTop,setShowBackToTop]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
   const [showDisclaimer,setShowDisclaimer]=useState(()=>{
     if(typeof window!=="undefined"&&window.innerWidth<=768){
@@ -1360,9 +1767,13 @@ export default function App() {
     }
     return !localStorage.getItem("etf-disclaimer");
   });
+  const [exportPreview,setExportPreview]=useState(null); // { url, filename }
   const [showBriefing,setShowBriefing]=useState(()=>{
     if(!localStorage.getItem("etf-disclaimer")) return false;
-    return localStorage.getItem("briefing_date")!==new Date().toDateString();
+    if(localStorage.getItem("group_chat_no_show")===new Date().toDateString()) return false;
+    const last=localStorage.getItem("group_chat_last_shown");
+    if(!last) return true;
+    return Date.now()-parseInt(last)>3*60*60*1000;
   });
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
   const [lastUpdate,setLastUpdate]=useState(null);
@@ -1404,7 +1815,7 @@ export default function App() {
   });
 
   useEffect(()=>{
-    const h=()=>{setScrolled(window.scrollY>8);setShowBackToTop(window.scrollY>400);};
+    const h=()=>{setScrolled(window.scrollY>8);};
     window.addEventListener("scroll",h,{passive:true});
     return()=>window.removeEventListener("scroll",h);
   },[]);
@@ -1547,6 +1958,100 @@ export default function App() {
   const activeM = useMemo(()=>mergeLive(active),[active,mergeLive]);
   const etfsM   = useMemo(()=>mergeLive(etfs),  [etfs,  mergeLive]);
 
+  // ── 申购上限排序（高→低，暂停在底）
+  const byLimit = useCallback((arr)=>{
+    const parse=s=>{
+      if(!s||s==='暂停申购') return -1;
+      if(s==='不限额') return 9999999;
+      return parseFloat(s)||0;
+    };
+    return [...arr].sort((a,b)=>parse(b.daily_limit)-parse(a.daily_limit));
+  },[]);
+
+  // ── Export handlers（放在 nasdaqM 之后才能引用）
+  const handleExport = useCallback(()=>{
+    const cvs = drawOverviewCanvas({nasdaq:nasdaqM, sp500:sp500M, active:activeM, etfs:etfsM, usdcny});
+    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+    setExportPreview({url:cvs.toDataURL('image/png'), filename:`wise-etf-overview-${today.replace(/\//g,'-')}.png`});
+  },[nasdaqM, sp500M, activeM, etfsM, usdcny]);
+
+  const handleExportNasdaqTable = useCallback(()=>{
+    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const cols=[
+      {label:'A类代码',    key:'code',        w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
+      {label:'基金名称',   key:'name',        w:262,render:v=>({text:v,color:'#0f172a'})},
+      {label:'C类代码',    key:'code_c',      w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
+      {label:'总费率',     key:'fee_rate',    w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.8?'#e85d04':'#374151'})},
+      {label:'规模(亿)',   key:'scale',       w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
+      {label:'25年涨幅',   key:'ytd_return',  w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
+      {label:'昨日涨幅',   key:'day_change',  w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
+      {label:'跟踪误差',   key:'track_error', w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
+      {label:'每日申购上限',key:'daily_limit', w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+      {label:'申购状态',   key:'buy_status',  w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
+    ];
+    const cvs=drawTableCanvas({titleParts:[
+      {text:'场外',color:'#0f172a'},{text:'纳斯达克',color:'#e85d04'},{text:'（被动型）基金对比',color:'#0f172a'}
+    ],date:today,cols,rows:byLimit(nasdaqM)});
+    setExportPreview({url:cvs.toDataURL('image/png'),filename:`wise-etf-nasdaq-${today.replace(/\//g,'-')}.png`});
+  },[nasdaqM, byLimit]);
+
+  const handleExportSP500ETFTable = useCallback(()=>{
+    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const passiveCols=[
+      {label:'A类代码',    key:'code',        w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
+      {label:'基金名称',   key:'name',        w:260,render:v=>({text:v,color:'#0f172a'})},
+      {label:'C类代码',    key:'code_c',      w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
+      {label:'总费率',     key:'fee_rate',    w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.9?'#e85d04':'#374151'})},
+      {label:'规模(亿)',   key:'scale',       w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
+      {label:'25年涨幅',   key:'ytd_return',  w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
+      {label:'昨日涨幅',   key:'day_change',  w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
+      {label:'跟踪误差',   key:'track_error', w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
+      {label:'每日申购上限',key:'daily_limit', w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+      {label:'申购状态',   key:'buy_status',  w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
+    ];
+    const etfCols=[
+      {label:'代码',       key:'code',           w:76,render:v=>({text:v,color:'#1a56db',bold:true})},
+      {label:'ETF名称',    key:'name',           w:238,render:v=>({text:v,color:'#0f172a'})},
+      {label:'跟踪指数',   key:'tracking_index', w:150,render:v=>({text:v||'—',color:'#6b7280'})},
+      {label:'总费率',     key:'fee_rate',       w:70,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>=1.0?'#e85d04':'#374151'})},
+      {label:'规模(亿)',   key:'scale',          w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
+      {label:'近1年涨幅',  key:'ytd_return',     w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
+      {label:'溢价率',     key:'premium',        w:80,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.5?'#e85d04':v>0?'#374151':'#9ca3af'})},
+      {label:'日均成交(亿)',key:'volume',         w:96,right:true,render:v=>({text:v??'—',color:'#374151'})},
+      {label:'交易方式',   key:'buy_status',     w:86,render:()=>({text:'场内交易',pill:true,pillBg:'#dbeafe',color:'#1a56db'})},
+    ];
+    const c1=drawTableCanvas({titleParts:[
+      {text:'场外',color:'#0f172a'},{text:'标普500',color:'#dc2626'},{text:'基金对比',color:'#0f172a'}
+    ],date:today,cols:passiveCols,rows:byLimit(sp500M)});
+    const c2=drawTableCanvas({titleParts:[
+      {text:'场内',color:'#0f172a'},{text:'ETF',color:'#1a56db'},{text:'（纳指 / 标普）',color:'#0f172a'}
+    ],date:today,cols:etfCols,rows:etfsM});
+    const GAP=32,W=c1.width;
+    const combined=document.createElement('canvas');
+    combined.width=W;combined.height=c1.height+GAP+c2.height;
+    const ctx=combined.getContext('2d');
+    ctx.fillStyle='#FFFFFF';ctx.fillRect(0,0,combined.width,combined.height);
+    ctx.drawImage(c1,0,0);ctx.drawImage(c2,0,c1.height+GAP);
+    setExportPreview({url:combined.toDataURL('image/png'),filename:`wise-etf-sp500-etf-${today.replace(/\//g,'-')}.png`});
+  },[sp500M, etfsM, byLimit]);
+
+  const handleExportActiveTable = useCallback(()=>{
+    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const cols=[
+      {label:'基金代码',   key:'code',        w:80,render:v=>({text:v,color:'#7c3aed',bold:true})},
+      {label:'基金名称',   key:'name',        w:316,render:v=>({text:v,color:'#0f172a'})},
+      {label:'运作费率',   key:'fee_rate',    w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.4?'#e85d04':'#374151'})},
+      {label:'规模(亿)',   key:'scale',       w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
+      {label:'近1年涨幅',  key:'ytd_return',  w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
+      {label:'每日申购上限',key:'daily_limit', w:120,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+      {label:'申购状态',   key:'buy_status',  w:102,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
+    ];
+    const cvs=drawTableCanvas({titleParts:[
+      {text:'场外',color:'#0f172a'},{text:'美股',color:'#dc2626'},{text:'（主动型）基金对比',color:'#0f172a'}
+    ],date:today,cols,rows:activeM});
+    setExportPreview({url:cvs.toDataURL('image/png'),filename:`wise-etf-active-${today.replace(/\//g,'-')}.png`});
+  },[activeM]);
+
   const maxReturn  = Math.max(...[...nasdaqM,...sp500M,...activeM].map(f=>f.ytd_return||0));
 
   const actionsCol=(accent)=>({key:"_act",label:"",sortable:false,align:"center",render:(_,row)=>{
@@ -1639,6 +2144,29 @@ export default function App() {
     <>
     <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif",overflowX:"hidden"}}>
       {showDisclaimer&&<DisclaimerModal onClose={dismissDisclaimer}/>}
+      {/* 导出预览弹窗 */}
+      {exportPreview&&(
+        <div onClick={()=>setExportPreview(null)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(8px)",padding:24}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:"#1c1c1e",borderRadius:20,padding:20,display:"flex",flexDirection:"column",alignItems:"center",gap:16,maxHeight:"90vh"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%"}}>
+              <span style={{fontSize:15,fontWeight:700,color:"#fff"}}>预览</span>
+              <button onClick={()=>setExportPreview(null)}
+                style={{width:28,height:28,borderRadius:"50%",border:"none",background:"#3a3a3c",color:"#fff",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+            </div>
+            <img src={exportPreview.url} alt="导出预览"
+              style={{maxHeight:"calc(90vh - 140px)",maxWidth:"100%",borderRadius:12,objectFit:"contain"}}/>
+            <a href={exportPreview.url} download={exportPreview.filename}
+              style={{display:"flex",alignItems:"center",gap:8,padding:"11px 32px",borderRadius:12,background:"linear-gradient(135deg,#007aff,#5856d6)",color:"#fff",fontSize:14,fontWeight:700,textDecoration:"none",letterSpacing:0.2}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              下载图片
+            </a>
+          </div>
+        </div>
+      )}
       {/* 微信公众号二维码弹窗 */}
       {showWechat&&(
         <div onClick={()=>setShowWechat(false)}
@@ -1662,7 +2190,55 @@ export default function App() {
       {showBriefing&&!showDisclaimer&&(
         <GroupChatModal onClose={()=>setShowBriefing(false)}/>
       )}
-      <BackToTop visible={showBackToTop} offset={compareList.length>0?84:32}/>
+      {/* 导出图片按钮（仅 overview 时显示） */}
+      {activeTab==="overview"&&!isMobile&&(
+        <button onClick={handleExport}
+          title="导出今日快照"
+          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#007aff,#5856d6)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(0,122,255,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
+          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(0,122,255,0.45)";}}
+          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(0,122,255,0.35)";}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          导出图片
+        </button>
+      )}
+      {activeTab==="nasdaq"&&!isMobile&&(
+        <button onClick={handleExportNasdaqTable}
+          title="导出纳指表格"
+          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#007aff,#5856d6)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(0,122,255,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
+          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(0,122,255,0.45)";}}
+          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(0,122,255,0.35)";}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          导出纳指表格
+        </button>
+      )}
+      {(activeTab==="sp500"||activeTab==="etf")&&!isMobile&&(
+        <button onClick={handleExportSP500ETFTable}
+          title="导出标普+ETF"
+          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#14c8b4,#007aff)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(20,200,180,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
+          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(20,200,180,0.45)";}}
+          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(20,200,180,0.35)";}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          导出标普+ETF
+        </button>
+      )}
+      {activeTab==="active"&&!isMobile&&(
+        <button onClick={handleExportActiveTable}
+          title="导出主动型基金表格"
+          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#a04cf5,#5856d6)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(160,76,245,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
+          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(160,76,245,0.45)";}}
+          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(160,76,245,0.35)";}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          导出主动型表格
+        </button>
+      )}
 
       {/* ── Header ── */}
       <header style={{
