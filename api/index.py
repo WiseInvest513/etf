@@ -378,6 +378,111 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
     return result
 
 
+# ─── 市场情绪数据源 ──────────────────────────────────────────────────────────────
+
+def fetch_vix() -> dict:
+    """从 CBOE 官方 API 获取 VIX 恐慌指数（实时，官方权威数据源）"""
+    try:
+        url = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
+        resp = _get(url, timeout=(4, 10), headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        })
+        if not (resp and resp.ok):
+            return {}
+        d = resp.json().get("data", {})
+        price = d.get("current_price")
+        if not price:
+            return {}
+        ts = d.get("last_trade_time", "")[:10]
+        return {
+            "value": round(float(price), 2),
+            "change": round(float(d.get("price_change", 0)), 2),
+            "change_pct": round(float(d.get("price_change_percent", 0)), 2),
+            "date": ts,
+        }
+    except Exception as e:
+        logger.warning(f"[vix] {e}")
+    return {}
+
+def fetch_fear_greed() -> dict:
+    """从 CNN 获取恐慌贪婪指数"""
+    try:
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        resp = _get(url, timeout=(4, 12), headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+        })
+        if not (resp and resp.ok):
+            return {}
+        fg = resp.json().get("fear_and_greed", {})
+        prev_close = fg.get("previous_close")
+        prev_week  = fg.get("previous_1_week")
+        return {
+            "score": round(float(fg.get("score", 0)), 1),
+            "rating": fg.get("rating", ""),
+            "previous_close": round(float(prev_close), 1) if prev_close is not None else None,
+            "previous_1_week": round(float(prev_week), 1) if prev_week is not None else None,
+        }
+    except Exception as e:
+        logger.warning(f"[fear_greed] {e}")
+    return {}
+
+def fetch_sp500_pe() -> dict:
+    """从 multpl.com 获取 S&P 500 当前市盈率，结合历史年度 PE 分布计算分位。
+    当前 PE：multpl.com（Standard & Poor's），实时更新；
+    历史分位：使用 1950–2025 年度 PE 数据（来源同 multpl.com）。
+    """
+    # S&P 500 年度 PE 历史分布（1950–2025，来源：multpl.com / S&P Global）
+    # 用于计算当前估值的历史分位（越低越便宜）
+    _PE_HIST = [
+        7.73, 7.45, 11.33, 11.04, 12.46, 12.45, 14.57, 15.26, 12.97, 17.66,  # 1950–1959
+        18.02, 22.37, 22.76, 18.98, 21.06, 20.31, 19.87, 16.77, 17.27, 19.07,  # 1960–1969
+        17.23, 17.23, 18.91, 17.82, 13.74,  7.35, 11.74, 11.58,  8.47,  7.58,  # 1970–1979
+         7.35,  8.14,  9.14, 12.58, 11.18, 13.86, 15.04, 21.24, 14.84, 12.74,  # 1980–1989
+        15.57, 26.12, 25.81, 21.30, 17.32, 16.01, 18.95, 22.38, 27.95, 33.48,  # 1990–1999
+        30.44, 45.84, 46.50, 31.89, 22.73, 20.57, 17.85, 17.36, 21.46, 70.91,  # 2000–2009
+        18.11, 16.31, 14.87, 17.38, 18.15, 20.02, 24.21, 25.59, 24.79, 21.15,  # 2010–2019
+        26.23, 40.15, 29.27, 21.63, 26.12, 28.77,                               # 2020–2025
+    ]
+    try:
+        url = "https://www.multpl.com/s-p-500-pe-ratio/table/by-month"
+        resp = _get(url, timeout=(4, 15), headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        })
+        if not (resp and resp.ok):
+            return {}
+        import re as _re
+        cells = _re.findall(r"<td[^>]*>([\s\S]*?)</td>", resp.text)
+        def strip_tags(s):
+            return _re.sub(r"<[^>]+>", "", s).strip()
+        texts = [strip_tags(c) for c in cells]
+        current_pe = None
+        i = 0
+        while i < len(texts) - 1:
+            date_t = texts[i]
+            val_t  = texts[i + 1]
+            if _re.match(r"\w+\s+\d+,?\s*\d{4}", date_t):
+                m = _re.search(r"(\d+\.?\d*)", val_t)
+                if m:
+                    v = float(m.group(1))
+                    if 3.0 < v < 150.0:  # 有效 PE 范围
+                        current_pe = v
+                        break
+            i += 1
+        if current_pe is None:
+            return {}
+        rank = sum(1 for x in _PE_HIST if x <= current_pe)
+        percentile = round(rank / len(_PE_HIST) * 100)
+        return {"pe": round(current_pe, 1), "percentile": percentile}
+    except Exception as e:
+        logger.warning(f"[sp500_pe] {e}")
+    return {}
+
+
 def _yf_monthly(symbol: str) -> dict:
     url  = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     resp = _get(url, params={"interval": "1mo", "range": "11y"},
@@ -1080,3 +1185,36 @@ def get_live_data(response: Response):
 
     _cache_header(response, 43200)
     return {"data": data, "source": "live" if data else "empty"}
+
+
+@app.get("/api/market-sentiment")
+def get_market_sentiment(response: Response):
+    """市场情绪：VIX 恐慌指数 + CNN 恐慌贪婪指数 + S&P500 PE分位（15min缓存）"""
+    cache_key = "market_sentiment"
+    cached = _mem_get(cache_key, "news")
+    if cached is not None:
+        _cache_header(response, 900)
+        return {"data": cached, "source": "cache"}
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_vix = ex.submit(fetch_vix)
+        f_fg  = ex.submit(fetch_fear_greed)
+        f_pe  = ex.submit(fetch_sp500_pe)
+        try:
+            vix = f_vix.result(timeout=15)
+        except Exception:
+            vix = {}
+        try:
+            fg = f_fg.result(timeout=15)
+        except Exception:
+            fg = {}
+        try:
+            pe = f_pe.result(timeout=15)
+        except Exception:
+            pe = {}
+
+    data = {"vix": vix, "fear_greed": fg, "pe": pe}
+    if any(v for v in data.values()):
+        _cache_set(cache_key, data, 15 * 60)
+    _cache_header(response, 900)
+    return {"data": data, "source": "live" if any(data.values()) else "empty"}

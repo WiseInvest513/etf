@@ -255,6 +255,67 @@ function StatCard({label,value,sub,color=C.accent,index=0}) {
   );
 }
 
+// ─── SentimentCard ────────────────────────────────────────────────────────────
+function SentimentCard({title, value, label, sub, color, barPct, index=0}) {
+  const [h,hProps] = useHover();
+  return (
+    <div {...hProps} style={{
+      background:C.card, border:`1px solid ${h?C.borderLight:C.border}`,
+      borderRadius:18, padding:"20px 24px", flex:1, minWidth:200,
+      position:"relative", overflow:"hidden",
+      boxShadow:h?"0 12px 40px rgba(0,0,0,0.10)":"0 2px 16px rgba(0,0,0,0.06)",
+      transform:h?"translateY(-4px)":"translateY(0)",
+      transition:"all 0.28s ease",
+      animationDelay:`${index*0.08}s`,
+    }}>
+      <div style={{position:"absolute",top:-20,right:-20,width:80,height:80,borderRadius:"50%",background:color+"08"}}/>
+      <div style={{position:"absolute",bottom:0,left:0,height:2,width:h?"100%":"0%",background:`linear-gradient(90deg,${color},${color}60)`,transition:"width 0.4s ease",borderRadius:"0 0 0 18px"}}/>
+      <div style={{fontSize:11,color:C.textDim,marginBottom:8,letterSpacing:0.8,textTransform:"uppercase",fontWeight:600}}>{title}</div>
+      <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:10}}>
+        <div style={{fontSize:28,fontWeight:800,color,letterSpacing:-1}}>{value??'--'}</div>
+        {label&&<div style={{fontSize:13,fontWeight:700,color,background:color+"18",padding:"2px 10px",borderRadius:20}}>{label}</div>}
+      </div>
+      {barPct!=null&&(
+        <div style={{marginBottom:8}}>
+          <div style={{height:5,background:C.borderLight,borderRadius:3,overflow:"hidden",position:"relative"}}>
+            <div style={{position:"absolute",left:0,top:0,height:"100%",borderRadius:3,width:`${Math.min(Math.max(barPct,0),100)}%`,background:`linear-gradient(90deg,${C.green},${C.orange} 50%,${C.red})`,transition:"width 0.8s ease"}}/>
+            <div style={{position:"absolute",top:-2,height:9,width:3,borderRadius:2,background:color,left:`calc(${Math.min(Math.max(barPct,0),100)}% - 1.5px)`,transition:"left 0.8s ease",boxShadow:`0 0 6px ${color}`}}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:10,color:C.textDim}}>
+            <span>0</span><span>50</span><span>100</span>
+          </div>
+        </div>
+      )}
+      {sub&&<div style={{fontSize:12,color:C.textMuted,marginTop:2}}>{sub}</div>}
+    </div>
+  );
+}
+
+function MarketSentimentRow({sentiment, isMobile}) {
+  const vix = sentiment?.vix;
+  const fg  = sentiment?.fear_greed;
+  const pe  = sentiment?.pe;
+  const vixColor = !vix ? C.textDim : vix.value>=40 ? C.red : vix.value>=30 ? "#ff6b35" : vix.value>=20 ? C.orange : C.green;
+  const vixLabel = !vix ? '--' : vix.value>=40 ? '极度恐慌' : vix.value>=30 ? '高度恐慌' : vix.value>=20 ? '市场警惕' : vix.value>=12 ? '相对平静' : '极度平静';
+  const vixChg = vix?.change_pct;
+  const vixSub = vix ? `CBOE官方 · ${vixChg!=null?(vixChg>=0?'+':'')+vixChg+'%':''} 今日` : '数据加载中…';
+  const fgScore = fg?.score;
+  const fgColor = fgScore==null ? C.textDim : fgScore<=25 ? C.red : fgScore<=45 ? C.orange : fgScore<=55 ? C.textMuted : fgScore<=75 ? C.green : "#1a9e4a";
+  const fgLabelMap = {'extreme fear':'极度恐慌','fear':'恐慌','neutral':'中性','greed':'贪婪','extreme greed':'极度贪婪'};
+  const fgLabel = fg ? (fgLabelMap[(fg.rating||'').toLowerCase()]||fg.rating) : '--';
+  const fgSub = fg?.previous_close!=null ? `昨收 ${fg.previous_close} · 上周 ${fg.previous_1_week??'--'}` : '数据加载中…';
+  const peColor = !pe ? C.textDim : pe.percentile>=85 ? C.red : pe.percentile>=70 ? C.orange : pe.percentile>=45 ? C.textMuted : C.green;
+  const peLabel = !pe ? '--' : pe.percentile>=85 ? '高估' : pe.percentile>=70 ? '偏高' : pe.percentile>=45 ? '合理' : '低估';
+  const peSub = pe ? `历史${pe.percentile}%分位 · 来源 multpl.com` : '数据加载中…';
+  return (
+    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(3,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:28}}>
+      <SentimentCard title="VIX 恐慌指数" value={vix?vix.value:'--'} label={vixLabel} color={vixColor} barPct={vix?Math.min(vix.value/60*100,100):null} sub={vixSub} index={0}/>
+      <SentimentCard title="CNN 恐慌贪婪指数" value={fgScore!=null?fgScore:'--'} label={fgLabel} color={fgColor} barPct={fgScore!=null?fgScore:null} sub={fgSub} index={1}/>
+      <SentimentCard title="标普500 PE分位" value={pe?`${pe.pe}x`:'--'} label={peLabel} color={peColor} barPct={pe?pe.percentile:null} sub={peSub} index={2}/>
+    </div>
+  );
+}
+
 // ─── Mini bar for table ───────────────────────────────────────────────────────
 function MiniBar({value, max, color}) {
   const pct = Math.min(Math.abs(value)/max*100,100);
@@ -1779,6 +1840,7 @@ export default function App() {
   const [lastUpdate,setLastUpdate]=useState(null);
   const [dataLoading,setDataLoading]=useState(false);
   const [usdcny,setUsdcny]=useState(null);
+  const [sentiment,setSentiment]=useState(null);
   const [compareList,setCompareList]=useState([]);
   const [showCompare,setShowCompare]=useState(false);
   const [showWechat,setShowWechat]=useState(false);
@@ -1835,6 +1897,8 @@ export default function App() {
     apiFetch("/overview").then(ov=>{ if(ov?.last_update) setLastUpdate(ov.last_update); });
     // 拉取场内ETF实时行情（含溢价率），以 FALLBACK 为兜底
     apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
+    // 拉取市场情绪指标
+    apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
   },[]);
 
   // ── 实时行情（day_change / rolling_1y / buy_status / daily_limit）
@@ -2385,6 +2449,9 @@ export default function App() {
                 {label:"监控总数",value:String(totalFunds),sub:`${openFunds}只可申购`,color:C.green},
               ].map((s,i)=><StatCard key={s.label} {...s} index={i}/>)}
             </div>
+
+            {/* ── 市场情绪指标 ── */}
+            <MarketSentimentRow sentiment={sentiment} isMobile={isMobile}/>
 
             {/* Charts */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?16:28}}>
