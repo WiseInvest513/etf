@@ -307,11 +307,16 @@ function MarketSentimentRow({sentiment, isMobile}) {
   const peColor = !pe ? C.textDim : pe.percentile>=85 ? C.red : pe.percentile>=70 ? C.orange : pe.percentile>=45 ? C.textMuted : C.green;
   const peLabel = !pe ? '--' : pe.percentile>=85 ? '高估' : pe.percentile>=70 ? '偏高' : pe.percentile>=45 ? '合理' : '低估';
   const peSub = pe ? `历史${pe.percentile}%分位 · 来源 multpl.com` : '数据加载中…';
+  const nqPe = sentiment?.nasdaq_pe;
+  const nqPeColor = !nqPe ? C.textDim : nqPe.percentile>=85 ? C.red : nqPe.percentile>=70 ? C.orange : nqPe.percentile>=45 ? C.textMuted : C.green;
+  const nqPeLabel = !nqPe ? '--' : nqPe.percentile>=85 ? '高估' : nqPe.percentile>=70 ? '偏高' : nqPe.percentile>=45 ? '合理' : '低估';
+  const nqPeSub = nqPe ? `估算分位${nqPe.percentile}% · stockanalysis.com` : '数据加载中…';
   return (
-    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(3,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:28}}>
+    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:28}}>
       <SentimentCard title="VIX 恐慌指数" value={vix?vix.value:'--'} label={vixLabel} color={vixColor} barPct={vix?Math.min(vix.value/60*100,100):null} sub={vixSub} index={0}/>
       <SentimentCard title="CNN 恐慌贪婪指数" value={fgScore!=null?fgScore:'--'} label={fgLabel} color={fgColor} barPct={fgScore!=null?fgScore:null} sub={fgSub} index={1}/>
       <SentimentCard title="标普500 PE分位" value={pe?`${pe.pe}x`:'--'} label={peLabel} color={peColor} barPct={pe?pe.percentile:null} sub={peSub} index={2}/>
+      <SentimentCard title="纳斯达克100 PE分位" value={nqPe?`${nqPe.pe}x`:'--'} label={nqPeLabel} color={nqPeColor} barPct={nqPe?nqPe.percentile:null} sub={nqPeSub} index={3}/>
     </div>
   );
 }
@@ -2725,7 +2730,7 @@ export default function App() {
               {[
                 {label:"投资主站",   href:"https://www.wise-invest.org",  icon:"🌐"},
                 {label:"Wise-Witness",href:"https://www.wise-witness.com",icon:"🏦"},
-                {label:"Wise-Claw",  href:"https://www.wise-claw.org",    icon:"🦁"},
+                {label:"Wise-Hold",  href:"https://www.wise-hold.com",    icon:"📈"},
                 {label:"Wise-SIM",   href:"https://www.wise-sim.org",     icon:"📱"},
               ].map(l=>(
                 <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer"

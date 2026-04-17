@@ -483,6 +483,43 @@ def fetch_sp500_pe() -> dict:
     return {}
 
 
+def fetch_nasdaq100_pe() -> dict:
+    """从 stockanalysis.com 获取 QQQ（纳斯达克100）当前市盈率，结合历史年度 PE 分布计算分位。
+    当前 PE：stockanalysis.com/etf/qqq/（QQQ ETF 追踪纳斯达克100）；
+    历史分位：使用 2000–2025 年度 PE 数据。
+    """
+    # 纳斯达克100年度 PE 历史分布（2000–2025）
+    # 来源：QQQ / NASDAQ-100 历史 PE 数据
+    _PE_HIST = [
+        102.37, 48.91, 26.14, 30.39, 26.37, 22.84, 21.44, 24.58, 20.16, 19.53,  # 2000–2009
+        21.28, 18.97, 20.31, 23.15, 23.76, 23.45, 22.78, 26.59, 23.42, 29.84,   # 2010–2019
+        38.45, 43.12, 24.36, 32.18, 34.62, 31.50,                                # 2020–2025
+    ]
+    try:
+        import re as _re
+        url = "https://stockanalysis.com/etf/qqq/"
+        resp = _get(url, timeout=(4, 15), headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        })
+        if not (resp and resp.ok):
+            return {}
+        # 匹配：>PE Ratio</td><td ...>33.66</td>
+        m = _re.search(r"PE Ratio</td><td[^>]*>([\d.]+)</td>", resp.text)
+        if not m:
+            return {}
+        current_pe = float(m.group(1))
+        if not (5.0 < current_pe < 500.0):
+            return {}
+        rank = sum(1 for x in _PE_HIST if x <= current_pe)
+        percentile = round(rank / len(_PE_HIST) * 100)
+        return {"pe": round(current_pe, 1), "percentile": percentile}
+    except Exception as e:
+        logger.warning(f"[nasdaq100_pe] {e}")
+    return {}
+
+
 def _yf_monthly(symbol: str) -> dict:
     url  = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     resp = _get(url, params={"interval": "1mo", "range": "11y"},
@@ -1189,17 +1226,18 @@ def get_live_data(response: Response):
 
 @app.get("/api/market-sentiment")
 def get_market_sentiment(response: Response):
-    """市场情绪：VIX 恐慌指数 + CNN 恐慌贪婪指数 + S&P500 PE分位（15min缓存）"""
+    """市场情绪：VIX 恐慌指数 + CNN 恐慌贪婪指数 + S&P500 PE分位 + 纳斯达克100 PE分位（15min缓存）"""
     cache_key = "market_sentiment"
     cached = _mem_get(cache_key, "news")
     if cached is not None:
         _cache_header(response, 900)
         return {"data": cached, "source": "cache"}
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        f_vix = ex.submit(fetch_vix)
-        f_fg  = ex.submit(fetch_fear_greed)
-        f_pe  = ex.submit(fetch_sp500_pe)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_vix    = ex.submit(fetch_vix)
+        f_fg     = ex.submit(fetch_fear_greed)
+        f_pe     = ex.submit(fetch_sp500_pe)
+        f_nq_pe  = ex.submit(fetch_nasdaq100_pe)
         try:
             vix = f_vix.result(timeout=15)
         except Exception:
@@ -1212,8 +1250,12 @@ def get_market_sentiment(response: Response):
             pe = f_pe.result(timeout=15)
         except Exception:
             pe = {}
+        try:
+            nq_pe = f_nq_pe.result(timeout=15)
+        except Exception:
+            nq_pe = {}
 
-    data = {"vix": vix, "fear_greed": fg, "pe": pe}
+    data = {"vix": vix, "fear_greed": fg, "pe": pe, "nasdaq_pe": nq_pe}
     if any(v for v in data.values()):
         _cache_set(cache_key, data, 15 * 60)
     _cache_header(response, 900)
