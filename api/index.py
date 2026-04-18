@@ -15,6 +15,20 @@ Wise-ETF Serverless API  v4.0
 """
 
 import json, os, re, logging, time, xml.etree.ElementTree as ET
+
+# 加载 .env.local（本地开发环境）
+def _load_env_local():
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env.local")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+_load_env_local()
 import urllib3; urllib3.disable_warnings()
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
@@ -379,6 +393,80 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
 
 
 # ─── 市场情绪数据源 ──────────────────────────────────────────────────────────────
+
+def fetch_index_price(symbol: str) -> dict:
+    """从 Yahoo Finance 获取指数实时点位 + 多周期涨幅 + 近15日历史"""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        resp = _get(url, params={"interval": "1d", "range": "1y"}, headers=YF_HEADERS, timeout=(4, 15))
+        if not (resp and resp.ok):
+            return {}
+        result = resp.json()["chart"]["result"][0]
+        meta   = result["meta"]
+        price  = meta.get("regularMarketPrice")
+        if not price:
+            return {}
+        price = float(price)
+        timestamps = result.get("timestamp", [])
+        closes_raw = result["indicators"]["quote"][0].get("close", [])
+        # 过滤空值
+        pairs = [(ts, float(c)) for ts, c in zip(timestamps, closes_raw) if c is not None]
+        if not pairs:
+            return {}
+        # 多周期涨幅：从末尾往前数交易日
+        def pct(n):
+            if len(pairs) < n + 1:
+                return None
+            base = pairs[-n][1]
+            return round((price - base) / base * 100, 2) if base else None
+        def yr1():
+            if len(pairs) < 2:
+                return None
+            base = pairs[0][1]
+            return round((price - base) / base * 100, 2) if base else None
+        returns = {
+            "d15":  pct(15),
+            "mo1":  pct(21),
+            "mo6":  pct(126),
+            "yr1":  yr1(),
+        }
+        # 近15日历史（用于图表）
+        history = [
+            {"date": datetime.utcfromtimestamp(ts).strftime("%m/%d"), "close": round(c, 2)}
+            for ts, c in pairs[-15:]
+        ]
+        # 今日涨跌（用 regularMarketPreviousClose/previousClose，避免 chartPreviousClose 取到年初价格）
+        prev = meta.get("regularMarketPreviousClose") or meta.get("previousClose") or (pairs[-2][1] if len(pairs) >= 2 else None)
+        change_pct = round((price - float(prev)) / float(prev) * 100, 2) if prev else None
+        # 连涨/连跌天数（从最近一天往前数）
+        closes_all = [c for _, c in pairs]
+        streak = 0
+        for i in range(len(closes_all) - 1, 0, -1):
+            diff = closes_all[i] - closes_all[i - 1]
+            if streak == 0:
+                streak = 1 if diff > 0 else -1
+            elif (streak > 0 and diff > 0) or (streak < 0 and diff < 0):
+                streak += (1 if streak > 0 else -1)
+            else:
+                break
+        # 近1年最高点 / 最低点
+        yr_high = round(max(closes_all), 2)
+        yr_low  = round(min(closes_all), 2)
+        pct_from_high = round((price - yr_high) / yr_high * 100, 2) if yr_high else None
+        return {
+            "price": round(price, 2),
+            "change_pct": change_pct,
+            "returns": returns,
+            "history": history,
+            "streak": streak,          # 正=连涨N天，负=连跌N天
+            "yr_high": yr_high,
+            "yr_low": yr_low,
+            "pct_from_high": pct_from_high,  # 距年内高点的差距
+        }
+    except Exception as e:
+        logger.warning(f"[index_price:{symbol}] {e}")
+    return {}
+
 
 def fetch_vix() -> dict:
     """从 CBOE 官方 API 获取 VIX 恐慌指数（实时，官方权威数据源）"""
@@ -1233,11 +1321,13 @@ def get_market_sentiment(response: Response):
         _cache_header(response, 900)
         return {"data": cached, "source": "cache"}
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         f_vix    = ex.submit(fetch_vix)
         f_fg     = ex.submit(fetch_fear_greed)
         f_pe     = ex.submit(fetch_sp500_pe)
         f_nq_pe  = ex.submit(fetch_nasdaq100_pe)
+        f_ndx    = ex.submit(fetch_index_price, "^NDX")
+        f_spx    = ex.submit(fetch_index_price, "^GSPC")
         try:
             vix = f_vix.result(timeout=15)
         except Exception:
@@ -1254,9 +1344,121 @@ def get_market_sentiment(response: Response):
             nq_pe = f_nq_pe.result(timeout=15)
         except Exception:
             nq_pe = {}
+        try:
+            ndx_price = f_ndx.result(timeout=15)
+        except Exception:
+            ndx_price = {}
+        try:
+            spx_price = f_spx.result(timeout=15)
+        except Exception:
+            spx_price = {}
 
-    data = {"vix": vix, "fear_greed": fg, "pe": pe, "nasdaq_pe": nq_pe}
+    data = {"vix": vix, "fear_greed": fg, "pe": pe, "nasdaq_pe": nq_pe, "ndx_price": ndx_price, "spx_price": spx_price}
     if any(v for v in data.values()):
         _cache_set(cache_key, data, 15 * 60)
     _cache_header(response, 900)
     return {"data": data, "source": "live" if any(data.values()) else "empty"}
+
+
+def _call_deepseek(prompt: str) -> str:
+    """调用 DeepSeek API（兼容 OpenAI 格式）"""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return ""
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 800,
+                "temperature": 0.4,
+            },
+            timeout=(5, 30),
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.warning(f"[deepseek] {e}")
+    return ""
+
+
+@app.get("/api/market-ai-insight")
+def get_market_ai_insight(response: Response):
+    """DeepSeek AI 市场深度解读（缓存2小时）"""
+    cache_key = "market_ai_insight"
+    cached = _mem_get(cache_key, "news")
+    if cached is not None:
+        _cache_header(response, 7200)
+        return {"data": cached, "source": "cache"}
+
+    # 获取最新指数数据
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_ndx = ex.submit(fetch_index_price, "^NDX")
+        f_spx = ex.submit(fetch_index_price, "^GSPC")
+        ndx = f_ndx.result(timeout=20)
+        spx = f_spx.result(timeout=20)
+
+    if not ndx or not spx:
+        return {"data": None, "source": "empty"}
+
+    def fmt(v, suffix=""):
+        if v is None: return "暂无"
+        sign = "+" if v >= 0 else ""
+        return f"{sign}{v}{suffix}"
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    # ── Step 1：让 AI 先提炼客观数据洞察 ──────────────────────────────────────
+    step1_prompt = f"""根据以下美股市场数据，用1-2句话提炼出4个最值得关注的积极事实，重点关注：
+长期牛市趋势的延续性、连涨天数体现的强势动能、双指数携手走强的健康格局、科技股领涨的结构性机会。
+只输出4条简短的正向事实陈述，每条一行，不需要标题或编号。
+
+数据（{today}）：
+纳指100：{ndx.get('price')}点 今日{fmt(ndx.get('change_pct'),'%')} 连涨{ndx.get('streak',0)}天 近15日{fmt(ndx.get('returns',{}).get('d15'),'%')} 近1月{fmt(ndx.get('returns',{}).get('mo1'),'%')} 近半年{fmt(ndx.get('returns',{}).get('mo6'),'%')} 近1年{fmt(ndx.get('returns',{}).get('yr1'),'%')} 年内高{ndx.get('yr_high')} 低{ndx.get('yr_low')}
+标普500：{spx.get('price')}点 今日{fmt(spx.get('change_pct'),'%')} 连涨{spx.get('streak',0)}天 近15日{fmt(spx.get('returns',{}).get('d15'),'%')} 近1月{fmt(spx.get('returns',{}).get('mo1'),'%')} 近半年{fmt(spx.get('returns',{}).get('mo6'),'%')} 近1年{fmt(spx.get('returns',{}).get('yr1'),'%')} 年内高{spx.get('yr_high')} 低{spx.get('yr_low')}"""
+
+    raw_facts = _call_deepseek(step1_prompt)
+    if not raw_facts:
+        return {"data": None, "source": "empty"}
+
+    # ── Step 2：把客观事实转化成长期乐观投资者的口吻 ──────────────────────────────
+    step2_prompt = f"""下面是今天（{today}）美股市场的4个关键事实：
+
+{raw_facts}
+
+现在你是一个有15年经验、长期持有纳指/标普的乐观价值投资者，把这4条事实转化成你自己的真实想法，像在跟好朋友分享投资心得。
+要求：
+- 用第一人称"我"，语气积极正面，比如"我越来越坚定..."、"这让我想起..."、"历史告诉我..."、"我的策略很简单..."
+- 聚焦长期视角：纳指/标普过去几十年从未让长期持有者失望，每次回调都是加仓机会
+- 每条50-80字，结合具体历史数据或典型行情（如2009、2020疫情后复苏）来支撑乐观观点
+- 4条分别对应4个不同角度（趋势/动能/结构/策略），level全部使用"bullish"
+- 严格输出JSON数组格式：
+[{{"tag":"3-5字标题","icon":"一个emoji","text":"你的观点","level":"bullish"}}]
+- 只输出JSON，不要任何其他文字"""
+
+    ai_text = _call_deepseek(step2_prompt)
+
+    # 解析 JSON
+    insights = []
+    if ai_text:
+        try:
+            match = re.search(r'\[.*\]', ai_text, re.DOTALL)
+            if match:
+                insights = json.loads(match.group())
+        except Exception as e:
+            logger.warning(f"[deepseek:parse] {e}, raw: {ai_text[:200]}")
+
+    result = {
+        "insights": insights,
+        "ndx_summary": {"price": ndx.get('price'), "streak": ndx.get('streak'), "yr_high": ndx.get('yr_high')},
+        "spx_summary": {"price": spx.get('price'), "streak": spx.get('streak'), "yr_high": spx.get('yr_high')},
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%d") + " 每日更新",
+    }
+
+    if insights:
+        _cache_set(cache_key, result, 24 * 3600)  # 缓存24小时，每日更新一次
+    _cache_header(response, 86400)
+    return {"data": result, "source": "live" if insights else "empty"}
+

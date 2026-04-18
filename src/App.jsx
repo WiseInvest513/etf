@@ -142,6 +142,7 @@ const C = {
   orange:"#c4570a", orangeBg:"#c4570a0d",
   purple:"#6e3de8", purpleBg:"#6e3de80d",
   cyan:"#0077a8",  cyanBg:"#0077a80d",
+  bgAlt:"#f5f5f7",
 };
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
@@ -287,6 +288,359 @@ function SentimentCard({title, value, label, sub, color, barPct, index=0}) {
         </div>
       )}
       {sub&&<div style={{fontSize:12,color:C.textMuted,marginTop:2}}>{sub}</div>}
+    </div>
+  );
+}
+
+// ─── 美国地标 SVG 剪影（卡片背景装饰）────────────────────────────────────────
+/* 自由女神像剪影 —— 用于标普500卡片 */
+const StatueOfLiberty = ({color}) => (
+  <svg viewBox="0 0 130 240" width="104" height="192" style={{display:"block"}} fill={color}>
+    <defs>
+      <linearGradient id="sol-fade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor={color} stopOpacity="1"/>
+        <stop offset="100%" stopColor={color} stopOpacity="0.7"/>
+      </linearGradient>
+    </defs>
+    {/* 火焰 */}
+    <path d="M95 22 C92 16 90 10 93 4 C95 0 97 0 99 4 C101 0 103 0 105 4 C108 10 106 16 103 22 C102 18 101 14 99 12 C97 14 96 18 95 22 Z" fill="url(#sol-fade)"/>
+    {/* 火炬杆 */}
+    <path d="M96 22 C94 24 93 28 94 32 L97 32 L97 40 L101 40 L101 32 L104 32 C105 28 104 24 102 22 Z"/>
+    {/* 举右臂 */}
+    <path d="M99 38 C96 42 90 50 82 58 C78 62 74 62 72 58 C74 52 82 44 90 38 Z"/>
+    {/* 右臂连肩 */}
+    <path d="M74 60 C70 66 68 72 70 78 L78 76 C76 70 78 64 82 60 Z"/>
+    {/* 王冠 */}
+    <path d="M34 82 L38 66 L42 80 L46 62 L50 78 L54 62 L58 78 L62 64 L66 80 L70 66 L74 82 Z"/>
+    {/* 头部 */}
+    <ellipse cx="54" cy="94" rx="17" ry="19"/>
+    {/* 脖颈 */}
+    <path d="M48 112 C48 114 50 116 54 116 C58 116 60 114 60 112 L58 108 L50 108 Z"/>
+    {/* 右肩斗篷 */}
+    <path d="M60 112 C68 108 76 102 80 92 C82 86 80 80 76 80 C74 86 72 96 66 106 Z"/>
+    {/* 主体长袍（流畅曲线） */}
+    <path d="M34 116 C28 138 22 162 18 188 C16 202 16 214 18 224 L90 224 C92 214 92 202 90 188 C86 162 80 138 74 116 C66 112 56 110 48 112 C42 112 38 114 34 116 Z"/>
+    {/* 左臂 + 石板 */}
+    <path d="M34 116 C28 112 20 112 14 118 C10 124 12 134 20 136 L32 130 Z"/>
+    <path d="M6 108 C4 108 2 110 2 114 L2 130 C2 134 4 136 8 136 L24 136 C28 136 30 134 30 130 L30 114 C30 110 28 108 24 108 Z" opacity="0.9"/>
+    {/* 底座 */}
+    <path d="M14 224 C12 226 10 228 10 232 L110 232 C110 228 108 226 106 224 Z"/>
+    <rect x="6" y="232" width="108" height="8" rx="2"/>
+  </svg>
+);
+
+/* 国会大厦剪影 —— 用于纳斯达克100卡片 */
+const CapitolBuilding = ({color}) => (
+  <svg viewBox="0 0 300 178" width="272" height="162" style={{display:"block"}} fill={color}>
+    {/* 地基 */}
+    <rect x="0" y="170" width="300" height="8" rx="2"/>
+    <rect x="8" y="162" width="284" height="8" rx="1"/>
+    <rect x="22" y="155" width="256" height="7"/>
+    {/* 左翼 */}
+    <path d="M22 155 L22 120 C22 116 26 114 30 114 L96 114 L96 120 L30 120 L30 155 Z"/>
+    {/* 右翼 */}
+    <path d="M204 114 L270 114 C274 114 278 116 278 120 L278 155 L272 155 L272 120 L204 120 Z"/>
+    {/* 主楼 */}
+    <rect x="90" y="110" width="120" height="45"/>
+    {/* 柱廊（主楼用渐变暗示列柱，不用矩形） */}
+    <path d="M96 110 L96 155 M103 110 L103 155 M110 110 L110 155 M117 110 L117 155 M124 110 L124 155 M131 110 L131 155 M138 110 L138 155 M145 110 L145 155 M152 110 L152 155 M159 110 L159 155 M166 110 L166 155 M173 110 L173 155 M180 110 L180 155 M187 110 L187 155 M194 110 L194 155 M201 110 L201 155 M208 110 L208 155"
+      stroke={color} strokeWidth="3" strokeOpacity="0.45" fill="none"/>
+    {/* 左翼柱廊 */}
+    <path d="M30 120 L30 155 M37 120 L37 155 M44 120 L44 155 M51 120 L51 155 M58 120 L58 155 M65 120 L65 155 M72 120 L72 155 M79 120 L79 155 M86 120 L86 155 M93 120 L93 155"
+      stroke={color} strokeWidth="2.5" strokeOpacity="0.4" fill="none"/>
+    {/* 右翼柱廊 */}
+    <path d="M207 120 L207 155 M214 120 L214 155 M221 120 L221 155 M228 120 L228 155 M235 120 L235 155 M242 120 L242 155 M249 120 L249 155 M256 120 L256 155 M263 120 L263 155 M270 120 L270 155"
+      stroke={color} strokeWidth="2.5" strokeOpacity="0.4" fill="none"/>
+    {/* 山花（三角楣） */}
+    <path d="M90 110 L150 96 L210 110 Z"/>
+    {/* 圆顶鼓座 */}
+    <rect x="124" y="88" width="52" height="14"/>
+    {/* 鼓座小柱 */}
+    <path d="M128 88 L128 102 M133 88 L133 102 M138 88 L138 102 M143 88 L143 102 M148 88 L148 102 M153 88 L153 102 M158 88 L158 102 M163 88 L163 102 M168 88 L168 102"
+      stroke={color} strokeWidth="2" strokeOpacity="0.5" fill="none"/>
+    {/* 圆顶主体（平滑贝塞尔） */}
+    <path d="M124 88 C124 58 134 38 150 32 C166 38 176 58 176 88 Z"/>
+    {/* 圆顶腰线装饰 */}
+    <path d="M130 72 C132 62 138 54 150 50 C162 54 168 62 170 72 Z" opacity="0.5"/>
+    {/* 灯笼 */}
+    <rect x="143" y="24" width="14" height="10" rx="3"/>
+    <rect x="146" y="16" width="8" height="10" rx="2"/>
+    {/* 旗杆 + 旗 */}
+    <rect x="149" y="2" width="2.5" height="16"/>
+    <path d="M151.5 3 L163 8 L151.5 13 Z"/>
+  </svg>
+);
+
+function ReturnTag({label, value, color}) {
+  if (value==null) return null;
+  const c = value>=0 ? C.green : C.red;
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"6px 14px",borderRadius:12,background:c+"12",border:`1px solid ${c}22`}}>
+      <div style={{fontSize:10,color:C.textDim,fontWeight:500,whiteSpace:"nowrap"}}>{label}</div>
+      <div style={{fontSize:13,fontWeight:700,color:c}}>{value>=0?"+":""}{value}%</div>
+    </div>
+  );
+}
+
+function IndexPriceCard({title, ticker, price, changePct, returns={}, color, index=0}) {
+  const [h,hProps] = useHover();
+  const fmt = v => v==null ? '--' : v.toLocaleString('en-US', {maximumFractionDigits:2});
+  const chgColor = changePct==null ? C.textDim : changePct>=0 ? C.green : C.red;
+  const isNasdaq = index === 0;
+  return (
+    <div {...hProps} style={{
+      background:C.card, border:`1px solid ${h?C.borderLight:C.border}`,
+      borderRadius:18, padding:"22px 28px", flex:1,
+      position:"relative", overflow:"hidden",
+      boxShadow:h?"0 12px 40px rgba(0,0,0,0.10)":"0 2px 16px rgba(0,0,0,0.06)",
+      transform:h?"translateY(-2px)":"translateY(0)",
+      transition:"all 0.28s ease",
+      animationDelay:`${index*0.08}s`,
+    }}>
+      {/* 背景地标剪影 */}
+      <div style={{
+        position:"absolute",
+        bottom: isNasdaq ? -6 : -10,
+        right: isNasdaq ? 0 : -2,
+        opacity: h ? 0.20 : 0.10,
+        transition:"opacity 0.35s ease",
+        pointerEvents:"none",
+        filter:`blur(0.6px) saturate(0.2) brightness(0.55)`,
+      }}>
+        {isNasdaq
+          ? <CapitolBuilding color={color}/>
+          : <StatueOfLiberty color={color}/>
+        }
+      </div>
+      {/* 渐变遮罩：右边保留，左边自然淡出 */}
+      <div style={{
+        position:"absolute", top:0, left:0, bottom:0, right:0,
+        background:`linear-gradient(to right, ${C.card} 0%, ${C.card} 28%, transparent 62%)`,
+        pointerEvents:"none",
+      }}/>
+      <div style={{position:"absolute",bottom:0,left:0,height:2,width:h?"100%":"0%",background:`linear-gradient(90deg,${color},${color}60)`,transition:"width 0.4s ease",borderRadius:"0 0 0 18px"}}/>
+
+      {/* 内容层 */}
+      <div style={{position:"relative",zIndex:1}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{fontSize:13,color:C.textMuted,fontWeight:600}}>{title}</div>
+            <div style={{fontSize:11,color:C.textDim,fontWeight:400}}>{ticker}</div>
+          </div>
+          {changePct!=null&&(
+            <div style={{fontSize:12,fontWeight:700,color:chgColor,background:chgColor+"15",padding:"3px 10px",borderRadius:20}}>
+              今日 {changePct>=0?"+":""}{changePct}%
+            </div>
+          )}
+        </div>
+        <div style={{fontSize:34,fontWeight:800,color,letterSpacing:-1,marginBottom:16}}>{price==null?'--':fmt(price)}</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <ReturnTag label="近1年" value={returns.yr1}/>
+          <ReturnTag label="近半年" value={returns.mo6}/>
+          <ReturnTag label="近1月" value={returns.mo1}/>
+          <ReturnTag label="近15日" value={returns.d15}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 市场 AI 解读（DeepSeek API）─────────────────────────────────────────────
+const LEVEL_COLOR = {bullish: C.green, bearish: C.red, neutral: C.orange};
+
+function MarketAISummary({aiInsight, aiLoading, ndx, spx}) {
+  const insights = aiInsight?.insights;
+  const generatedAt = aiInsight?.generated_at;
+
+  // 没有 API Key 时的降级规则文案
+  const fallbackInsights = useMemo(() => {
+    if (!ndx || !spx) return [];
+    const p = (v, s="") => v==null ? '--' : `${v>=0?'+':''}${v}${s}`;
+    const out = [];
+    const ndxStreak = ndx.streak || 0;
+    const spxStreak = spx.streak || 0;
+    const ndxAtHigh = (ndx.pct_from_high||0) >= -0.5;
+    const spxAtHigh = (spx.pct_from_high||0) >= -0.5;
+    if (ndxAtHigh && spxAtHigh)
+      out.push({icon:"🚀",tag:"双指数创年内新高",level:"bullish",text:`纳指100（${ndx.price?.toLocaleString('en-US')}）与标普500（${spx.price?.toLocaleString('en-US')}）均触及近一年高位，多头格局强势。`});
+    if (ndxStreak >= 7)
+      out.push({icon:"🔥",tag:`纳指连涨${ndxStreak}天`,level:"bullish",text:`纳指100已连续 ${ndxStreak} 个交易日收涨，历史上10连涨以上概率不足3%，为罕见逼空行情，15日累计 ${p(ndx.returns?.d15,'%')}。`});
+    else if (ndxStreak >= 3)
+      out.push({icon:"📈",tag:`纳指连涨${ndxStreak}天`,level:"bullish",text:`纳指100连续 ${ndxStreak} 日上涨，短期动能强劲，15日涨幅 ${p(ndx.returns?.d15,'%')}。`});
+    if ((ndx.returns?.yr1||0) > 35)
+      out.push({icon:"⚡",tag:"年度回报罕见",level:"bullish",text:`纳指100近一年涨 ${p(ndx.returns?.yr1,'%')}，远超历史均值（约+15%），科技股溢价明显；标普500同期 ${p(spx.returns?.yr1,'%')}。`});
+    if (spxStreak >= 5)
+      out.push({icon:"💪",tag:`标普连涨${spxStreak}天`,level:"bullish",text:`标普500同步连涨 ${spxStreak} 天，近15日 ${p(spx.returns?.d15,'%')}，大盘走强信号明确。`});
+    return out.slice(0,4);
+  }, [ndx, spx]);
+
+  const items = insights?.length ? insights : fallbackInsights;
+  const isAI = !!(insights?.length);
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:10,height:"100%"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text}}>市场解读</div>
+        <div style={{fontSize:10,color: isAI ? C.green : C.textDim,
+          background: isAI ? C.green+"15" : C.bgAlt,
+          border: isAI ? `1px solid ${C.green}30` : "none",
+          padding:"2px 8px",borderRadius:10}}>
+          {isAI ? "DeepSeek AI" : "规则引擎"}
+        </div>
+        {aiLoading && <div style={{fontSize:10,color:C.textDim}}>AI 分析中…</div>}
+      </div>
+      {items.length === 0 ? (
+        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:C.textDim}}>
+          {aiLoading ? "正在调用 DeepSeek 生成分析…" : "数据加载中…"}
+        </div>
+      ) : items.map((item, i) => {
+        const color = LEVEL_COLOR[item.level] || C.textMuted;
+        return (
+          <div key={i} style={{
+            padding:"11px 14px", borderRadius:12, flex:1,
+            background: color+"0a", border:`1px solid ${color}20`,
+          }}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+              <span style={{fontSize:13}}>{item.icon}</span>
+              <span style={{fontSize:11,fontWeight:700,color,background:color+"18",padding:"1px 8px",borderRadius:8}}>{item.tag}</span>
+            </div>
+            <div style={{fontSize:12,color:C.textMuted,lineHeight:1.75}}>{item.text}</div>
+          </div>
+        );
+      })}
+      <div style={{fontSize:10,color:C.textDim,paddingTop:4}}>
+        {isAI && generatedAt ? `DeepSeek · ${generatedAt}` : "数据来源：Yahoo Finance"}
+      </div>
+    </div>
+  );
+}
+
+function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
+  const ndx = sentiment?.ndx_price;
+  const spx = sentiment?.spx_price;
+  const round2 = v => Math.round(v * 100) / 100;
+  const fmtNum = v => v==null ? '--' : v.toLocaleString('en-US',{maximumFractionDigits:2});
+
+  // 合并图表数据
+  const buildPct = (history=[]) => {
+    if (history.length < 2) return {};
+    const base = history[0].close;
+    const map = {};
+    history.forEach(d => { map[d.date] = {close: d.close, pct: base ? round2((d.close-base)/base*100) : 0}; });
+    return map;
+  };
+  const ndxMap = buildPct(ndx?.history);
+  const spxMap = buildPct(spx?.history);
+  const allDates = [...new Set([...Object.keys(ndxMap), ...Object.keys(spxMap)])].sort();
+  const merged = allDates.map(date => ({
+    date,
+    ndx: ndxMap[date]?.pct ?? null,
+    ndxClose: ndxMap[date]?.close,
+    spx: spxMap[date]?.pct ?? null,
+    spxClose: spxMap[date]?.close,
+  }));
+  const hasData = merged.length > 1;
+
+  return (
+    <div style={{marginBottom: isMobile?16:24}}>
+      {/* 顶部数据卡 */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2,1fr)",gap:isMobile?10:16,marginBottom:isMobile?10:16}}>
+        <IndexPriceCard title="纳斯达克100" ticker="^NDX" price={ndx?.price} changePct={ndx?.change_pct} returns={ndx?.returns||{}} color={C.accent} index={0}/>
+        <IndexPriceCard title="标普500" ticker="^GSPC" price={spx?.price} changePct={spx?.change_pct} returns={spx?.returns||{}} color={C.cyan} index={1}/>
+      </div>
+
+      {/* 图表 + AI解读 */}
+      <Card style={{padding:"24px 26px"}}>
+        <div style={{display:"grid", gridTemplateColumns: isMobile ? "1fr" : "3fr 2fr", gap: 0}}>
+          {/* 左：走势图 + 15日摘要数据 */}
+          <div style={{paddingRight: isMobile?0:32, display:"flex", flexDirection:"column"}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:3}}>近15日走势对比</div>
+            <div style={{fontSize:11,color:C.textDim,marginBottom:16}}>以区间首日为基准 · 累计涨幅（%）</div>
+            {hasData ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={merged} margin={{top:4,right:4,left:-20,bottom:0}}>
+                  <defs>
+                    <linearGradient id="ndx-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.accent} stopOpacity={0.18}/>
+                      <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="spx-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.cyan} stopOpacity={0.18}/>
+                      <stop offset="95%" stopColor={C.cyan} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+                  <XAxis dataKey="date" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
+                  <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%" tickFormatter={v=>`${v>0?"+":""}${v}`}/>
+                  <ReferenceLine y={0} stroke={C.border} strokeDasharray="3 3"/>
+                  <Tooltip content={({active,payload,label})=>active&&payload?.length?(
+                    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",fontSize:12,minWidth:180}}>
+                      <div style={{color:C.textDim,marginBottom:6,fontWeight:600}}>{label}</div>
+                      {payload.filter(p=>p.value!=null).map(p=>(
+                        <div key={p.dataKey} style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                          <div style={{width:7,height:7,borderRadius:"50%",background:p.color,flexShrink:0}}/>
+                          <span style={{color:C.textMuted,flex:1}}>{p.dataKey==='ndx'?'纳指100':'标普500'}</span>
+                          <span style={{color:p.color,fontWeight:700}}>{p.value>=0?"+":""}{p.value}%</span>
+                          <span style={{color:C.textDim,fontSize:10}}>({fmtNum(p.dataKey==='ndx'?p.payload.ndxClose:p.payload.spxClose)})</span>
+                        </div>
+                      ))}
+                    </div>
+                  ):null}/>
+                  <Area type="monotone" dataKey="ndx" name="纳指100" stroke={C.accent} strokeWidth={2} fill="url(#ndx-grad)" dot={false} activeDot={{r:4,fill:C.accent}} connectNulls/>
+                  <Area type="monotone" dataKey="spx" name="标普500" stroke={C.cyan} strokeWidth={2} fill="url(#spx-grad)" dot={false} activeDot={{r:4,fill:C.cyan}} connectNulls/>
+                  <Legend wrapperStyle={{fontSize:11,paddingTop:10}}/>
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:C.textDim}}>数据加载中…</div>
+            )}
+            {/* 15日关键数据对比表 */}
+            {ndx && spx && (
+              <div style={{marginTop:20,display:"flex",flexDirection:"column",gap:8}}>
+                {/* 表头 */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4,padding:"0 12px",marginBottom:2}}>
+                  <span style={{fontSize:10,color:C.textDim}}></span>
+                  <span style={{fontSize:10,color:C.accent,fontWeight:700,textAlign:"right"}}>纳指100</span>
+                  <span style={{fontSize:10,color:C.cyan,fontWeight:700,textAlign:"right"}}>标普500</span>
+                </div>
+                {[
+                  {label:"近15日涨幅",ndxV:(ndx.returns?.d15??'--')+'%',spxV:(spx.returns?.d15??'--')+'%',ndxPos:(ndx.returns?.d15||0)>=0,spxPos:(spx.returns?.d15||0)>=0},
+                  {label:"近1月涨幅", ndxV:(ndx.returns?.mo1??'--')+'%',spxV:(spx.returns?.mo1??'--')+'%',ndxPos:(ndx.returns?.mo1||0)>=0,spxPos:(spx.returns?.mo1||0)>=0},
+                  {label:"近1年涨幅", ndxV:(ndx.returns?.yr1??'--')+'%',spxV:(spx.returns?.yr1??'--')+'%',ndxPos:(ndx.returns?.yr1||0)>=0,spxPos:(spx.returns?.yr1||0)>=0},
+                  {label:"连涨天数",  ndxV:(ndx.streak||0)>0?`${ndx.streak}天连涨`:ndx.streak<0?`${Math.abs(ndx.streak)}天连跌`:'--',spxV:(spx.streak||0)>0?`${spx.streak}天连涨`:spx.streak<0?`${Math.abs(spx.streak)}天连跌`:'--',ndxPos:(ndx.streak||0)>=0,spxPos:(spx.streak||0)>=0},
+                  {label:"距年内高点",ndxV:(ndx.pct_from_high??'--')+'%',spxV:(spx.pct_from_high??'--')+'%',ndxPos:(ndx.pct_from_high||0)>=0,spxPos:(spx.pct_from_high||0)>=0},
+                  {label:"年内最高点",ndxV:fmtNum(ndx.yr_high),spxV:fmtNum(spx.yr_high),ndxPos:true,spxPos:true},
+                ].map(row=>(
+                  <div key={row.label} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4,alignItems:"center",padding:"7px 12px",borderRadius:10,background:C.bgAlt}}>
+                    <span style={{fontSize:11,color:C.textDim,fontWeight:500}}>{row.label}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:row.ndxPos?C.accent:C.red,textAlign:"right"}}>{row.ndxV}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:row.spxPos?C.cyan:C.red,textAlign:"right"}}>{row.spxV}</span>
+                  </div>
+                ))}
+                {/* 强弱对比提示 */}
+                {ndx.returns?.d15 != null && spx.returns?.d15 != null && (()=>{
+                  const diff = round2((ndx.returns.d15||0) - (spx.returns.d15||0));
+                  const ahead = diff >= 0 ? "纳指" : "标普";
+                  const absDiff = Math.abs(diff);
+                  return (
+                    <div style={{marginTop:4,padding:"8px 12px",borderRadius:10,background:`${C.accent}0d`,border:`1px solid ${C.accent}20`,display:"flex",alignItems:"center",gap:6}}>
+                      <span style={{fontSize:11}}>📊</span>
+                      <span style={{fontSize:11,color:C.textMuted}}>
+                        近15日 <span style={{color:C.accent,fontWeight:700}}>{ahead}</span> 领跑，较另一指数多涨 <span style={{color:C.accent,fontWeight:700}}>{absDiff}%</span>，科技权重优势凸显
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          {/* 右：AI解读（左边框分隔） */}
+          <div style={{borderLeft: isMobile?'none':`1px solid ${C.borderLight}`, paddingLeft: isMobile?0:32, paddingTop: isMobile?20:0}}>
+            <MarketAISummary aiInsight={aiInsight} aiLoading={aiLoading} ndx={ndx} spx={spx}/>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -1846,6 +2200,8 @@ export default function App() {
   const [dataLoading,setDataLoading]=useState(false);
   const [usdcny,setUsdcny]=useState(null);
   const [sentiment,setSentiment]=useState(null);
+  const [aiInsight,setAiInsight]=useState(null);
+  const [aiLoading,setAiLoading]=useState(false);
   const [compareList,setCompareList]=useState([]);
   const [showCompare,setShowCompare]=useState(false);
   const [showWechat,setShowWechat]=useState(false);
@@ -1904,6 +2260,12 @@ export default function App() {
     apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
     // 拉取市场情绪指标
     apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
+    // 拉取 AI 市场解读（DeepSeek，2小时缓存）
+    setAiLoading(true);
+    apiFetch("/market-ai-insight").then(d=>{
+      if(d?.data?.insights?.length) setAiInsight(d.data);
+      setAiLoading(false);
+    }).catch(()=>setAiLoading(false));
   },[]);
 
   // ── 实时行情（day_change / rolling_1y / buy_status / daily_limit）
@@ -2444,6 +2806,9 @@ export default function App() {
         {/* ════ OVERVIEW ════ */}
         {activeTab==="overview"&&(
           <>
+            {/* ── 指数实时点位 + 走势 ── */}
+            <IndexPriceRow sentiment={sentiment} aiInsight={aiInsight} aiLoading={aiLoading} isMobile={isMobile}/>
+
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[
