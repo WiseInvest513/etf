@@ -3379,6 +3379,8 @@ export default function App() {
             {/* Index History */}
             <IndexHistoryCard/>
 
+            {/* FX Analysis */}
+            <FXAnalysisCard/>
 
             {/* Top 5 */}            <Reveal delay={0.08}>
               <SectionHeader title="近一年涨幅 TOP 5 · 主动型" color={C.purple}/>
