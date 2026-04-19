@@ -180,12 +180,12 @@ STATIC_ETFS: List[dict] = [
     {"code":"513300","name":"华夏纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":112.5,"ytd_return":14.72,"market_price":2.106,"nav":2.0302,"premium":3.73,"volume":3.1, "change_pct":0.0,"fee_rate":0.80,"track_error":2.53},
     {"code":"159659","name":"招商纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":79.3, "ytd_return":17.42,"market_price":1.815,"nav":1.7516,"premium":3.62,"volume":1.3, "change_pct":0.0,"fee_rate":0.65,"track_error":1.08},
     {"code":"159632","name":"华安纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":97.8, "ytd_return":16.28,"market_price":1.907,"nav":1.8467,"premium":3.27,"volume":1.9, "change_pct":0.0,"fee_rate":0.80,"track_error":1.24},
-    {"code":"513870","name":"富国纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":20.2, "ytd_return":17.41,"market_price":1.627,"nav":1.6267,"premium":0.0, "volume":0.0, "change_pct":0.0,"fee_rate":0.63,"track_error":0.86},
-    {"code":"159696","name":"易方达纳斯达克100ETF(QDII)", "tracking_index":"纳斯达克100",        "scale":39.7, "ytd_return":17.37,"market_price":1.589,"nav":1.5893,"premium":0.0, "volume":0.0, "change_pct":0.0,"fee_rate":0.63,"track_error":0.86},
-    {"code":"159660","name":"汇添富纳斯达克100ETF(QDII)", "tracking_index":"纳斯达克100",        "scale":37.7, "ytd_return":17.24,"market_price":1.866,"nav":1.8660,"premium":0.0, "volume":0.0, "change_pct":0.0,"fee_rate":0.66,"track_error":0.88},
-    {"code":"159501","name":"嘉实纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":100.7,"ytd_return":17.14,"market_price":1.604,"nav":1.6037,"premium":0.0, "volume":0.0, "change_pct":0.0,"fee_rate":0.61,"track_error":0.86},
-    {"code":"513390","name":"博时纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":35.6, "ytd_return":17.12,"market_price":1.915,"nav":1.9153,"premium":0.0, "volume":0.0, "change_pct":0.0,"fee_rate":0.69,"track_error":0.91},
-    {"code":"159513","name":"大成纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":59.7, "ytd_return":16.50,"market_price":1.433,"nav":1.4332,"premium":0.0, "volume":0.0, "change_pct":0.0,"fee_rate":1.01,"track_error":0.88},
+    {"code":"513870","name":"富国纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":20.2, "ytd_return":17.41,"market_price":1.776,"nav":1.7178,"premium":3.39,"volume":0.3, "change_pct":0.0,"fee_rate":0.63,"track_error":0.86},
+    {"code":"159696","name":"易方达纳斯达克100ETF(QDII)", "tracking_index":"纳斯达克100",        "scale":39.7, "ytd_return":17.37,"market_price":1.742,"nav":1.6784,"premium":3.79,"volume":0.5, "change_pct":0.0,"fee_rate":0.63,"track_error":0.86},
+    {"code":"159660","name":"汇添富纳斯达克100ETF(QDII)", "tracking_index":"纳斯达克100",        "scale":37.7, "ytd_return":17.24,"market_price":2.039,"nav":1.9707,"premium":3.52,"volume":0.4, "change_pct":0.0,"fee_rate":0.66,"track_error":0.88},
+    {"code":"159501","name":"嘉实纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":100.7,"ytd_return":17.14,"market_price":1.753,"nav":1.6939,"premium":3.52,"volume":1.2, "change_pct":0.0,"fee_rate":0.61,"track_error":0.86},
+    {"code":"513390","name":"博时纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":35.6, "ytd_return":17.12,"market_price":2.094,"nav":2.0228,"premium":3.52,"volume":0.4, "change_pct":0.0,"fee_rate":0.69,"track_error":0.91},
+    {"code":"159513","name":"大成纳斯达克100ETF(QDII)",   "tracking_index":"纳斯达克100",        "scale":59.7, "ytd_return":16.50,"market_price":1.566,"nav":1.5136,"premium":3.52,"volume":0.8, "change_pct":0.0,"fee_rate":1.01,"track_error":0.88},
     # ── 纳斯达克科技市值加权 ──
     {"code":"159509","name":"景顺长城纳斯达克科技ETF(QDII)","tracking_index":"纳斯达克科技市值加权","scale":123.3,"ytd_return":27.55,"market_price":1.962,"nav":1.6780,"premium":16.9,"volume":5.3, "change_pct":0.0,"fee_rate":1.00,"track_error":1.88},
     # ── 标普500 ──
@@ -390,6 +390,60 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
             continue
     logger.info(f"[sina] got {len(result)}/{len(codes)} ETFs")
     return result
+
+
+def fetch_etfs_em_fallback(codes: List[str]) -> Dict[str, dict]:
+    """
+    东方财富行情 — Sina 未返回数据时的备用（仅针对缺失 ETF）。
+    f43: 最新价（×1000 → yuan）  f170: 涨跌幅（×100 → %）
+    """
+    def _secid(c: str) -> str:
+        return f"1.{c}" if c.startswith("5") else f"0.{c}"
+
+    def _fetch_one(c: str) -> Optional[dict]:
+        resp = _get(
+            "https://push2.eastmoney.com/api/qt/stock/get",
+            params={"secid": _secid(c), "fields": "f43,f170", "cb": "cb"},
+            headers=HEADERS, timeout=(2, 4),
+        )
+        if not (resp and resp.ok):
+            return None
+        try:
+            m = re.search(r"cb\((.+)\)", resp.text)
+            if not m:
+                return None
+            d = json.loads(m.group(1)).get("data") or {}
+            price_raw = d.get("f43", 0)
+            chg_raw   = d.get("f170", 0)
+            if not price_raw or price_raw <= 0:
+                return None
+            return {
+                "market_price": round(price_raw / 1000, 4),
+                "change_pct":   round(chg_raw / 100, 2),
+                "volume":       0.0,
+            }
+        except Exception:
+            return None
+
+    ex  = ThreadPoolExecutor(max_workers=len(codes))
+    res: Dict[str, dict] = {}
+    try:
+        futs = {ex.submit(_fetch_one, c): c for c in codes}
+        done, not_done = wait(list(futs), timeout=6)
+        for fut in not_done:
+            fut.cancel()
+        for fut in done:
+            c = futs[fut]
+            try:
+                data = fut.result()
+                if data:
+                    res[c] = data
+            except Exception:
+                pass
+    finally:
+        ex.shutdown(wait=False)
+    logger.info(f"[em_fallback] got {len(res)}/{len(codes)} ETFs")
+    return res
 
 
 # ─── 市场情绪数据源 ──────────────────────────────────────────────────────────────
@@ -703,6 +757,12 @@ def _build_etfs() -> tuple:
                     pass
     finally:
         ex.shutdown(wait=False)
+
+    # 东方财富补充：Sina 未返回数据的 ETF 用东方财富补齐 market_price
+    missing = [c for c in codes if c not in sina_map]
+    if missing:
+        em_map = fetch_etfs_em_fallback(missing)
+        sina_map.update(em_map)
 
     live_count = 0
     results    = []
