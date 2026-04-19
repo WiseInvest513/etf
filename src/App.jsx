@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line } from "recharts";
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line, LineChart, PieChart, Pie, Cell } from "recharts";
 import { Analytics } from "@vercel/analytics/react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
@@ -135,7 +135,7 @@ const INDEX_CAGR = {
 const C = {
   bg:"#f5f5f7", surface:"#ffffff", surfaceHover:"#f9f9fb",
   card:"#ffffff", border:"#e0e0e5", borderLight:"#ebebf0",
-  text:"#1d1d1f", textMuted:"#6e6e73", textDim:"#aeaeb2",
+  text:"#1d1d1f", textMuted:"#3d3d42", textDim:"#6e6e73",
   accent:"#0071e3", accentDim:"#005bbf", accentBg:"#0071e308",
   green:"#1a9e4a", greenBg:"#1a9e4a0d",
   red:"#d93025",   redBg:"#d930250d",
@@ -471,7 +471,7 @@ function MarketAISummary({aiInsight, aiLoading, ndx, spx}) {
       out.push({icon:"⚡",tag:"年度回报罕见",level:"bullish",text:`纳指100近一年涨 ${p(ndx.returns?.yr1,'%')}，远超历史均值（约+15%），科技股溢价明显；标普500同期 ${p(spx.returns?.yr1,'%')}。`});
     if (spxStreak >= 5)
       out.push({icon:"💪",tag:`标普连涨${spxStreak}天`,level:"bullish",text:`标普500同步连涨 ${spxStreak} 天，近15日 ${p(spx.returns?.d15,'%')}，大盘走强信号明确。`});
-    return out.slice(0,4);
+    return out.slice(0,2);
   }, [ndx, spx]);
 
   const items = insights?.length ? insights : fallbackInsights;
@@ -493,7 +493,7 @@ function MarketAISummary({aiInsight, aiLoading, ndx, spx}) {
         <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:C.textDim}}>
           {aiLoading ? "正在调用 DeepSeek 生成分析…" : "数据加载中…"}
         </div>
-      ) : items.map((item, i) => {
+      ) : items.slice(0,2).map((item, i) => {
         const color = LEVEL_COLOR[item.level] || C.textMuted;
         return (
           <div key={i} style={{
@@ -550,15 +550,16 @@ function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
       </div>
 
       {/* 图表 + AI解读 */}
-      <Card style={{padding:"24px 26px"}}>
-        <div style={{display:"grid", gridTemplateColumns: isMobile ? "1fr" : "3fr 2fr", gap: 0}}>
-          {/* 左：走势图 + 15日摘要数据 */}
-          <div style={{paddingRight: isMobile?0:32, display:"flex", flexDirection:"column"}}>
-            <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:3}}>近15日走势对比</div>
-            <div style={{fontSize:11,color:C.textDim,marginBottom:16}}>以区间首日为基准 · 累计涨幅（%）</div>
+      <Card style={{padding:"16px 20px"}}>
+        <div style={{display:"grid", gridTemplateColumns: isMobile ? "1fr" : "3fr 2fr", gap: 0, alignItems: "stretch"}}>
+          {/* 左：走势图 */}
+          <div style={{paddingRight: isMobile?0:24, display:"flex", flexDirection:"column", minHeight:0}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.text,marginBottom:2}}>近15日走势对比</div>
+            <div style={{fontSize:10,color:C.textDim,marginBottom:8}}>以区间首日为基准 · 累计涨幅（%）</div>
             {hasData ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={merged} margin={{top:4,right:4,left:-20,bottom:0}}>
+              <div style={{flex:1, minHeight:130}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={merged} margin={{top:2,right:4,left:-20,bottom:0}}>
                   <defs>
                     <linearGradient id="ndx-grad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={C.accent} stopOpacity={0.18}/>
@@ -570,73 +571,34 @@ function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
-                  <XAxis dataKey="date" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
-                  <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%" tickFormatter={v=>`${v>0?"+":""}${v}`}/>
+                  <XAxis dataKey="date" tick={{fill:C.textDim,fontSize:9}} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
+                  <YAxis tick={{fill:C.textDim,fontSize:9}} axisLine={false} tickLine={false} unit="%" tickFormatter={v=>`${v>0?"+":""}${v}`}/>
                   <ReferenceLine y={0} stroke={C.border} strokeDasharray="3 3"/>
                   <Tooltip content={({active,payload,label})=>active&&payload?.length?(
-                    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",fontSize:12,minWidth:180}}>
-                      <div style={{color:C.textDim,marginBottom:6,fontWeight:600}}>{label}</div>
+                    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontSize:11,minWidth:160}}>
+                      <div style={{color:C.textDim,marginBottom:4,fontWeight:600}}>{label}</div>
                       {payload.filter(p=>p.value!=null).map(p=>(
-                        <div key={p.dataKey} style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-                          <div style={{width:7,height:7,borderRadius:"50%",background:p.color,flexShrink:0}}/>
+                        <div key={p.dataKey} style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                          <div style={{width:6,height:6,borderRadius:"50%",background:p.color,flexShrink:0}}/>
                           <span style={{color:C.textMuted,flex:1}}>{p.dataKey==='ndx'?'纳指100':'标普500'}</span>
                           <span style={{color:p.color,fontWeight:700}}>{p.value>=0?"+":""}{p.value}%</span>
-                          <span style={{color:C.textDim,fontSize:10}}>({fmtNum(p.dataKey==='ndx'?p.payload.ndxClose:p.payload.spxClose)})</span>
                         </div>
                       ))}
                     </div>
                   ):null}/>
-                  <Area type="monotone" dataKey="ndx" name="纳指100" stroke={C.accent} strokeWidth={2} fill="url(#ndx-grad)" dot={false} activeDot={{r:4,fill:C.accent}} connectNulls/>
-                  <Area type="monotone" dataKey="spx" name="标普500" stroke={C.cyan} strokeWidth={2} fill="url(#spx-grad)" dot={false} activeDot={{r:4,fill:C.cyan}} connectNulls/>
-                  <Legend wrapperStyle={{fontSize:11,paddingTop:10}}/>
+                  <Area type="monotone" dataKey="ndx" name="纳指100" stroke={C.accent} strokeWidth={1.5} fill="url(#ndx-grad)" dot={false} activeDot={{r:3,fill:C.accent}} connectNulls/>
+                  <Area type="monotone" dataKey="spx" name="标普500" stroke={C.cyan} strokeWidth={1.5} fill="url(#spx-grad)" dot={false} activeDot={{r:3,fill:C.cyan}} connectNulls/>
+                  <Legend wrapperStyle={{fontSize:10,paddingTop:4}}/>
                 </AreaChart>
               </ResponsiveContainer>
-            ) : (
-              <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:C.textDim}}>数据加载中…</div>
-            )}
-            {/* 15日关键数据对比表 */}
-            {ndx && spx && (
-              <div style={{marginTop:20,display:"flex",flexDirection:"column",gap:8}}>
-                {/* 表头 */}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4,padding:"0 12px",marginBottom:2}}>
-                  <span style={{fontSize:10,color:C.textDim}}></span>
-                  <span style={{fontSize:10,color:C.accent,fontWeight:700,textAlign:"right"}}>纳指100</span>
-                  <span style={{fontSize:10,color:C.cyan,fontWeight:700,textAlign:"right"}}>标普500</span>
-                </div>
-                {[
-                  {label:"近15日涨幅",ndxV:(ndx.returns?.d15??'--')+'%',spxV:(spx.returns?.d15??'--')+'%',ndxPos:(ndx.returns?.d15||0)>=0,spxPos:(spx.returns?.d15||0)>=0},
-                  {label:"近1月涨幅", ndxV:(ndx.returns?.mo1??'--')+'%',spxV:(spx.returns?.mo1??'--')+'%',ndxPos:(ndx.returns?.mo1||0)>=0,spxPos:(spx.returns?.mo1||0)>=0},
-                  {label:"近1年涨幅", ndxV:(ndx.returns?.yr1??'--')+'%',spxV:(spx.returns?.yr1??'--')+'%',ndxPos:(ndx.returns?.yr1||0)>=0,spxPos:(spx.returns?.yr1||0)>=0},
-                  {label:"连涨天数",  ndxV:(ndx.streak||0)>0?`${ndx.streak}天连涨`:ndx.streak<0?`${Math.abs(ndx.streak)}天连跌`:'--',spxV:(spx.streak||0)>0?`${spx.streak}天连涨`:spx.streak<0?`${Math.abs(spx.streak)}天连跌`:'--',ndxPos:(ndx.streak||0)>=0,spxPos:(spx.streak||0)>=0},
-                  {label:"距年内高点",ndxV:(ndx.pct_from_high??'--')+'%',spxV:(spx.pct_from_high??'--')+'%',ndxPos:(ndx.pct_from_high||0)>=0,spxPos:(spx.pct_from_high||0)>=0},
-                  {label:"年内最高点",ndxV:fmtNum(ndx.yr_high),spxV:fmtNum(spx.yr_high),ndxPos:true,spxPos:true},
-                ].map(row=>(
-                  <div key={row.label} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4,alignItems:"center",padding:"7px 12px",borderRadius:10,background:C.bgAlt}}>
-                    <span style={{fontSize:11,color:C.textDim,fontWeight:500}}>{row.label}</span>
-                    <span style={{fontSize:12,fontWeight:700,color:row.ndxPos?C.accent:C.red,textAlign:"right"}}>{row.ndxV}</span>
-                    <span style={{fontSize:12,fontWeight:700,color:row.spxPos?C.cyan:C.red,textAlign:"right"}}>{row.spxV}</span>
-                  </div>
-                ))}
-                {/* 强弱对比提示 */}
-                {ndx.returns?.d15 != null && spx.returns?.d15 != null && (()=>{
-                  const diff = round2((ndx.returns.d15||0) - (spx.returns.d15||0));
-                  const ahead = diff >= 0 ? "纳指" : "标普";
-                  const absDiff = Math.abs(diff);
-                  return (
-                    <div style={{marginTop:4,padding:"8px 12px",borderRadius:10,background:`${C.accent}0d`,border:`1px solid ${C.accent}20`,display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{fontSize:11}}>📊</span>
-                      <span style={{fontSize:11,color:C.textMuted}}>
-                        近15日 <span style={{color:C.accent,fontWeight:700}}>{ahead}</span> 领跑，较另一指数多涨 <span style={{color:C.accent,fontWeight:700}}>{absDiff}%</span>，科技权重优势凸显
-                      </span>
-                    </div>
-                  );
-                })()}
               </div>
+            ) : (
+              <div style={{flex:1,minHeight:130,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.textDim}}>数据加载中…</div>
             )}
           </div>
 
           {/* 右：AI解读（左边框分隔） */}
-          <div style={{borderLeft: isMobile?'none':`1px solid ${C.borderLight}`, paddingLeft: isMobile?0:32, paddingTop: isMobile?20:0}}>
+          <div style={{borderLeft: isMobile?'none':`1px solid ${C.borderLight}`, paddingLeft: isMobile?0:24, paddingTop: isMobile?12:0}}>
             <MarketAISummary aiInsight={aiInsight} aiLoading={aiLoading} ndx={ndx} spx={spx}/>
           </div>
         </div>
@@ -1744,13 +1706,521 @@ function AdminPage() {
   );
 }
 
+// ─── Guide Tab ────────────────────────────────────────────────────────────────
+// 数据来源：stockanalysis.com · QQQ 截至 2026-04-16，VOO 截至 2026-03-31
+const NDX_HOLDINGS = [
+  {name:"英伟达",    ticker:"NVDA", pct:8.90, color:"#a04cf5"},
+  {name:"苹果",      ticker:"AAPL", pct:7.14, color:"#3d82ff"},
+  {name:"微软",      ticker:"MSFT", pct:5.76, color:"#14c8b4"},
+  {name:"亚马逊",    ticker:"AMZN", pct:4.95, color:"#ff9a00"},
+  {name:"Meta",      ticker:"META", pct:3.68, color:"#ff6b35"},
+  {name:"谷歌A",     ticker:"GOOGL",pct:3.61, color:"#ffd60a"},
+  {name:"特斯拉",    ticker:"TSLA", pct:3.58, color:"#ff3b30"},
+  {name:"博通",      ticker:"AVGO", pct:3.49, color:"#26c258"},
+  {name:"谷歌C",     ticker:"GOOG", pct:3.34, color:"#30d158"},
+  {name:"沃尔玛",    ticker:"WMT",  pct:3.11, color:"#64d2ff"},
+  {name:"其他",      ticker:"—",    pct:52.44,color:"#3a3f52"},
+];
+// 数据来源：stockanalysis.com · VOO 截至 2026-03-31
+const SPX_HOLDINGS = [
+  {name:"英伟达",    ticker:"NVDA", pct:7.58, color:"#a04cf5"},
+  {name:"苹果",      ticker:"AAPL", pct:6.67, color:"#3d82ff"},
+  {name:"微软",      ticker:"MSFT", pct:4.92, color:"#14c8b4"},
+  {name:"亚马逊",    ticker:"AMZN", pct:3.64, color:"#ff9a00"},
+  {name:"谷歌A",     ticker:"GOOGL",pct:3.00, color:"#ffd60a"},
+  {name:"博通",      ticker:"AVGO", pct:2.63, color:"#26c258"},
+  {name:"谷歌C",     ticker:"GOOG", pct:2.40, color:"#30d158"},
+  {name:"Meta",      ticker:"META", pct:2.24, color:"#ff6b35"},
+  {name:"特斯拉",    ticker:"TSLA", pct:1.87, color:"#ff3b30"},
+  {name:"伯克希尔",  ticker:"BRK.B",pct:1.57, color:"#64d2ff"},
+  {name:"其他",      ticker:"—",    pct:63.48,color:"#3a3f52"},
+];
+const INVEST_METHODS = [
+  {
+    id:"qdii",
+    label:"场外QDII",
+    sublabel:"支付宝/天天基金",
+    icon:"📱",
+    color:"#ff9a00",
+    ndx:{product:"161130 易方达纳指联接(QDII)",fee:"0.60%/年 + 申购费1.2%",limit:"日限额仅10元",premium:"T+3到账，价格滞后",minBuy:"10元起"},
+    spx:{product:"161125 易方达标普500(QDII)",fee:"0.70%/年 + 申购费1.2%",limit:"日限额受限",premium:"T+3到账，价格滞后",minBuy:"10元起"},
+    pros:["门槛极低10元起","支付宝/天天基金直接操作","无需开股票账户"],
+    cons:["日限额极低（仅10元），实际可买入极少","T+3到账，价格滞后无法实时买卖","综合持有成本最高"],
+    cta:{label:"天天基金 / 支付宝",url:null,tip:"搜索「161130」或「161125」直接购买"},
+  },
+  {
+    id:"exchange",
+    label:"场内ETF",
+    sublabel:"A股证券账户交易",
+    icon:"🏦",
+    color:"#3d82ff",
+    ndx:{product:"159659 招商纳斯达克100ETF",fee:"0.65%/年（管理0.50%+托管0.15%）",limit:"无限额，随时交易",premium:"溢价波动较大",minBuy:"约100元起"},
+    spx:{product:"513500 博时标普500ETF",fee:"0.80%/年（管理0.60%+托管0.20%）",limit:"无限额，随时交易",premium:"溢价波动较大",minBuy:"约100元起"},
+    pros:["人民币直接买入，无需外汇额度","无限额，随时交易","国内券商App操作简便"],
+    cons:["溢价率波动大，溢价高时买入即亏损","费率偏高（0.65–0.80%/年）","需开通证券账户"],
+    cta:{label:"开通国内券商",url:null,tip:"推荐华泰证券、东方财富，费率较低"},
+  },
+  {
+    id:"us",
+    label:"美股直购",
+    sublabel:"QQQ / VOO",
+    icon:"🚀",
+    color:"#26c258",
+    ndx:{product:"QQQ (Invesco)",fee:"0.20%/年",limit:"无限额，随时买卖",premium:"无溢价，实时净值",minBuy:"约¥3,200/股起"},
+    spx:{product:"VOO (Vanguard)",fee:"0.03%/年",limit:"无限额，随时买卖",premium:"无溢价，实时净值",minBuy:"约¥3,700/股起"},
+    pros:["费率最低（VOO仅0.03%）","无溢价无限额","直接拥有美股资产"],
+    cons:["需开海外券商账户","需使用外汇额度（年5万美元）","需了解基本英文操作"],
+    cta:{label:"开通复星证券",url:"https://www.fxiaoke.com",tip:"支持港股+美股，适合内地用户"},
+  },
+];
+
+// 生成费率损耗数据：初始10000，毛收益10%，25年
+function buildFeeDragData(upfront, annualFee) {
+  const gross = 0.10;
+  const data = [];
+  for (let y = 0; y <= 25; y++) {
+    const val = Math.round(10000 * (1 - upfront) * Math.pow(1 + gross - annualFee, y));
+    data.push(val);
+  }
+  return data;
+}
+// ── DCA 模拟：首投10万 + 每月5000，持续20年，假设毛收益10%/年
+// 场外QDII：5%备付金不参与投资（监管要求流动性储备），年费0.60%
+// 场内ETF ：每笔买入溢价1.5%即时损耗，年费0.72%
+// QQQ     ：全额投入，年费0.20%
+// VOO     ：全额投入，年费0.03%
+const DCA_STRATEGIES = {
+  nasdaq: [
+    {name:"场外QDII", key:"qdii", investRatio:0.95, annualFee:0.006,  premiumPerBuy:0,     color:"#ff9a00",
+     note:"5%备付金不投入 + 0.60%/年管理费"},
+    {name:"场内ETF",  key:"etf",  investRatio:1.0,  annualFee:0.0072, premiumPerBuy:0.015, color:"#3d82ff",
+     note:"每笔买入溢价1.5%损耗 + 0.72%/年管理费"},
+    {name:"QQQ",      key:"qqq",  investRatio:1.0,  annualFee:0.002,  premiumPerBuy:0,     color:"#26c258",
+     note:"全额投入 + 0.20%/年管理费"},
+  ],
+  sp500: [
+    {name:"场外QDII", key:"qdii", investRatio:0.95, annualFee:0.007,  premiumPerBuy:0,     color:"#ff9a00",
+     note:"5%备付金不投入 + 0.70%/年管理费"},
+    {name:"场内ETF",  key:"etf",  investRatio:1.0,  annualFee:0.008,  premiumPerBuy:0.015, color:"#3d82ff",
+     note:"每笔买入溢价1.5%损耗 + 0.80%/年管理费"},
+    {name:"VOO",      key:"voo",  investRatio:1.0,  annualFee:0.0003, premiumPerBuy:0,     color:"#14c8b4",
+     note:"全额投入 + 0.03%/年管理费"},
+  ],
+};
+
+const LUMP_SUM        = 100000; // 首投10万
+const MONTHLY         = 5000;   // 每月定投5000
+const GROSS_RATE      = { nasdaq: 0.13, sp500: 0.10 }; // 纳指13%，标普10%
+const DCA_YEARS       = 20;
+
+// 逐月模拟DCA，返回每年末资产值（含第0年=初始投入后）
+function simulateDCA(strategy, grossRate) {
+  const monthlyGross = Math.pow(1 + grossRate, 1/12) - 1;
+  const monthlyFee   = strategy.annualFee / 12;
+  const net          = monthlyGross - monthlyFee;
+  // 首投：备付金比例 + 溢价损耗
+  let value = LUMP_SUM * strategy.investRatio * (1 - strategy.premiumPerBuy);
+  const result = [{ yr: 0, val: Math.round(value) }];
+  for (let m = 1; m <= DCA_YEARS * 12; m++) {
+    const contrib = MONTHLY * strategy.investRatio * (1 - strategy.premiumPerBuy);
+    value = value * (1 + net) + contrib;
+    if (m % 12 === 0) result.push({ yr: m / 12, val: Math.round(value) });
+  }
+  return result;
+}
+
+// 预计算所有策略的年度数据，合并为图表rows
+const DCA_CHART_DATA = (() => {
+  const rows = Array.from({length: DCA_YEARS + 1}, (_, y) => ({
+    year: y === 0 ? "首投" : `${y}年`,
+  }));
+  ["nasdaq","sp500"].forEach(idx => {
+    DCA_STRATEGIES[idx].forEach(s => {
+      const series = simulateDCA(s, GROSS_RATE[idx]);
+      series.forEach(({yr, val}) => { rows[yr][`${idx}_${s.key}`] = val; });
+    });
+  });
+  // 实际投入本金参考线
+  rows.forEach((r, y) => {
+    r.invested = Math.round(LUMP_SUM + MONTHLY * 12 * y);
+  });
+  return rows;
+})();
+
+// 总投入本金
+const TOTAL_INVESTED = LUMP_SUM + MONTHLY * 12 * DCA_YEARS;
+
+function FeeDragChart({index, isMobile}) {
+  const strategies = DCA_STRATEGIES[index];
+  const title    = index === "nasdaq" ? "纳指100 · 定投20年资产对比" : "标普500 · 定投20年资产对比";
+  const usLabel  = strategies[2].name;
+  const fmtW     = v => `${(v / 10000).toFixed(1)}万`;
+
+  const finalY   = DCA_YEARS;
+  const best     = DCA_CHART_DATA[finalY][`${index}_${strategies[2].key}`];
+  const worst    = DCA_CHART_DATA[finalY][`${index}_${strategies[0].key}`];
+  const mid      = DCA_CHART_DATA[finalY][`${index}_${strategies[1].key}`];
+  const diff     = best - worst;
+  const diffPct  = Math.round(diff / worst * 100);
+
+  return (
+    <Card style={{padding:"22px 24px"}}>
+      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{title}</div>
+      <div style={{fontSize:11,color:C.textDim,marginBottom:14}}>
+        首投 10万 + 每月定投 5,000元 · 持续20年 · 假设毛收益 {index==="nasdaq"?"13%":"10%"}/年
+      </div>
+
+      {/* 20年末终值卡片 */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+        {strategies.map(s => {
+          const val = DCA_CHART_DATA[finalY][`${index}_${s.key}`];
+          const isBest = s.key === strategies[2].key;
+          return (
+            <div key={s.key} style={{padding:"10px 12px",borderRadius:10,
+              background: isBest ? s.color+"18" : s.color+"0c",
+              border:`1px solid ${s.color}${isBest?"50":"25"}`}}>
+              <div style={{fontSize:11,fontWeight:700,color:s.color,marginBottom:2}}>{s.name}</div>
+              <div style={{fontSize:18,fontWeight:800,color:s.color,letterSpacing:-0.5}}>{fmtW(val)}</div>
+              <div style={{fontSize:9,color:C.textDim,marginTop:2}}>20年后</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 成本说明 */}
+      <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:14}}>
+        {strategies.map(s => (
+          <div key={s.key} style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:C.textMuted}}>
+            <div style={{width:10,height:3,borderRadius:2,background:s.color,flexShrink:0}}/>
+            <span style={{fontWeight:600,color:s.color}}>{s.name}</span>
+            <span>{s.note}</span>
+          </div>
+        ))}
+      </div>
+
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={DCA_CHART_DATA} margin={{top:4,right:8,left:4,bottom:0}}>
+          <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+          <XAxis dataKey="year" tick={{fill:C.textDim,fontSize:9}} axisLine={false} tickLine={false}
+            ticks={["首投","5年","10年","15年","20年"]}/>
+          <YAxis tick={{fill:C.textDim,fontSize:9}} axisLine={false} tickLine={false}
+            tickFormatter={v=>`${(v/10000).toFixed(0)}万`} width={36}/>
+          <Tooltip
+            formatter={(v, n) => [`¥${v.toLocaleString()}`, n === "已投本金" ? n : n]}
+            contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:11}}/>
+          <Legend wrapperStyle={{fontSize:10,paddingTop:8}}/>
+          {/* 已投本金参考线 */}
+          <Line dataKey="invested" name="已投本金" stroke={C.borderLight} strokeWidth={1.5}
+            strokeDasharray="4 3" dot={false} legendType="plainline"/>
+          {strategies.map(s => (
+            <Line key={s.key} type="monotone" dataKey={`${index}_${s.key}`}
+              name={s.name} stroke={s.color} strokeWidth={2.5} dot={false}
+              activeDot={{r:4, fill:s.color}}/>
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+
+      {/* 差距总结 */}
+      <div style={{marginTop:12,padding:"12px 14px",borderRadius:10,
+        background:`linear-gradient(135deg,${strategies[2].color}0a,${strategies[2].color}18)`,
+        border:`1px solid ${strategies[2].color}30`}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.text,marginBottom:4}}>
+          20年后 {usLabel} 比场外QDII 多赚
+          <span style={{color:strategies[2].color,fontSize:16,marginLeft:6}}>
+            ¥{diff.toLocaleString()}
+          </span>
+          <span style={{color:C.textMuted,fontSize:11,marginLeft:4}}>（多 {diffPct}%）</span>
+        </div>
+        <div style={{fontSize:11,color:C.textMuted}}>
+          总投入本金 {fmtW(TOTAL_INVESTED)} · 场外QDII到手 {fmtW(worst)} · 场内ETF到手 {fmtW(mid)}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function HoldingsChart({data, title, isMobile}) {
+  const top10 = data.slice(0, data.length);
+  const maxPct = Math.max(...top10.filter(d=>d.ticker!=="—").map(d=>d.pct));
+  return (
+    <Card style={{padding:"20px 22px"}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:2}}>{title} · 核心持仓</div>
+      <div style={{fontSize:11,color:C.textDim,marginBottom:16}}>QQQ 截至 2026-04-16 · VOO 截至 2026-03-31 · 来源 stockanalysis.com</div>
+      <div style={{display:"flex",gap:isMobile?12:20,alignItems:"flex-start",flexDirection:isMobile?"column":"row"}}>
+        {/* Donut */}
+        <div style={{flexShrink:0}}>
+          <PieChart width={140} height={140}>
+            <Pie data={top10} cx={65} cy={65} innerRadius={42} outerRadius={65}
+              dataKey="pct" strokeWidth={1} stroke="transparent" paddingAngle={1}>
+              {top10.map((d,i)=><Cell key={i} fill={d.color}/>)}
+            </Pie>
+            <Tooltip formatter={(v,n,p)=>[`${v}%`, p.payload.name]} contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:11}}/>
+          </PieChart>
+          <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:4}}>
+            {top10.slice(0,6).map(d=>(
+              <div key={d.ticker} style={{display:"flex",alignItems:"center",gap:5}}>
+                <div style={{width:8,height:8,borderRadius:2,background:d.color,flexShrink:0}}/>
+                <span style={{fontSize:10,color:C.textMuted,flex:1}}>{d.name}</span>
+                <span style={{fontSize:10,color:C.text,fontWeight:600}}>{d.pct}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Bar list */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",gap:7}}>
+          {top10.slice(0,10).map(d=>(
+            <div key={d.ticker}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:12,fontWeight:600,color:C.text}}>{d.name}</span>
+                  <span style={{fontSize:10,color:C.textDim,fontFamily:"monospace"}}>{d.ticker}</span>
+                </div>
+                <span style={{fontSize:12,fontWeight:700,color:d.color}}>{d.pct}%</span>
+              </div>
+              <div style={{height:5,borderRadius:3,background:C.borderLight,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${d.pct/maxPct*100}%`,background:d.color,borderRadius:3,transition:"width 0.8s ease"}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function GuideTab({isMobile}) {
+  const [activeMethod, setActiveMethod] = useState("us");
+  return (
+    <div>
+      {/* ── Section 1: 指数简介 ── */}
+      <SectionHeader title="指数诞生与发展" color={C.accent}/>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?24:36}}>
+        {/* NDX100 */}
+        <Card style={{padding:"22px 24px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+            <div style={{width:36,height:36,borderRadius:10,background:C.accent+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📈</div>
+            <div>
+              <div style={{fontSize:15,fontWeight:700,color:C.text}}>纳斯达克100</div>
+              <div style={{fontSize:11,color:C.textDim}}>Nasdaq-100 · ^NDX</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+            {[
+              {label:"创立时间",value:"1985年1月31日"},
+              {label:"指数年龄",value:"40年历史"},
+              {label:"成份股数",value:"100只"},
+              {label:"行业特征",value:"非金融科技"},
+            ].map(s=>(
+              <div key={s.label} style={{padding:"10px 12px",borderRadius:10,background:C.bgAlt}}>
+                <div style={{fontSize:10,color:C.textDim,marginBottom:3}}>{s.label}</div>
+                <div style={{fontSize:13,fontWeight:700,color:C.text}}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:C.textMuted,lineHeight:1.7,padding:"12px 14px",borderRadius:10,background:C.accent+"08",border:`1px solid ${C.accent}20`}}>
+            由纳斯达克交易所于 1985 年创立，追踪在纳斯达克上市的 100 家最大非金融企业。以科技股为主，苹果、英伟达、微软等科技巨头贡献超过 35% 权重，是全球最具代表性的科技成长指数。代表性 ETF 为 <strong style={{color:C.accent}}>QQQ</strong>（1999年上市，管理规模超2000亿美元）。
+          </div>
+        </Card>
+        {/* SPX500 */}
+        <Card style={{padding:"22px 24px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+            <div style={{width:36,height:36,borderRadius:10,background:C.cyan+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏛️</div>
+            <div>
+              <div style={{fontSize:15,fontWeight:700,color:C.text}}>标准普尔500</div>
+              <div style={{fontSize:11,color:C.textDim}}>S&P 500 · ^GSPC</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+            {[
+              {label:"创立时间",value:"1957年3月4日"},
+              {label:"指数年龄",value:"68年历史"},
+              {label:"成份股数",value:"500只"},
+              {label:"行业特征",value:"全市场均衡"},
+            ].map(s=>(
+              <div key={s.label} style={{padding:"10px 12px",borderRadius:10,background:C.bgAlt}}>
+                <div style={{fontSize:10,color:C.textDim,marginBottom:3}}>{s.label}</div>
+                <div style={{fontSize:13,fontWeight:700,color:C.text}}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:C.textMuted,lineHeight:1.7,padding:"12px 14px",borderRadius:10,background:C.cyan+"08",border:`1px solid ${C.cyan}20`}}>
+            由标准普尔公司于 1957 年创立（前身 S&P 90 可追溯到 1926 年），追踪美国 500 家大市值上市公司，覆盖全市场约 80% 市值。行业多元，科技、医疗、金融、消费均有涵盖，是衡量美国股市整体表现的黄金基准。代表性 ETF 为 <strong style={{color:C.cyan}}>VOO</strong>（2010年上市，费率仅 0.03%）。
+          </div>
+        </Card>
+      </div>
+
+      {/* ── Section 2: 核心持仓 ── */}
+      <SectionHeader title="核心持仓占比" color={C.purple}/>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?24:36}}>
+        <HoldingsChart data={NDX_HOLDINGS} title="纳斯达克100" isMobile={isMobile}/>
+        <HoldingsChart data={SPX_HOLDINGS} title="标普500" isMobile={isMobile}/>
+      </div>
+
+      {/* ── Section 3: 投资方式对比 ── */}
+      <SectionHeader title="三种投资方式对比" subtitle="场外QDII · 场内ETF · 美股直购" color={C.green}/>
+
+      {/* Method selector */}
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+        {INVEST_METHODS.map(m=>(
+          <button key={m.id} onClick={()=>setActiveMethod(m.id)}
+            style={{padding:"8px 18px",borderRadius:20,border:`1px solid ${activeMethod===m.id?m.color:C.border}`,
+              background:activeMethod===m.id?m.color+"18":"transparent",
+              color:activeMethod===m.id?m.color:C.textMuted,
+              fontSize:13,fontWeight:activeMethod===m.id?700:400,cursor:"pointer",transition:"all 0.2s"}}>
+            {m.icon} {m.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Comparison cards */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(3,1fr)",gap:isMobile?12:16,marginBottom:isMobile?24:36,alignItems:"start"}}>
+        {INVEST_METHODS.map(m=>{
+          const isActive = activeMethod === m.id;
+          return (
+            <Card key={m.id} onClick={()=>setActiveMethod(m.id)} style={{
+              padding:"20px 22px",cursor:"pointer",
+              border:`1px solid ${isActive?m.color+"80":C.border}`,
+              background:isActive?m.color+"08":C.card,
+              transition:"transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.25s ease, opacity 0.25s ease",
+              transform: isActive?"translateY(-10px) scale(1.03)":"scale(0.97)",
+              boxShadow: isActive?`0 12px 32px ${m.color}25`:"none",
+              zIndex: isActive?1:0,
+              position:"relative",
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+                <span style={{fontSize:22}}>{m.icon}</span>
+                <div>
+                  <div style={{fontSize:16,fontWeight:700,color:isActive?m.color:C.text}}>{m.label}</div>
+                  <div style={{fontSize:12,fontWeight:500,color:C.textMuted}}>{m.sublabel}</div>
+                </div>
+                {isActive&&<div style={{marginLeft:"auto",width:8,height:8,borderRadius:"50%",background:m.color}}/>}
+              </div>
+              {/* NDX row */}
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:11,color:C.accent,fontWeight:700,marginBottom:5}}>纳指100</div>
+                <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:4}}>{m.ndx.product}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:C.bgAlt,color:C.text,fontWeight:600}}>费率 {m.ndx.fee}</span>
+                  <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:C.bgAlt,color:C.text,fontWeight:600}}>起购 {m.ndx.minBuy}</span>
+                </div>
+              </div>
+              {/* SPX row */}
+              <div style={{borderTop:`1px solid ${C.border}`,paddingTop:12,marginBottom:14}}>
+                <div style={{fontSize:11,color:C.cyan,fontWeight:700,marginBottom:5}}>标普500</div>
+                <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:4}}>{m.spx.product}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:C.bgAlt,color:C.text,fontWeight:600}}>费率 {m.spx.fee}</span>
+                  <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:C.bgAlt,color:C.text,fontWeight:600}}>起购 {m.spx.minBuy}</span>
+                </div>
+              </div>
+              {/* Pros/Cons */}
+              <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:16}}>
+                {m.pros.map((p,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:6,fontSize:12,color:C.text,fontWeight:500}}>
+                    <span style={{color:C.green,marginTop:1,flexShrink:0,fontWeight:700}}>✓</span>{p}
+                  </div>
+                ))}
+                {m.cons.map((p,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:6,fontSize:12,color:C.textMuted,fontWeight:500}}>
+                    <span style={{color:"#ff6b6b",marginTop:1,flexShrink:0,fontWeight:700}}>✗</span>{p}
+                  </div>
+                ))}
+              </div>
+              {/* CTA */}
+              <div style={{padding:"12px 14px",borderRadius:10,background:m.color+"15",border:`1px solid ${m.color}40`}}>
+                <div style={{fontSize:13,fontWeight:700,color:m.color,marginBottom:3}}>{m.cta.label}</div>
+                <div style={{fontSize:11,fontWeight:500,color:C.text}}>{m.cta.tip}</div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Fee drag chart */}
+      <SectionHeader title="定投20年资产对比" subtitle="首投10万 + 每月5,000元定投 · 持续20年 · 纳指假设13%/年 · 标普假设10%/年" color={C.orange}/>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?24:36}}>
+        <FeeDragChart index="nasdaq" isMobile={isMobile}/>
+        <FeeDragChart index="sp500"  isMobile={isMobile}/>
+      </div>
+
+      {/* Broker CTA */}
+      <SectionHeader title="开户引导" subtitle="选择适合你的投资渠道" color={C.accent}/>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?24:40}}>
+        <Card style={{padding:"22px 24px",border:`1px solid ${C.green}30`}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+            <div style={{width:36,height:36,borderRadius:10,background:C.green+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🚀</div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:C.text}}>美股直购 · QQQ / VOO</div>
+              <div style={{fontSize:11,color:C.textDim}}>费率最低 · 无限额 · 无溢价</div>
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:16}}>
+            {[
+              {icon:"🎯","text":"港股 · 美股终身零佣金"},
+              {icon:"📜","text":"美债零佣金，平台费全免"},
+              {icon:"₿", "text":"可交易加密 ETF（BTC/ETH 现货 ETF）"},
+              {icon:"🇨🇳","text":"支持内地用户开户，港股 + 美股一体"},
+              {icon:"💱","text":"每年外汇额度 5 万美元，长期定投足够"},
+            ].map((t,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,fontWeight:500,color:C.text}}>
+                <span style={{fontSize:14,width:20,textAlign:"center",flexShrink:0}}>{t.icon}</span>{t.text}
+              </div>
+            ))}
+          </div>
+          <a href="https://www.wise-invest.org/articles/broker/sQSbLRe8" target="_blank" rel="noopener noreferrer"
+            style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+              padding:"12px 16px",borderRadius:10,
+              background:`linear-gradient(135deg,${C.green}15,${C.green}25)`,
+              border:`1px solid ${C.green}50`,textDecoration:"none",cursor:"pointer",
+              transition:"all 0.2s"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:16}}>📖</span>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:C.green}}>复星证券开户教程</div>
+                <div style={{fontSize:11,color:C.textMuted,marginTop:1}}>手把手图文指南，10分钟完成开户</div>
+              </div>
+            </div>
+            <span style={{fontSize:12,fontWeight:700,color:C.green,whiteSpace:"nowrap",marginLeft:12}}>查看教程 →</span>
+          </a>
+        </Card>
+        <Card style={{padding:"22px 24px",border:`1px solid ${C.accent}30`}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+            <div style={{width:36,height:36,borderRadius:10,background:C.accent+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏦</div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF · A股账户</div>
+              <div style={{fontSize:11,color:C.textDim}}>人民币买入 · 无需外汇额度</div>
+            </div>
+          </div>
+          <div style={{fontSize:12,color:C.textMuted,lineHeight:1.7,marginBottom:14}}>
+            在国内券商开通股票账户后，即可直接以人民币买入 513100（纳指）、513500（标普）等场内ETF。注意关注溢价率，避免在高溢价时追入。
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+            {["华泰证券：交易费率低，App流畅","东方财富：天天基金同体系，操作简便","广发证券：场内ETF研究报告丰富"].map((t,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.textMuted}}>
+                <span style={{color:C.accent,fontWeight:700}}>·</span>{t}
+              </div>
+            ))}
+          </div>
+          <div style={{padding:"10px 14px",borderRadius:10,background:C.accent+"10",border:`1px solid ${C.accent}25`,fontSize:11,color:C.textDim}}>
+            ⚠️ 建议关注溢价率，本站「场内ETF」标签页实时监控
+          </div>
+        </Card>
+      </div>
+
+      <div style={{padding:"14px 18px",borderRadius:12,background:C.bgAlt,border:`1px solid ${C.border}`,fontSize:11,color:C.textDim,lineHeight:1.7,marginBottom:8}}>
+        ⚠️ 以上信息仅供参考，不构成投资建议。ETF 持仓权重随市场波动实时变化，实际费率以各产品最新公告为准。投资有风险，请在充分了解产品特征后谨慎决策。
+      </div>
+    </div>
+  );
+}
+
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 const TABS=[
-  {id:"overview",  label:"总览"},
+  {id:"guide",     label:"核心介绍"},
   {id:"nasdaq",    label:"纳指被动"},
   {id:"sp500",     label:"标普500"},
-  {id:"active",    label:"美股主动"},
   {id:"etf",       label:"场内ETF"},
+  {id:"active",    label:"美股主动"},
   {id:"watchlist", label:"自选"},
 ];
 
@@ -2172,7 +2642,12 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
 export default function App() {
   if(window.location.pathname==="/admin") return <AdminPage/>;
 
-  const [activeTab,setActiveTab]=useState("overview");
+  const getInitialTab = () => {
+    const path = window.location.pathname.replace(/^\//, "");
+    const valid = ["guide","nasdaq","sp500","etf","active","watchlist"];
+    return valid.includes(path) ? path : "overview";
+  };
+  const [activeTab,setActiveTab]=useState(getInitialTab);
   const [sortKey,setSortKey]=useState(null);
   const [sortDir,setSortDir]=useState("desc");
   const [search,setSearch]=useState("");
@@ -2243,11 +2718,21 @@ export default function App() {
     return()=>window.removeEventListener("scroll",h);
   },[]);
 
+  useEffect(()=>{
+    const onPop=()=>{
+      const path=window.location.pathname.replace(/^\//,"");
+      const valid=["guide","nasdaq","sp500","etf","active","watchlist"];
+      setActiveTab(valid.includes(path)?path:"overview");
+    };
+    window.addEventListener("popstate",onPop);
+    return()=>window.removeEventListener("popstate",onPop);
+  },[]);
+
   // Sliding tab indicator
   useEffect(()=>{
     if(!navRef.current) return;
     const btn=navRef.current.querySelector(`[data-tab="${activeTab}"]`);
-    if(!btn) return;
+    if(!btn){ setIndicator(p=>({...p,opacity:0})); return; }
     const nr=navRef.current.getBoundingClientRect();
     const br=btn.getBoundingClientRect();
     setIndicator({left:br.left-nr.left,width:br.width,opacity:1});
@@ -2330,7 +2815,12 @@ export default function App() {
       return sortDir==="asc"?String(av||"").localeCompare(String(bv||"")):String(bv||"").localeCompare(String(av||""));
     });
   };
-  const switchTab = id=>{setActiveTab(id);setSortKey(null);setSearch("");setStatusFilter("all");window.scrollTo({top:0,behavior:"smooth"});};
+  const switchTab = id=>{
+    setActiveTab(id);
+    setSortKey(null);setSearch("");setStatusFilter("all");
+    window.history.pushState(null, "", id === "overview" ? "/" : `/${id}`);
+    window.scrollTo({top:0,behavior:"smooth"});
+  };
 
   const [premHist, setPremHist] = useState([]);
   const [premHistLoading, setPremHistLoading] = useState(false);
@@ -2806,9 +3296,6 @@ export default function App() {
         {/* ════ OVERVIEW ════ */}
         {activeTab==="overview"&&(
           <>
-            {/* ── 指数实时点位 + 走势 ── */}
-            <IndexPriceRow sentiment={sentiment} aiInsight={aiInsight} aiLoading={aiLoading} isMobile={isMobile}/>
-
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[
@@ -2886,11 +3373,12 @@ export default function App() {
               </Reveal>
             </div>
 
+            {/* ── 指数实时点位 + 走势 ── */}
+            <IndexPriceRow sentiment={sentiment} aiInsight={aiInsight} aiLoading={aiLoading} isMobile={isMobile}/>
+
             {/* Index History */}
             <IndexHistoryCard/>
 
-            {/* FX Analysis */}
-            <FXAnalysisCard/>
 
             {/* Top 5 */}            <Reveal delay={0.08}>
               <SectionHeader title="近一年涨幅 TOP 5 · 主动型" color={C.purple}/>
@@ -2994,6 +3482,12 @@ export default function App() {
             </div>
             {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
             <TipBox color={C.purple} text="主动型管理费较高(~1.55%)，但优秀经理可带来超额收益。易方达全球成长(012920)近一年+100.44%，但限额仅50元/日。申购限额越低说明额度越紧张。"/>
+          </Reveal>
+        )}
+
+        {activeTab==="guide"&&(
+          <Reveal>
+            <GuideTab isMobile={isMobile}/>
           </Reveal>
         )}
 
