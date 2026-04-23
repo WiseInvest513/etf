@@ -2344,9 +2344,18 @@ function drawTableCanvas({titleParts,date,cols,rows}){
   return cvs;
 }
 
-function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
+function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   const W=900,SC=2,PX=28,GAP=14;
   const F=EC.F;
+  // Light theme palette
+  const L={
+    bg:'#f8fafc',card:'#ffffff',headBg:'#f0f6ff',
+    border:'#dde3f0',
+    blue:'#1a56db',cyan:'#0369a1',green:'#16a34a',
+    red:'#dc2626',orange:'#ea580c',purple:'#7c3aed',
+    dark:'#0f172a',mid:'#374151',dim:'#6b7280',muted:'#9ca3af',
+  };
+
   const avg=(arr,k)=>{const vs=arr.map(e=>e[k]).filter(v=>v!=null);return vs.length?(vs.reduce((a,b)=>a+b,0)/vs.length).toFixed(2):'—';};
   const nasdaqAvg=avg(nasdaq,'ytd_return');
   const sp500Avg=avg(sp500,'ytd_return');
@@ -2355,65 +2364,229 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
   const openCount=[...nasdaq,...sp500,...active].filter(f=>f.buy_status==='open').length;
   const totalCount=nasdaq.length+sp500.length+active.length;
 
-  const HEADER_H=108,STATS_H=188,CHART_H=280,HIST_H=316,FX_H=268,FOOTER_H=56;
-  const H=HEADER_H+STATS_H+CHART_H+HIST_H+FX_H+FOOTER_H;
+  const BRAND_H=60,STATS_H=168,INDEX_H=348,CHART_H=280,HIST_H=316,FX_H=268,FOOTER_H=56;
+  const H=BRAND_H+STATS_H+INDEX_H+CHART_H+HIST_H+FX_H+FOOTER_H;
 
   const cvs=document.createElement('canvas');
   cvs.width=W*SC;cvs.height=H*SC;
   const c=cvs.getContext('2d');c.scale(SC,SC);
 
-  c.fillStyle=EC.bg;c.fillRect(0,0,W,H);
+  c.fillStyle=L.bg;c.fillRect(0,0,W,H);
 
-  // Header
-  const hg=c.createLinearGradient(0,0,W,0);
-  hg.addColorStop(0,'#0c1e3a');hg.addColorStop(1,'#0e0b24');
-  c.fillStyle=hg;c.fillRect(0,0,W,HEADER_H);
-  const ag=c.createLinearGradient(0,0,0,HEADER_H);
-  ag.addColorStop(0,EC.blue);ag.addColorStop(1,EC.purple);
-  c.fillStyle=ag;c.fillRect(0,0,5,HEADER_H);
-
-  c.font=`bold 13px ${F}`;c.fillStyle=EC.blue;c.fillText('Wise ETF',PX+10,30);
-  c.font=`bold 38px ${F}`;c.fillStyle=EC.white;c.fillText('每日市场快照',PX+10,74);
+  // ── Brand header ──────────────────────────────────────────────────────────
+  const ag=c.createLinearGradient(0,0,W,0);
+  ag.addColorStop(0,'#1a56db');ag.addColorStop(1,'#7c3aed');
+  c.fillStyle=ag;c.fillRect(0,0,W,5);
+  c.fillStyle=L.headBg;c.fillRect(0,5,W,BRAND_H-5);
+  c.font=`bold 16px ${F}`;c.fillStyle=L.blue;c.fillText('Wise ETF',PX,34);
+  c.font=`bold 14px ${F}`;c.fillStyle=L.mid;c.fillText('每日市场快照',PX+88,34);
   const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-  c.font=`15px ${F}`;c.fillStyle=EC.muted;c.fillText(today,PX+10,96);
+  c.font=`12px ${F}`;c.fillStyle=L.muted;c.fillText(today,PX,52);
   if(usdcny){
     c.textAlign='right';
-    c.font=`bold 22px ${F}`;c.fillStyle=EC.orange;c.fillText(`¥${usdcny}`,W-PX,68);
-    c.font=`12px ${F}`;c.fillStyle=EC.muted;c.fillText('USD/CNY',W-PX,90);
+    c.font=`bold 20px ${F}`;c.fillStyle=L.orange;c.fillText(`¥${usdcny}`,W-PX,36);
+    c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('USD/CNY',W-PX,52);
     c.textAlign='left';
   }
 
-  // Stat cards
+  // ── Stat cards ────────────────────────────────────────────────────────────
   const statData=[
-    {label:'纳指均涨幅',value:`+${nasdaqAvg}%`,sub:'近一年',color:EC.blue},
-    {label:'标普均涨幅',value:`+${sp500Avg}%`,sub:'近一年',color:EC.cyan},
-    {label:'主动均涨幅',value:`+${activeAvg}%`,sub:'近一年',color:EC.purple},
-    {label:'ETF均溢价',value:`${etfAvg}%`,sub:'当前',color:EC.orange},
-    {label:'可申购数',value:`${openCount}`,sub:`共${totalCount}只`,color:EC.green},
+    {label:'纳指均涨幅',value:`+${nasdaqAvg}%`,sub:'近一年',color:L.blue},
+    {label:'标普均涨幅',value:`+${sp500Avg}%`,sub:'近一年',color:L.cyan},
+    {label:'主动均涨幅',value:`+${activeAvg}%`,sub:'近一年',color:L.purple},
+    {label:'ETF均溢价',value:`${etfAvg}%`,sub:'当前',color:L.orange},
+    {label:'可申购数',value:`${openCount}`,sub:`共${totalCount}只`,color:L.green},
   ];
-  const cW=(W-PX*2-GAP*4)/5,cH=128,sy=HEADER_H+22;
+  const cW=(W-PX*2-GAP*4)/5,cH=118,sy=BRAND_H+20;
   statData.forEach((s,i)=>{
     const cx=PX+i*(cW+GAP);
-    _rr(c,cx,sy,cW,cH,10);c.fillStyle=EC.card;c.fill();
-    c.strokeStyle=EC.border;c.lineWidth=0.5;c.stroke();
-    const bg=c.createLinearGradient(cx,sy,cx,sy+4);
-    bg.addColorStop(0,s.color);bg.addColorStop(1,s.color+'00');
-    _rr(c,cx,sy,cW,4,2);c.fillStyle=bg;c.fill();
-    c.font=`bold 26px ${F}`;c.fillStyle=s.color;c.textAlign='center';
-    c.fillText(s.value,cx+cW/2,sy+52);
-    c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText(s.sub,cx+cW/2,sy+72);
-    c.font=`bold 12px ${F}`;c.fillStyle=EC.white;c.fillText(s.label,cx+cW/2,sy+98);
+    _rr(c,cx,sy,cW,cH,10);c.fillStyle=L.card;c.fill();
+    c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+    const tg=c.createLinearGradient(cx,sy,cx+cW,sy);
+    tg.addColorStop(0,s.color);tg.addColorStop(1,s.color+'88');
+    _rr(c,cx,sy,cW,4,2);c.fillStyle=tg;c.fill();
+    c.font=`bold 24px ${F}`;c.fillStyle=s.color;c.textAlign='center';
+    c.fillText(s.value,cx+cW/2,sy+46);
+    c.font=`11px ${F}`;c.fillStyle=L.dim;c.fillText(s.sub,cx+cW/2,sy+64);
+    c.font=`bold 11px ${F}`;c.fillStyle=L.dark;c.fillText(s.label,cx+cW/2,sy+88);
     c.textAlign='left';
   });
 
-  // Chart section
-  const charty=HEADER_H+STATS_H;
-  c.font=`bold 16px ${F}`;c.fillStyle=EC.white;c.fillText('纳指 vs 标普 · 近12月收益率',PX,charty+28);
-  c.font=`12px ${F}`;c.fillStyle=EC.muted;c.fillText('美元口径（2025.04 – 2026.03）',PX,charty+48);
+  // ── Index data + sentiment + 15-day chart ─────────────────────────────────
+  const indexY=BRAND_H+STATS_H;
+  c.strokeStyle=L.border;c.lineWidth=1;
+  c.beginPath();c.moveTo(0,indexY);c.lineTo(W,indexY);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,indexY,W,INDEX_H);
+
+  c.fillStyle=L.blue;c.fillRect(PX,indexY+16,3,18);
+  c.font=`bold 14px ${F}`;c.fillStyle=L.dark;
+  c.fillText('指数实时点位  ·  近15日走势  ·  市场情绪',PX+10,indexY+29);
+
+  const ndxD=sentiment?.ndx_price||{};
+  const spxD=sentiment?.spx_price||{};
+  const vixD=sentiment?.vix||{};
+  const fgD=sentiment?.fear_greed||{};
+
+  const ic4W=(W-PX*2-GAP*3)/4,ic4H=108,ic4Y=indexY+44;
+
+  // Draw price card helper
+  const drawPriceCard=(x,y,w,h,title,price,changePct,yr1,d15,col)=>{
+    _rr(c,x,y,w,h,10);c.fillStyle=L.card;c.fill();
+    c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+    const tg2=c.createLinearGradient(x,y,x+w,y);
+    tg2.addColorStop(0,col);tg2.addColorStop(1,col+'88');
+    _rr(c,x,y,w,4,2);c.fillStyle=tg2;c.fill();
+    c.font=`bold 11px ${F}`;c.fillStyle=L.dim;c.textAlign='center';c.fillText(title,x+w/2,y+20);
+    const ps=price!=null?price.toLocaleString('en-US',{maximumFractionDigits:2}):'--';
+    c.font=`bold 17px ${F}`;c.fillStyle=L.dark;c.fillText(ps,x+w/2,y+43);
+    const chgStr=changePct!=null?`${changePct>=0?'+':''}${changePct}%`:'--';
+    const chgCol=changePct==null?L.muted:changePct>=0?L.green:L.red;
+    c.font=`bold 13px ${F}`;c.fillStyle=chgCol;c.fillText(chgStr,x+w/2,y+62);
+    const tw2=(w-20)/2-3;
+    const drawTag=(tx,ty,tw,label,val,tcol)=>{
+      _rr(c,tx,ty,tw,18,4);c.fillStyle=tcol+'18';c.fill();
+      c.font=`10px ${F}`;c.fillStyle=tcol;c.textAlign='center';
+      c.fillText(`${label} ${val!=null?(val>=0?'+':'')+val+'%':'--'}`,tx+tw/2,ty+12);
+    };
+    drawTag(x+10,y+74,tw2,'近1年',yr1,col);
+    drawTag(x+10+tw2+3,y+74,tw2,'近15日',d15,col);
+    c.textAlign='left';
+  };
+
+  const ndxR=ndxD.returns||{};
+  const spxR=spxD.returns||{};
+  drawPriceCard(PX,ic4Y,ic4W,ic4H,'纳斯达克100',ndxD.price,ndxD.change_pct,ndxR.yr1,ndxR.d15,L.blue);
+  drawPriceCard(PX+ic4W+GAP,ic4Y,ic4W,ic4H,'标普500',spxD.price,spxD.change_pct,spxR.yr1,spxR.d15,L.cyan);
+
+  // VIX card
+  const vix3X=PX+(ic4W+GAP)*2;
+  _rr(c,vix3X,ic4Y,ic4W,ic4H,10);c.fillStyle=L.card;c.fill();
+  c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+  const vixVal=vixD.value;
+  const vixCol=!vixVal?L.muted:vixVal>=40?L.red:vixVal>=30?'#ff6b35':vixVal>=20?L.orange:L.green;
+  const vixLbl=!vixVal?'--':vixVal>=40?'极度恐慌':vixVal>=30?'高度恐慌':vixVal>=20?'市场警惕':vixVal>=12?'相对平静':'极度平静';
+  const vtg=c.createLinearGradient(vix3X,ic4Y,vix3X+ic4W,ic4Y);
+  vtg.addColorStop(0,vixCol);vtg.addColorStop(1,vixCol+'88');
+  _rr(c,vix3X,ic4Y,ic4W,4,2);c.fillStyle=vtg;c.fill();
+  c.font=`bold 11px ${F}`;c.fillStyle=L.dim;c.textAlign='center';c.fillText('VIX 恐慌指数',vix3X+ic4W/2,ic4Y+20);
+  c.font=`bold 24px ${F}`;c.fillStyle=vixCol;c.fillText(vixVal??'--',vix3X+ic4W/2,ic4Y+48);
+  c.font=`bold 13px ${F}`;c.fillStyle=vixCol;c.fillText(vixLbl,vix3X+ic4W/2,ic4Y+66);
+  const vixChgStr2=vixD.change_pct!=null?`今日 ${vixD.change_pct>=0?'+':''}${vixD.change_pct}%`:'';
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText(vixChgStr2,vix3X+ic4W/2,ic4Y+83);
+  if(vixVal){
+    const bx2=vix3X+12,by2=ic4Y+94,bw2=ic4W-24;
+    _rr(c,bx2,by2,bw2,5,2);c.fillStyle=L.border;c.fill();
+    _rr(c,bx2,by2,bw2*Math.min(vixVal/60,1),5,2);c.fillStyle=vixCol;c.fill();
+  }
+  c.textAlign='left';
+
+  // Fear & Greed card
+  const fg4X=PX+(ic4W+GAP)*3;
+  _rr(c,fg4X,ic4Y,ic4W,ic4H,10);c.fillStyle=L.card;c.fill();
+  c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+  const fgScore=fgD.score;
+  const fgCol=fgScore==null?L.muted:fgScore<=25?L.red:fgScore<=45?L.orange:fgScore<=55?L.dim:fgScore<=75?L.green:'#15803d';
+  const fgLblMap={'extreme fear':'极度恐慌','fear':'恐慌','neutral':'中性','greed':'贪婪','extreme greed':'极度贪婪'};
+  const fgLbl=fgLblMap[(fgD.rating||'').toLowerCase()]||fgD.rating||'--';
+  const ftg=c.createLinearGradient(fg4X,ic4Y,fg4X+ic4W,ic4Y);
+  ftg.addColorStop(0,fgCol);ftg.addColorStop(1,fgCol+'88');
+  _rr(c,fg4X,ic4Y,ic4W,4,2);c.fillStyle=ftg;c.fill();
+  c.font=`bold 11px ${F}`;c.fillStyle=L.dim;c.textAlign='center';c.fillText('CNN 恐慌贪婪指数',fg4X+ic4W/2,ic4Y+20);
+  c.font=`bold 24px ${F}`;c.fillStyle=fgCol;c.fillText(fgScore??'--',fg4X+ic4W/2,ic4Y+48);
+  c.font=`bold 13px ${F}`;c.fillStyle=fgCol;c.fillText(fgLbl,fg4X+ic4W/2,ic4Y+66);
+  const fgPrevStr=fgD.previous_close!=null?`昨收 ${fgD.previous_close}`:'';
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText(fgPrevStr,fg4X+ic4W/2,ic4Y+83);
+  if(fgScore!=null){
+    const bx3=fg4X+12,by3=ic4Y+94,bw3=ic4W-24;
+    _rr(c,bx3,by3,bw3,5,2);c.fillStyle=L.border;c.fill();
+    _rr(c,bx3,by3,bw3*(fgScore/100),5,2);c.fillStyle=fgCol;c.fill();
+  }
+  c.textAlign='left';
+
+  // 15-day trend chart
+  const clY=ic4Y+ic4H+16;
+  c.font=`bold 12px ${F}`;c.fillStyle=L.dark;c.fillText('近15日走势对比',PX,clY+14);
+  c.font=`10px ${F}`;c.fillStyle=L.muted;c.fillText('以区间首日为基准  ·  累计涨幅',PX+116,clY+14);
+  c.fillStyle=L.blue;c.fillRect(W-PX-124,clY+7,10,3);
+  c.textAlign='right';c.font=`10px ${F}`;c.fillStyle=L.muted;c.fillText('纳斯达克100',W-PX,clY+14);
+  c.fillStyle=L.cyan;c.fillRect(W-PX-52,clY+7,10,3);
+  c.fillText('标普500',W-PX-38,clY+14);
+  c.textAlign='left';
+
+  const buildPctArr=(hist=[])=>{
+    if(hist.length<2)return[];
+    const base=hist[0].close;
+    return hist.map(d=>({date:d.date,pct:base?Math.round((d.close-base)/base*10000)/100:0}));
+  };
+  const ndxPts=buildPctArr(ndxD.history||[]);
+  const spxPts=buildPctArr(spxD.history||[]);
+  const lcX=PX+40,lcW=W-PX*2-48,lcH=108;
+  const lcCardY=clY+22,lcY2=lcCardY+12;
+  _rr(c,PX,lcCardY,W-PX*2,lcH+30,8);c.fillStyle=L.card;c.fill();
+  c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+
+  if(ndxPts.length>1||spxPts.length>1){
+    const allPcts=[...ndxPts.map(p=>p.pct),...spxPts.map(p=>p.pct)];
+    const pMin=Math.min(...allPcts,0),pMax=Math.max(...allPcts,0);
+    const pRange=(pMax-pMin)||0.01;
+    const vMin2=pMin-pRange*0.12,vMax2=pMax+pRange*0.12;
+    const vRange2=(vMax2-vMin2)||0.01;
+    const toY3=v=>lcY2+lcH*(1-(v-vMin2)/vRange2);
+
+    c.strokeStyle=L.border;c.lineWidth=0.5;c.setLineDash([2,3]);
+    c.beginPath();c.moveTo(lcX,toY3(0));c.lineTo(lcX+lcW,toY3(0));c.stroke();
+    c.setLineDash([]);
+    c.font=`9px ${F}`;c.fillStyle=L.muted;c.textAlign='right';c.fillText('0%',lcX-2,toY3(0)+3);c.textAlign='left';
+
+    if(ndxPts.length>1){
+      c.beginPath();
+      ndxPts.forEach((p,i)=>{const xx=lcX+i/(ndxPts.length-1)*lcW;const yy=toY3(p.pct);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+      c.lineTo(lcX+lcW,lcY2+lcH);c.lineTo(lcX,lcY2+lcH);c.closePath();
+      const nf=c.createLinearGradient(0,lcY2,0,lcY2+lcH);
+      nf.addColorStop(0,L.blue+'30');nf.addColorStop(1,L.blue+'00');
+      c.fillStyle=nf;c.fill();
+      c.strokeStyle=L.blue;c.lineWidth=2;c.beginPath();
+      ndxPts.forEach((p,i)=>{const xx=lcX+i/(ndxPts.length-1)*lcW;const yy=toY3(p.pct);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+      c.stroke();
+    }
+    if(spxPts.length>1){
+      c.beginPath();
+      spxPts.forEach((p,i)=>{const xx=lcX+i/(spxPts.length-1)*lcW;const yy=toY3(p.pct);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+      c.lineTo(lcX+lcW,lcY2+lcH);c.lineTo(lcX,lcY2+lcH);c.closePath();
+      const sf=c.createLinearGradient(0,lcY2,0,lcY2+lcH);
+      sf.addColorStop(0,L.cyan+'25');sf.addColorStop(1,L.cyan+'00');
+      c.fillStyle=sf;c.fill();
+      c.strokeStyle=L.cyan;c.lineWidth=2;c.setLineDash([5,3]);c.beginPath();
+      spxPts.forEach((p,i)=>{const xx=lcX+i/(spxPts.length-1)*lcW;const yy=toY3(p.pct);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+      c.stroke();c.setLineDash([]);
+    }
+    const refPts=ndxPts.length>=spxPts.length?ndxPts:spxPts;
+    const rn=refPts.length;
+    const showIdx=new Set([0,Math.floor(rn/4),Math.floor(rn/2),Math.floor(3*rn/4),rn-1]);
+    refPts.forEach((p,i)=>{
+      if(!showIdx.has(i))return;
+      const xx=lcX+i/(rn-1)*lcW;
+      c.font=`9px ${F}`;c.fillStyle=L.muted;c.textAlign='center';c.fillText(p.date,xx,lcY2+lcH+14);
+    });
+    c.textAlign='left';
+  } else {
+    c.font=`11px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
+    c.fillText('数据加载中…',PX+(W-PX*2)/2,lcCardY+(lcH+30)/2+5);
+    c.textAlign='left';
+  }
+
+  // ── 12-month bar chart ────────────────────────────────────────────────────
+  const charty=BRAND_H+STATS_H+INDEX_H;
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,charty);c.lineTo(W,charty);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,charty,W,CHART_H);
+
+  c.fillStyle=L.blue;c.fillRect(PX,charty+18,3,16);
+  c.font=`bold 14px ${F}`;c.fillStyle=L.dark;c.fillText('纳指 vs 标普 · 近12月收益率',PX+10,charty+30);
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('美元口径（2025.04 – 2026.03）',PX+10,charty+48);
   c.textAlign='right';
-  c.fillStyle=EC.blue;c.fillRect(W-PX-126,charty+18,12,12);
-  c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText('纳斯达克100',W-PX,charty+29);
-  c.fillStyle=EC.cyan;c.fillRect(W-PX-56,charty+18,12,12);
+  c.fillStyle=L.blue;c.fillRect(W-PX-126,charty+18,12,12);
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('纳斯达克100',W-PX,charty+29);
+  c.fillStyle=L.cyan;c.fillRect(W-PX-56,charty+18,12,12);
   c.fillText('标普500',W-PX-36+6,charty+29);
   c.textAlign='left';
 
@@ -2422,12 +2595,11 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
   const maxV=Math.ceil(Math.max(...allVals.map(v=>Math.abs(v)))/5)*5||10;
   const zeroY=chartTopY+chartH2/2;
 
-  // Grid lines
   [maxV,maxV/2,0,-maxV/2,-maxV].forEach(v=>{
     const yy=chartTopY+chartH2*(1-v/maxV)/2;
-    c.strokeStyle=EC.border+(v===0?'ff':'60');c.lineWidth=v===0?1:0.5;
+    c.strokeStyle=L.border+(v===0?'':'80');c.lineWidth=v===0?1:0.5;
     c.beginPath();c.moveTo(chartX,yy);c.lineTo(chartX+chartW,yy);c.stroke();
-    c.font=`10px ${F}`;c.fillStyle=EC.muted;c.textAlign='right';
+    c.font=`10px ${F}`;c.fillStyle=L.muted;c.textAlign='right';
     c.fillText(v===0?'0':v+'%',chartX-4,yy+4);
   });
   c.textAlign='left';
@@ -2439,40 +2611,34 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
     const nx=gx+(groupW-bW*2-3)/2;
     const nh=Math.max(Math.abs(d.nasdaq)/maxV*chartH2/2,1);
     const ny=d.nasdaq>=0?zeroY-nh:zeroY;
-    _rr(c,nx,ny,bW,nh,2);c.fillStyle=d.nasdaq>=0?EC.blue:EC.blue+'99';c.fill();
+    _rr(c,nx,ny,bW,nh,2);c.fillStyle=d.nasdaq>=0?L.blue:L.blue+'99';c.fill();
     const sx2=nx+bW+3;
     const sh=Math.max(Math.abs(d.sp500)/maxV*chartH2/2,1);
     const sy2=d.sp500>=0?zeroY-sh:zeroY;
-    _rr(c,sx2,sy2,bW,sh,2);c.fillStyle=d.sp500>=0?EC.cyan:EC.cyan+'99';c.fill();
-    c.font=`10px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';
+    _rr(c,sx2,sy2,bW,sh,2);c.fillStyle=d.sp500>=0?L.cyan:L.cyan+'99';c.fill();
+    c.font=`10px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
     c.fillText(d.month,gx+groupW/2,chartTopY+chartH2+18);
     c.textAlign='left';
   });
 
-  // ─── Section 3: 35年复利曲线（对数坐标）
-  const histY=HEADER_H+STATS_H+CHART_H;
+  // ── 35-year compound curve ────────────────────────────────────────────────
+  const histY=BRAND_H+STATS_H+INDEX_H+CHART_H;
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,histY);c.lineTo(W,histY);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,histY,W,HIST_H);
 
-  // Compute cumulative returns from 1990
   const years=Object.keys(INDEX_ANNUAL.nasdaq).map(Number).sort();
   let nV=100,sV=100;
   const cumPts=[[1989,100,100]];
   years.forEach(y=>{nV*=(1+(INDEX_ANNUAL.nasdaq[y]||0)/100);sV*=(1+(INDEX_ANNUAL.sp500[y]||0)/100);cumPts.push([y,+nV.toFixed(1),+sV.toFixed(1)]);});
   const nFinal=cumPts[cumPts.length-1][1],sFinal=cumPts[cumPts.length-1][2];
 
-  // Draw section bg + divider
-  c.fillStyle=EC.bg;c.fillRect(0,histY,W,HIST_H);
-  c.strokeStyle=EC.border;c.lineWidth=1;c.beginPath();c.moveTo(0,histY);c.lineTo(W,histY);c.stroke();
-
-  // Section title
-  c.font=`bold 16px ${F}`;c.fillStyle=EC.white;
-  c.fillText('纳指 & 标普 · 35年复利增长',PX,histY+30);
-  c.font=`12px ${F}`;c.fillStyle=EC.muted;
-  c.fillText(`1990–2025  ·  以100为起点  ·  对数坐标`,PX,histY+50);
-  // legends
+  c.fillStyle=L.blue;c.fillRect(PX,histY+18,3,16);
+  c.font=`bold 14px ${F}`;c.fillStyle=L.dark;c.fillText('纳指 & 标普 · 35年复利增长',PX+10,histY+30);
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('1990–2025  ·  以100为起点  ·  对数坐标',PX+10,histY+48);
   c.textAlign='right';
-  c.fillStyle=EC.blue;c.fillRect(W-PX-120,histY+18,10,10);
-  c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText(`纳指 →${nFinal.toFixed(0)}x`,W-PX,histY+28);
-  c.fillStyle=EC.cyan;c.fillRect(W-PX-50,histY+18,10,10);
+  c.fillStyle=L.blue;c.fillRect(W-PX-120,histY+18,10,10);
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText(`纳指 →${nFinal.toFixed(0)}x`,W-PX,histY+28);
+  c.fillStyle=L.cyan;c.fillRect(W-PX-50,histY+18,10,10);
   c.fillText(`标普 →${sFinal.toFixed(0)}x`,W-PX,histY+44);
   c.textAlign='left';
 
@@ -2480,71 +2646,61 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
   const logMin=Math.log10(60),logMax=Math.log10(Math.max(nFinal,sFinal)*1.3);
   const toY2=v=>hcY+hcH*(1-(Math.log10(Math.max(v,1))-logMin)/(logMax-logMin));
 
-  // Grid lines (log scale levels)
   [100,300,1000,3000,10000,30000].forEach(v=>{
     const yy=toY2(v);
-    if(yy<hcY-4||yy>hcY+hcH+4) return;
-    c.strokeStyle=EC.border+(v===100?'ff':'50');c.lineWidth=v===100?1:0.5;
+    if(yy<hcY-4||yy>hcY+hcH+4)return;
+    c.strokeStyle=L.border+(v===100?'':'80');c.lineWidth=v===100?1:0.5;
     c.beginPath();c.moveTo(hcX,yy);c.lineTo(hcX+hcW,yy);c.stroke();
-    c.font=`9px ${F}`;c.fillStyle=EC.muted;c.textAlign='right';
+    c.font=`9px ${F}`;c.fillStyle=L.muted;c.textAlign='right';
     c.fillText(v>=1000?`${v/1000}k`:String(v),hcX-4,yy+3);
   });
   c.textAlign='left';
 
-  // X axis labels (every 5 years)
   const xYrs=[1990,1995,2000,2005,2010,2015,2020,2025];
   xYrs.forEach(y=>{
     const xx=hcX+(y-1989)/(2025-1989)*hcW;
-    c.font=`9px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';c.fillText(String(y),xx,hcY+hcH+14);
+    c.font=`9px ${F}`;c.fillStyle=L.muted;c.textAlign='center';c.fillText(String(y),xx,hcY+hcH+14);
   });
   c.textAlign='left';
 
-  // 2008/2020 recession markers
   [{y:2000,label:'科网泡沫'},{y:2008,label:'金融危机'},{y:2020,label:'新冠'}].forEach(({y,label})=>{
     const xx=hcX+(y-1989)/(2025-1989)*hcW;
-    c.strokeStyle=EC.border+'80';c.lineWidth=0.5;c.setLineDash([3,3]);
+    c.strokeStyle=L.border+'80';c.lineWidth=0.5;c.setLineDash([3,3]);
     c.beginPath();c.moveTo(xx,hcY);c.lineTo(xx,hcY+hcH);c.stroke();
     c.setLineDash([]);
-    c.font=`8px ${F}`;c.fillStyle=EC.muted+'99';c.textAlign='center';c.fillText(label,xx,hcY+hcH+26);
+    c.font=`8px ${F}`;c.fillStyle=L.muted;c.textAlign='center';c.fillText(label,xx,hcY+hcH+26);
   });
   c.textAlign='left';
 
-  // Nasdaq fill area
   c.beginPath();
   cumPts.forEach(([y,n],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(n);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
   c.lineTo(hcX+hcW,hcY+hcH);c.lineTo(hcX,hcY+hcH);c.closePath();
   const nasFill=c.createLinearGradient(0,hcY,0,hcY+hcH);
-  nasFill.addColorStop(0,EC.blue+'55');nasFill.addColorStop(1,EC.blue+'08');
+  nasFill.addColorStop(0,L.blue+'40');nasFill.addColorStop(1,L.blue+'08');
   c.fillStyle=nasFill;c.fill();
+  c.strokeStyle=L.blue;c.lineWidth=2.5;c.beginPath();
+  cumPts.forEach(([y,n],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(n);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
+  c.stroke();
 
-  // SP500 fill area
   c.beginPath();
   cumPts.forEach(([y,,s],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(s);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
   c.lineTo(hcX+hcW,hcY+hcH);c.lineTo(hcX,hcY+hcH);c.closePath();
   const spFill=c.createLinearGradient(0,hcY,0,hcY+hcH);
-  spFill.addColorStop(0,EC.cyan+'40');spFill.addColorStop(1,EC.cyan+'05');
+  spFill.addColorStop(0,L.cyan+'30');spFill.addColorStop(1,L.cyan+'05');
   c.fillStyle=spFill;c.fill();
-
-  // Nasdaq line
-  c.strokeStyle=EC.blue;c.lineWidth=2.5;c.beginPath();
-  cumPts.forEach(([y,n],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(n);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
-  c.stroke();
-
-  // SP500 line
-  c.strokeStyle=EC.cyan;c.lineWidth=2;c.beginPath();
+  c.strokeStyle=L.cyan;c.lineWidth=2;c.beginPath();
   cumPts.forEach(([y,,s],i)=>{const xx=hcX+(y-1989)/(2025-1989)*hcW;const yy=toY2(s);if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);});
   c.stroke();
 
-  // ─── Section 4: 汇率影响剥离分析（2015年起）
+  // ── FX analysis ───────────────────────────────────────────────────────────
   const fxY=histY+HIST_H;
-  c.strokeStyle=EC.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fxY);c.lineTo(W,fxY);c.stroke();
-  c.fillStyle=EC.bg;c.fillRect(0,fxY,W,FX_H);
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fxY);c.lineTo(W,fxY);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,fxY,W,FX_H);
 
-  // Section title
-  c.font=`bold 16px ${F}`;c.fillStyle=EC.white;c.fillText('汇率影响剥离分析',PX,fxY+30);
-  c.font=`12px ${F}`;c.fillStyle=EC.muted;c.fillText('2015–2025  ·  人民币持有 vs 美元持有  ·  以100为基准，差距即汇率净贡献',PX,fxY+50);
+  c.fillStyle=L.blue;c.fillRect(PX,fxY+18,3,16);
+  c.font=`bold 14px ${F}`;c.fillStyle=L.dark;c.fillText('汇率影响剥离分析',PX+10,fxY+30);
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('2015–2025  ·  人民币持有 vs 美元持有  ·  以100为基准，差距即汇率净贡献',PX+10,fxY+48);
 
-  // Compute FX-adjusted cumulative
   const fxYrs=Object.keys(FX_ANNUAL).map(Number).sort();
   let nuSD=100,nuCNY=100,suSD=100,suCNY=100;
   const fxPts=[[2014,100,100,100,100]];
@@ -2561,32 +2717,29 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
   const nFXc=+(nCNYv-nUSDv).toFixed(1);
   const sFXc=+(sCNYv-sUSDv).toFixed(1);
 
-  // Stat cards (4 across)
-  const statCard=(x,y,w,h,label,sub,val,col,bg)=>{
-    _rr(c,x,y,w,h,8);c.fillStyle=bg;c.fill();
-    c.strokeStyle=EC.border;c.lineWidth=0.5;c.stroke();
-    c.font=`bold 22px ${F}`;c.fillStyle=col;c.textAlign='center';c.fillText(val,x+w/2,y+38);
-    c.font=`11px ${F}`;c.fillStyle=EC.muted;c.fillText(sub,x+w/2,y+55);
-    c.font=`bold 11px ${F}`;c.fillStyle=EC.white;c.fillText(label,x+w/2,y+75);
+  const scW=(W-PX*2-GAP*3)/4,scH=84,scY2=fxY+62;
+  const drawSC=(x,y,w,h,lbl,sub,val,col)=>{
+    _rr(c,x,y,w,h,8);c.fillStyle=L.card;c.fill();
+    c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+    c.font=`bold 20px ${F}`;c.fillStyle=col;c.textAlign='center';c.fillText(val,x+w/2,y+34);
+    c.font=`11px ${F}`;c.fillStyle=L.dim;c.fillText(sub,x+w/2,y+50);
+    c.font=`bold 10px ${F}`;c.fillStyle=L.dark;c.fillText(lbl,x+w/2,y+68);
     c.textAlign='left';
   };
-  const scW=(W-PX*2-GAP*3)/4,scH=88,scY=fxY+64;
-  statCard(PX,scY,scW,scH,'纳指·美元累计',`+${(nUSDv-100).toFixed(0)}%`,`${nUSDv.toFixed(0)}`,EC.blue,EC.card);
-  statCard(PX+scW+GAP,scY,scW,scH,'纳指·人民币累计',`+${(nCNYv-100).toFixed(0)}%`,`${nCNYv.toFixed(0)}`,EC.blue,EC.card);
-  statCard(PX+(scW+GAP)*2,scY,scW,scH,'标普·美元累计',`+${(sUSDv-100).toFixed(0)}%`,`${sUSDv.toFixed(0)}`,EC.cyan,EC.card);
-  statCard(PX+(scW+GAP)*3,scY,scW,scH,'标普·人民币累计',`+${(sCNYv-100).toFixed(0)}%`,`${sCNYv.toFixed(0)}`,EC.cyan,EC.card);
+  drawSC(PX,scY2,scW,scH,'纳指·美元累计',`+${(nUSDv-100).toFixed(0)}%`,`${nUSDv.toFixed(0)}`,L.blue);
+  drawSC(PX+scW+GAP,scY2,scW,scH,'纳指·人民币累计',`+${(nCNYv-100).toFixed(0)}%`,`${nCNYv.toFixed(0)}`,L.blue);
+  drawSC(PX+(scW+GAP)*2,scY2,scW,scH,'标普·美元累计',`+${(sUSDv-100).toFixed(0)}%`,`${sUSDv.toFixed(0)}`,L.cyan);
+  drawSC(PX+(scW+GAP)*3,scY2,scW,scH,'标普·人民币累计',`+${(sCNYv-100).toFixed(0)}%`,`${sCNYv.toFixed(0)}`,L.cyan);
 
-  // FX contribution labels
-  const fxCol=nFXc>=0?EC.green:EC.red;
-  const fxColS=sFXc>=0?EC.green:EC.red;
-  c.font=`11px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';
-  c.fillText(`纳指汇率贡献: ${nFXc>=0?'+':''}${nFXc}%`,PX+scW,scY+scH+16);
-  c.fillStyle=fxCol;c.fillText(nFXc>=0?'▲':'▼',PX+scW-20,scY+scH+16);
-  c.fillStyle=EC.muted;c.fillText(`标普汇率贡献: ${sFXc>=0?'+':''}${sFXc}%`,PX+(scW+GAP)*3,scY+scH+16);
-  c.fillStyle=fxColS;c.fillText(sFXc>=0?'▲':'▼',PX+(scW+GAP)*3-20,scY+scH+16);
+  const fxCol=nFXc>=0?L.green:L.red;
+  const fxColS=sFXc>=0?L.green:L.red;
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
+  c.fillText(`纳指汇率贡献: ${nFXc>=0?'+':''}${nFXc}%`,PX+scW,scY2+scH+16);
+  c.fillStyle=fxCol;c.fillText(nFXc>=0?'▲':'▼',PX+scW-20,scY2+scH+16);
+  c.fillStyle=L.muted;c.fillText(`标普汇率贡献: ${sFXc>=0?'+':''}${sFXc}%`,PX+(scW+GAP)*3,scY2+scH+16);
+  c.fillStyle=fxColS;c.fillText(sFXc>=0?'▲':'▼',PX+(scW+GAP)*3-20,scY2+scH+16);
   c.textAlign='left';
 
-  // Mini dual line chart for FX divergence (纳指)
   const fc2X=PX+44,fc2Y=fxY+176,fc2W=W/2-PX-60,fc2H=68;
   const fc3X=W/2+16,fc3Y=fxY+176,fc3W=W/2-PX-36,fc3H=68;
   const allVals2=[...fxPts.map(p=>p[1]),...fxPts.map(p=>p[2]),...fxPts.map(p=>p[3]),...fxPts.map(p=>p[4])];
@@ -2595,9 +2748,8 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
 
   const drawFXMini=(cx,cy,cw,ch,usdIdx,cnyIdx,col,titleStr)=>{
     c.font=`bold 11px ${F}`;c.fillStyle=col;c.fillText(titleStr,cx,cy-4);
-    c.strokeStyle=EC.border+'50';c.lineWidth=0.5;
+    c.strokeStyle=L.border;c.lineWidth=0.5;
     c.beginPath();c.moveTo(cx,cy);c.lineTo(cx,cy+ch);c.lineTo(cx+cw,cy+ch);c.stroke();
-    // USD line
     c.strokeStyle=col;c.lineWidth=1.5;c.beginPath();
     fxPts.forEach(([,nuSD2,nuCNY2,suSD2,suCNY2],i)=>{
       const vals=[nuSD2,nuCNY2,suSD2,suCNY2];
@@ -2605,34 +2757,32 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny}){
       const yy=toFY(vals[usdIdx],cy,ch);
       if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);
     });c.stroke();
-    // CNY line (dashed)
-    c.strokeStyle=EC.orange;c.lineWidth=1.5;c.setLineDash([4,3]);c.beginPath();
+    c.strokeStyle=L.orange;c.lineWidth=1.5;c.setLineDash([4,3]);c.beginPath();
     fxPts.forEach(([,nuSD2,nuCNY2,suSD2,suCNY2],i)=>{
       const vals=[nuSD2,nuCNY2,suSD2,suCNY2];
       const xx=cx+i/(fxPts.length-1)*cw;
       const yy=toFY(vals[cnyIdx],cy,ch);
       if(i===0)c.moveTo(xx,yy);else c.lineTo(xx,yy);
     });c.stroke();c.setLineDash([]);
-    // year labels
-    c.font=`8px ${F}`;c.fillStyle=EC.muted;c.textAlign='center';
-    [2015,2018,2021,2025].forEach((y,i)=>{
+    c.font=`8px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
+    [2015,2018,2021,2025].forEach(y=>{
       const idx=fxPts.findIndex(p=>p[0]===y);
       if(idx<0)return;
       const xx=cx+idx/(fxPts.length-1)*cw;
       c.fillText(String(y),xx,cy+ch+12);
     });
     c.textAlign='left';
-    // legend
     c.font=`9px ${F}`;c.fillStyle=col;c.fillText('美元',cx+cw+4,cy+10);
-    c.fillStyle=EC.orange;c.fillText('人民币',cx+cw+4,cy+24);
+    c.fillStyle=L.orange;c.fillText('人民币',cx+cw+4,cy+24);
   };
-  drawFXMini(fc2X,fc2Y,fc2W,fc2H,0,1,EC.blue,'纳指100  美元 vs 人民币');
-  drawFXMini(fc3X,fc3Y,fc3W,fc3H,2,3,EC.cyan,'标普500  美元 vs 人民币');
+  drawFXMini(fc2X,fc2Y,fc2W,fc2H,0,1,L.blue,'纳指100  美元 vs 人民币');
+  drawFXMini(fc3X,fc3Y,fc3W,fc3H,2,3,L.cyan,'标普500  美元 vs 人民币');
 
-  // Footer
+  // ── Footer ────────────────────────────────────────────────────────────────
   const fy=H-FOOTER_H;
-  c.fillStyle=EC.head;c.fillRect(0,fy,W,FOOTER_H);
-  c.font=`12px ${F}`;c.fillStyle=EC.muted+'80';c.textAlign='center';
+  c.fillStyle=L.headBg;c.fillRect(0,fy,W,FOOTER_H);
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fy);c.lineTo(W,fy);c.stroke();
+  c.font=`12px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
   c.fillText('Wise-etf.org  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
   c.textAlign='left';
   return cvs;
@@ -2891,10 +3041,10 @@ export default function App() {
 
   // ── Export handlers（放在 nasdaqM 之后才能引用）
   const handleExport = useCallback(()=>{
-    const cvs = drawOverviewCanvas({nasdaq:nasdaqM, sp500:sp500M, active:activeM, etfs:etfsM, usdcny});
+    const cvs = drawOverviewCanvas({nasdaq:nasdaqM, sp500:sp500M, active:activeM, etfs:etfsM, usdcny, sentiment});
     const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
     setExportPreview({url:cvs.toDataURL('image/png'), filename:`wise-etf-overview-${today.replace(/\//g,'-')}.png`});
-  },[nasdaqM, sp500M, activeM, etfsM, usdcny]);
+  },[nasdaqM, sp500M, activeM, etfsM, usdcny, sentiment]);
 
   const handleExportNasdaqTable = useCallback(()=>{
     const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
