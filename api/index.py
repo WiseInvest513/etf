@@ -757,6 +757,20 @@ def fetch_nasdaq100_pe() -> dict:
     except Exception as e:
         logger.warning(f"[nasdaq100_pe] yfinance: {e}")
 
+    # 方案3：硬编码兜底（取最近一个月的已知值，外部API全部不可用时使用）
+    from datetime import date as _date
+    _FALLBACK = {
+        "2026-04": 35.1, "2026-03": 30.5, "2026-02": 32.0,
+        "2026-01": 32.8, "2025-12": 32.4, "2025-11": 32.6,
+    }
+    cur_ym = _date.today().strftime("%Y-%m")
+    for ym in sorted(_FALLBACK.keys(), reverse=True):
+        if ym <= cur_ym:
+            result = _calc(_FALLBACK[ym])
+            if result:
+                logger.info(f"[nasdaq100_pe] using hardcoded fallback {ym}: {_FALLBACK[ym]}")
+                return result
+
     return {}
 
 
