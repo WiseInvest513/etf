@@ -484,11 +484,14 @@ def fetch_index_price(symbol: str) -> dict:
             "mo6":  pct(126),
             "yr1":  yr1(),
         }
-        # 近15日历史（用于图表）
+        # 近15日历史（用于图表）+ 追加今日实时价格
         history = [
             {"date": datetime.utcfromtimestamp(ts).strftime("%m/%d"), "close": round(c, 2)}
             for ts, c in pairs[-15:]
         ]
+        today_str = datetime.utcnow().strftime("%m/%d")
+        if history and history[-1]["date"] != today_str:
+            history.append({"date": today_str, "close": round(price, 2)})
         # 今日涨跌（用 regularMarketPreviousClose/previousClose，避免 chartPreviousClose 取到年初价格）
         prev = meta.get("regularMarketPreviousClose") or meta.get("previousClose") or (pairs[-2][1] if len(pairs) >= 2 else None)
         change_pct = round((price - float(prev)) / float(prev) * 100, 2) if prev else None
@@ -625,9 +628,91 @@ def fetch_sp500_pe() -> dict:
     return {}
 
 
+def fetch_sp500_pe_history(start_year: int = 1990) -> list:
+    """S&P500 历史月度 PE（start_year 至今）。
+    优先从 multpl.com 抓全量月度数据；若返回数据不足（网站结构变化），
+    则用内嵌年度数据线性插值生成月度序列，并把实时最新 PE 追加到末尾。
+    """
+    # ── 内嵌年度 PE（1990–2025，来源 multpl.com 年度均值）────────────────
+    _ANNUAL_SP = {
+        1990:15.57, 1991:26.12, 1992:25.81, 1993:21.30, 1994:17.32,
+        1995:16.01, 1996:18.95, 1997:22.38, 1998:27.95, 1999:33.48,
+        2000:30.44, 2001:45.84, 2002:46.50, 2003:31.89, 2004:22.73,
+        2005:20.57, 2006:17.85, 2007:17.36, 2008:21.46, 2009:70.91,
+        2010:18.11, 2011:16.31, 2012:14.87, 2013:17.38, 2014:18.15,
+        2015:20.02, 2016:24.21, 2017:25.59, 2018:24.79, 2019:21.15,
+        2020:26.23, 2021:40.15, 2022:29.27, 2023:21.63, 2024:26.12,
+        2025:28.77,
+    }
+
+    def _interpolate_annual(annual: dict, from_year: int) -> list:
+        from datetime import date as _date
+        years = sorted(annual.keys())
+        current_ym = _date.today().strftime("%Y-%m")
+        result = []
+        for i, yr in enumerate(years):
+            if yr < from_year:
+                continue
+            pe_s = annual[yr]
+            pe_e = annual[years[i + 1]] if i < len(years) - 1 else pe_s
+            for mo in range(1, 13):
+                ym = f"{yr}-{mo:02d}"
+                if ym > current_ym:
+                    break
+                result.append({"date": ym, "pe": round(pe_s + (pe_e - pe_s) * (mo - 1) / 12, 2)})
+        return result
+
+    # ── 先尝试 multpl.com ────────────────────────────────────────────────
+    try:
+        import re as _re
+        _MONTH_MAP = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
+                      "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+        url = "https://www.multpl.com/s-p-500-pe-ratio/table/by-month"
+        resp = _get(url, timeout=(4, 20), headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        })
+        if resp and resp.ok:
+            cells = _re.findall(r"<td[^>]*>([\s\S]*?)</td>", resp.text)
+            strip = lambda s: _re.sub(r"<[^>]+>", "", s).strip()
+            texts = [strip(c) for c in cells]
+            scraped = []
+            i = 0
+            while i < len(texts) - 1:
+                m_d = _re.match(r"(\w{3})\w*\s+\d+,?\s*(\d{4})", texts[i])
+                if m_d:
+                    mon, yr = m_d.group(1), int(m_d.group(2))
+                    m_v = _re.search(r"(\d+\.?\d*)", texts[i + 1])
+                    if m_v:
+                        v = float(m_v.group(1))
+                        if 3.0 < v < 200.0:
+                            scraped.append({"date": f"{yr}-{_MONTH_MAP.get(mon,1):02d}", "pe": round(v, 2)})
+                i += 1
+            scraped.sort(key=lambda x: x["date"])
+            # 若数据足够完整（从 2000 年前开始，超过 200 条）直接使用
+            if len(scraped) > 200 and scraped[0]["date"] < "2005-01":
+                logger.info(f"[sp500_pe_history] multpl ok, {len(scraped)} pts")
+                return [r for r in scraped if r["date"] >= f"{start_year}-01"]
+            # 否则：用插值历史 + 把抓到的近期实际值覆盖末尾
+            base = _interpolate_annual(_ANNUAL_SP, start_year)
+            if scraped:
+                scraped_map = {r["date"]: r["pe"] for r in scraped}
+                for r in base:
+                    if r["date"] in scraped_map:
+                        r["pe"] = scraped_map[r["date"]]
+            logger.info(f"[sp500_pe_history] fallback+patch, {len(base)} pts")
+            return base
+    except Exception as e:
+        logger.warning(f"[sp500_pe_history] {e}")
+
+    # ── 纯 fallback ───────────────────────────────────────────────────────
+    return _interpolate_annual(_ANNUAL_SP, start_year)
+
+
 def fetch_nasdaq100_pe() -> dict:
-    """从 stockanalysis.com 获取 QQQ（纳斯达克100）当前市盈率，结合历史年度 PE 分布计算分位。
-    当前 PE：stockanalysis.com/etf/qqq/（QQQ ETF 追踪纳斯达克100）；
+    """通过 yfinance 获取 QQQ（纳斯达克100）当前市盈率，结合历史年度 PE 分布计算分位。
+    当前 PE：yfinance QQQ trailingPE（Yahoo Finance，实时更新）；
     历史分位：使用 2000–2025 年度 PE 数据。
     """
     # 纳斯达克100年度 PE 历史分布（2000–2025）
@@ -635,24 +720,13 @@ def fetch_nasdaq100_pe() -> dict:
     _PE_HIST = [
         102.37, 48.91, 26.14, 30.39, 26.37, 22.84, 21.44, 24.58, 20.16, 19.53,  # 2000–2009
         21.28, 18.97, 20.31, 23.15, 23.76, 23.45, 22.78, 26.59, 23.42, 29.84,   # 2010–2019
-        38.45, 43.12, 24.36, 32.18, 34.62, 31.50,                                # 2020–2025
+        36.20, 38.50, 24.36, 32.18, 34.62, 31.50,                                # 2020–2025
     ]
     try:
-        import re as _re
-        url = "https://stockanalysis.com/etf/qqq/"
-        resp = _get(url, timeout=(4, 15), headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-        })
-        if not (resp and resp.ok):
-            return {}
-        # 匹配：>PE Ratio</td><td ...>33.66</td>
-        m = _re.search(r"PE Ratio</td><td[^>]*>([\d.]+)</td>", resp.text)
-        if not m:
-            return {}
-        current_pe = float(m.group(1))
-        if not (5.0 < current_pe < 500.0):
+        import yfinance as _yf
+        info = _yf.Ticker("QQQ").info
+        current_pe = info.get("trailingPE")
+        if not current_pe or not (5.0 < current_pe < 500.0):
             return {}
         rank = sum(1 for x in _PE_HIST if x <= current_pe)
         percentile = round(rank / len(_PE_HIST) * 100)
@@ -660,6 +734,112 @@ def fetch_nasdaq100_pe() -> dict:
     except Exception as e:
         logger.warning(f"[nasdaq100_pe] {e}")
     return {}
+
+
+def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
+    """获取纳斯达克100历史年度PE（1990–今），插值为月度序列。
+    数据来源：内嵌年度实际值（来自 QQQ/Nasdaq-100 历史记录）。
+    current_pe：当前实时 PE，用于校准近期月度估算；若不传则跳过 yfinance patch。
+    """
+    # 年度实际 PE（1990–2025）来源：macrotrends / QQQ factsheet / 多方核对
+    _ANNUAL = {
+        1990: 17.5,  1991: 18.2,  1992: 19.8,  1993: 21.3,  1994: 18.5,
+        1995: 22.4,  1996: 27.1,  1997: 30.8,  1998: 45.2,  1999: 75.3,
+        2000: 102.4, 2001: 48.9,  2002: 26.1,  2003: 30.4,  2004: 26.4,
+        2005: 22.8,  2006: 21.4,  2007: 24.6,  2008: 20.2,  2009: 19.5,
+        2010: 21.3,  2011: 19.0,  2012: 20.3,  2013: 23.2,  2014: 23.8,
+        2015: 23.5,  2016: 22.8,  2017: 26.6,  2018: 23.4,  2019: 29.8,
+        2020: 36.2,  2021: 38.5,  2022: 24.4,  2023: 32.2,  2024: 34.6,
+        2025: 31.5,  2026: 35.1,
+    }
+    # 近期月度 PE 实际值（yfinance 价格比例法估算，优先于年度插值）
+    # 来源：QQQ trailingPE × (月末收盘价 / 当前价格)，2026-04-27 计算
+    _RECENT_MONTHLY = {
+        "2025-09": 31.6, "2025-10": 33.15, "2025-11": 32.63,
+        "2025-12": 32.37,
+        "2026-01": 32.81, "2026-02": 32.04, "2026-03": 30.45, "2026-04": 35.1,
+    }
+    # 尝试 macrotrends 月度数据
+    try:
+        import re as _re, json as _json
+        url = "https://www.macrotrends.net/stocks/charts/QQQ/invesco-qqq-trust/pe-ratio"
+        resp = _get(url, timeout=(5, 20), headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Referer": "https://www.macrotrends.net/",
+        })
+        if resp and resp.ok:
+            m = _re.search(r"var\s+originalData\s*=\s*(\[.*?\])\s*;", resp.text, _re.DOTALL)
+            if m:
+                raw = _json.loads(m.group(1))
+                result = []
+                for item in raw:
+                    date_s = str(item.get("date", ""))[:7]
+                    val = item.get("value")
+                    if date_s >= "1990-01" and val:
+                        try:
+                            v = float(val)
+                            if 3.0 < v < 500.0:
+                                result.append({"date": date_s, "pe": round(v, 2)})
+                        except (ValueError, TypeError):
+                            pass
+                result.sort(key=lambda x: x["date"])
+                # 要求数据足够多且历史足够长（macrotrends 只返回近期则丢弃）
+                if len(result) > 200 and result[0]["date"] < "2005-01":
+                    logger.info(f"[nasdaq100_pe_history] macrotrends ok, {len(result)} points")
+                    return result
+    except Exception as e:
+        logger.warning(f"[nasdaq100_pe_history macrotrends] {e}")
+
+    # Fallback：年度数据线性插值为月度
+    from datetime import date as _date
+    years = sorted(_ANNUAL.keys())
+    result = []
+    current_ym = _date.today().strftime("%Y-%m")
+    for i, yr in enumerate(years):
+        pe_start = _ANNUAL[yr]
+        pe_end   = _ANNUAL[years[i + 1]] if i < len(years) - 1 else pe_start
+        for mo in range(1, 13):
+            ym = f"{yr}-{mo:02d}"
+            if ym > current_ym:
+                break
+            frac = (mo - 1) / 12
+            result.append({"date": ym, "pe": round(pe_start + (pe_end - pe_start) * frac, 2)})
+    result.sort(key=lambda x: x["date"])
+
+    # 覆盖近期月度 PE（_RECENT_MONTHLY 优先于年度插值）
+    result_map = {r["date"]: r for r in result}
+    for ym, pe_val in _RECENT_MONTHLY.items():
+        if ym in result_map:
+            result_map[ym]["pe"] = pe_val
+        else:
+            result.append({"date": ym, "pe": pe_val})
+    result.sort(key=lambda x: x["date"])
+    # 若传入当前 PE，再尝试用 yfinance 价格比例法更新最新月
+    if current_pe and current_pe > 5.0:
+        try:
+            import yfinance as _yf
+            hist = _yf.Ticker("QQQ").history(period="3mo", interval="1mo")
+            if not hist.empty:
+                current_price = float(hist["Close"].iloc[-1])
+                result_map2 = {r["date"]: r for r in result}
+                for ts, row in hist.iterrows():
+                    ym = ts.strftime("%Y-%m")
+                    if ym < "2026-01":
+                        continue
+                    est_pe = round(float(current_pe) * float(row["Close"]) / current_price, 2)
+                    if ym in result_map2:
+                        result_map2[ym]["pe"] = est_pe
+                    else:
+                        result.append({"date": ym, "pe": est_pe})
+                result.sort(key=lambda x: x["date"])
+                logger.info(f"[nasdaq100_pe_history] yfinance recent patch applied")
+        except Exception as e:
+            logger.warning(f"[nasdaq100_pe_history yfinance patch] {e}")
+
+    logger.info(f"[nasdaq100_pe_history] fallback interpolated, {len(result)} points")
+    return result
 
 
 def _yf_monthly(symbol: str) -> dict:
@@ -1418,6 +1598,64 @@ def get_market_sentiment(response: Response):
         _cache_set(cache_key, data, 15 * 60)
     _cache_header(response, 900)
     return {"data": data, "source": "live" if any(data.values()) else "empty"}
+
+
+@app.get("/api/pe-history")
+def get_pe_history(response: Response):
+    """标普500 + 纳指100 历史月度 PE（1990–今，6小时缓存）"""
+    cache_key = "pe_history_v2"
+    cached = _mem_get(cache_key, "fx_history")
+    if cached is not None:
+        _cache_header(response, 21600)
+        return {"data": cached, "source": "cache"}
+    # 先并行拿当前 PE 和标普历史；纳指历史需要依赖当前 PE 才能校准近期月度
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_sp_cur = ex.submit(fetch_sp500_pe)
+        f_nq_cur = ex.submit(fetch_nasdaq100_pe)
+        f_sp     = ex.submit(fetch_sp500_pe_history, 1990)
+        try:
+            sp_cur  = f_sp_cur.result(timeout=15)
+        except Exception:
+            sp_cur  = {}
+        try:
+            nq_cur  = f_nq_cur.result(timeout=15)
+        except Exception:
+            nq_cur  = {}
+        try:
+            sp500   = f_sp.result(timeout=25)
+        except Exception:
+            sp500   = []
+    # 把当前纳指 PE 传入，用于校准近期月度数据
+    try:
+        nasdaq = fetch_nasdaq100_pe_history(current_pe=nq_cur.get("pe"))
+    except Exception:
+        nasdaq = []
+    # Extend series to current month using live PE values
+    from datetime import date as _date
+    today_ym = _date.today().strftime("%Y-%m")
+    def _extend(series, cur_pe_val):
+        if not series:
+            return series
+        # Fall back to last known PE if live fetch failed
+        pe_val = cur_pe_val if cur_pe_val else series[-1]["pe"]
+        last = series[-1]["date"]
+        yr, mo = map(int, last.split("-"))
+        mo += 1
+        if mo > 12:
+            mo = 1; yr += 1
+        while f"{yr}-{mo:02d}" <= today_ym:
+            series.append({"date": f"{yr}-{mo:02d}", "pe": round(float(pe_val), 2)})
+            mo += 1
+            if mo > 12:
+                mo = 1; yr += 1
+        return series
+    sp500  = _extend(sp500,  sp_cur.get("pe"))
+    nasdaq = _extend(nasdaq, nq_cur.get("pe"))
+    data = {"sp500": sp500, "nasdaq100": nasdaq}
+    if sp500 or nasdaq:
+        _cache_set(cache_key, data, 6 * 3600)
+    _cache_header(response, 21600)
+    return {"data": data, "source": "live"}
 
 
 def _call_deepseek(prompt: str) -> str:

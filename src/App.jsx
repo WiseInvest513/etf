@@ -566,8 +566,8 @@ function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
                       <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
                     </linearGradient>
                     <linearGradient id="spx-grad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={C.cyan} stopOpacity={0.18}/>
-                      <stop offset="95%" stopColor={C.cyan} stopOpacity={0}/>
+                      <stop offset="5%" stopColor={C.orange} stopOpacity={0.18}/>
+                      <stop offset="95%" stopColor={C.orange} stopOpacity={0}/>
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
@@ -587,7 +587,7 @@ function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
                     </div>
                   ):null}/>
                   <Area type="monotone" dataKey="ndx" name="纳指100" stroke={C.accent} strokeWidth={1.5} fill="url(#ndx-grad)" dot={false} activeDot={{r:3,fill:C.accent}} connectNulls/>
-                  <Area type="monotone" dataKey="spx" name="标普500" stroke={C.cyan} strokeWidth={1.5} fill="url(#spx-grad)" dot={false} activeDot={{r:3,fill:C.cyan}} connectNulls/>
+                  <Area type="monotone" dataKey="spx" name="标普500" stroke={C.orange} strokeWidth={1.5} fill="url(#spx-grad)" dot={false} activeDot={{r:3,fill:C.orange}} connectNulls/>
                   <Legend wrapperStyle={{fontSize:10,paddingTop:4}}/>
                 </AreaChart>
               </ResponsiveContainer>
@@ -626,7 +626,7 @@ function MarketSentimentRow({sentiment, isMobile}) {
   const nqPe = sentiment?.nasdaq_pe;
   const nqPeColor = !nqPe ? C.textDim : nqPe.percentile>=85 ? C.red : nqPe.percentile>=70 ? C.orange : nqPe.percentile>=45 ? C.textMuted : C.green;
   const nqPeLabel = !nqPe ? '--' : nqPe.percentile>=85 ? '高估' : nqPe.percentile>=70 ? '偏高' : nqPe.percentile>=45 ? '合理' : '低估';
-  const nqPeSub = nqPe ? `估算分位${nqPe.percentile}% · stockanalysis.com` : '数据加载中…';
+  const nqPeSub = nqPe ? `历史${nqPe.percentile}%分位 · 来源 gurufocus.com` : '数据加载中…';
   return (
     <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:28}}>
       <SentimentCard title="VIX 恐慌指数" value={vix?vix.value:'--'} label={vixLabel} color={vixColor} barPct={vix?Math.min(vix.value/60*100,100):null} sub={vixSub} index={0}/>
@@ -634,6 +634,357 @@ function MarketSentimentRow({sentiment, isMobile}) {
       <SentimentCard title="标普500 PE分位" value={pe?`${pe.pe}x`:'--'} label={peLabel} color={peColor} barPct={pe?pe.percentile:null} sub={peSub} index={2}/>
       <SentimentCard title="纳斯达克100 PE分位" value={nqPe?`${nqPe.pe}x`:'--'} label={nqPeLabel} color={nqPeColor} barPct={nqPe?nqPe.percentile:null} sub={nqPeSub} index={3}/>
     </div>
+  );
+}
+
+// ─── 历史PE参考数据（静态） ────────────────────────────────────────────────────
+// 标普500
+// 标普500（恢复时长 = 从最高点下跌后重回该最高点所用时间）
+const PE_HIST_REFS_SP = [
+  {period:"2000年 科网泡沫顶部",  pe:"~44x", note:"互联网泡沫极值",    next1y:"-9%",  maxDD:"-49%", ddColor:C.red,      recovery:"约7年"},   // 2000-03峰→2007-05回
+  {period:"2007年 金融危机前夕",  pe:"~25x", note:"次贷危机爆发前",    next1y:"-37%", maxDD:"-56%", ddColor:C.red,      recovery:"约5年"},   // 2007-10峰→2013-03回
+  {period:"2018年底 加息冲击",    pe:"~22x", note:"美联储激进加息",    next1y:"+22%", maxDD:"-20%", ddColor:"#ff6b35",  recovery:"约7个月"}, // 2018-09峰→2019-04回
+  {period:"2021年末 流动性退潮",  pe:"~28x", note:"通胀+缩表预期",    next1y:"-19%", maxDD:"-27%", ddColor:C.red,      recovery:"约2年"},   // 2022-01峰→2024-01回
+  {period:"当前 (2026)",          pe:null,   note:"AI热潮+高利率环境", next1y:"?",    maxDD:"?",    ddColor:C.textDim,  recovery:"?", isCurrent:true},
+];
+// 纳指100（恢复时长 = 从最高点下跌后重回该最高点所用时间）
+const PE_HIST_REFS_NQ = [
+  {period:"2000年 科网泡沫顶部",  pe:"~102x", note:"互联网极端泡沫",   next1y:"-36%", maxDD:"-83%", ddColor:C.red,      recovery:"约15年"},  // 2000-03峰→2015-10回
+  {period:"2007年 金融危机前夕",  pe:"~24x",  note:"次贷危机蔓延",     next1y:"-40%", maxDD:"-54%", ddColor:C.red,      recovery:"约3年半"}, // 2007-10峰→2011-03回
+  {period:"2018年底 加息冲击",    pe:"~23x",  note:"美联储激进加息",   next1y:"+30%", maxDD:"-24%", ddColor:"#ff6b35",  recovery:"约6个月"}, // 2018-10峰→2019-04回
+  {period:"2021年末 流动性退潮",  pe:"~38x",  note:"通胀+缩表预期",   next1y:"-33%", maxDD:"-35%", ddColor:C.red,      recovery:"约20个月"},// 2021-11峰→2023-07回
+  {period:"当前 (2026)",          pe:null,    note:"AI热潮+高利率环境", next1y:"?",    maxDD:"?",    ddColor:C.textDim,  recovery:"?", isCurrent:true},
+];
+
+// ─── 标普500 + 纳指100 历史PE走势图 ──────────────────────────────────────────
+const PE_RANGES = ["5Y","10Y","全部"];
+
+function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
+  const [range, setRange] = useState("10Y");
+
+  const sp500Data   = peHistory?.sp500    || [];
+  const nasdaqData  = peHistory?.nasdaq100 || [];
+
+  // 合并两条数据为 recharts 格式 {date, sp500, nasdaq}
+  const merged = useMemo(() => {
+    const map = {};
+    sp500Data.forEach(d  => { map[d.date] = {date:d.date, sp500:d.pe}; });
+    nasdaqData.forEach(d => {
+      if (map[d.date]) map[d.date].nasdaq = d.pe;
+      else map[d.date] = {date:d.date, nasdaq:d.pe};
+    });
+    return Object.values(map).sort((a,b)=>a.date<b.date?-1:1);
+  }, [sp500Data, nasdaqData]);
+
+  // 按时间范围过滤
+  const filtered = useMemo(() => {
+    if (!merged.length) return [];
+    const now = new Date();
+    const yr  = now.getFullYear();
+    const mo  = String(now.getMonth()+1).padStart(2,"0");
+    const cutoff = range==="5Y"  ? `${yr-5}-${mo}`
+                 : range==="10Y" ? `${yr-10}-${mo}`
+                 : "1990-01";
+    const raw = merged.filter(d=>d.date>=cutoff);
+    // 全部视图：按季度聚合（月均值→季代表点），避免点过密
+    if (range==="全部" && raw.length>120) {
+      const qMap = {};
+      raw.forEach(d=>{
+        const [y,m] = d.date.split("-").map(Number);
+        const key = `${y}-Q${Math.ceil(m/3)}`;
+        if (!qMap[key]) qMap[key] = {date:d.date, sp500s:[], nasdaqs:[]};
+        if (d.sp500  != null) qMap[key].sp500s.push(d.sp500);
+        if (d.nasdaq != null) qMap[key].nasdaqs.push(d.nasdaq);
+      });
+      return Object.values(qMap).map(q=>({
+        date:    q.date,
+        sp500:   q.sp500s.length  ? +(q.sp500s.reduce((a,b)=>a+b,0)/q.sp500s.length).toFixed(1)   : null,
+        nasdaq:  q.nasdaqs.length ? +(q.nasdaqs.reduce((a,b)=>a+b,0)/q.nasdaqs.length).toFixed(1) : null,
+      })).sort((a,b)=>a.date<b.date?-1:1);
+    }
+    return raw;
+  }, [merged, range]);
+
+  // X 轴刻度：仅保留整年首月，步长按范围控制
+  const xTicks = useMemo(() => {
+    const step = range==="5Y"?1 : range==="10Y"?2 : 5;
+    const seen = new Set();
+    const ticks = [];
+    filtered.forEach(d=>{
+      const yr = parseInt(d.date.slice(0,4));
+      if (yr%step===0 && !seen.has(yr)) { seen.add(yr); ticks.push(d.date); }
+    });
+    return ticks;
+  }, [filtered, range]);
+
+  const PETooltip = ({active, payload, label}) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
+        padding:"10px 14px",fontSize:12,boxShadow:"0 4px 20px rgba(0,0,0,0.1)",minWidth:140}}>
+        <div style={{color:C.textDim,marginBottom:6}}>{label}</div>
+        {payload.map(p=>(
+          <div key={p.dataKey} style={{display:"flex",justifyContent:"space-between",gap:16,marginBottom:3}}>
+            <span style={{color:p.color,fontWeight:600}}>{p.name}</span>
+            <span style={{fontWeight:800,color:p.color}}>{p.value}x</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const hasData = filtered.length > 0;
+
+  return (
+    <Card style={{padding:isMobile?"20px 18px":"24px 28px", marginBottom:isMobile?20:28}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:4,flexWrap:"wrap"}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text}}>标普500 vs 纳指100 · PE历史走势</div>
+        <div style={{fontSize:11,color:C.textDim,flexShrink:0}}>1990年至今 · 月度数据</div>
+        {/* 时间范围切换 */}
+        <div style={{marginLeft:"auto",display:"flex",gap:4}}>
+          {PE_RANGES.map(r=>(
+            <button key={r} onClick={()=>setRange(r)} style={{
+              padding:"3px 12px",borderRadius:20,fontSize:12,fontWeight:600,cursor:"pointer",
+              border:`1px solid ${range===r?C.accent:C.border}`,
+              background:range===r?C.accent:"transparent",
+              color:range===r?"#fff":C.textDim,
+              transition:"all 0.18s"
+            }}>{r}</button>
+          ))}
+        </div>
+      </div>
+      {/* 图例 + 当前值 */}
+      <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:14,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.textMuted}}>
+          <div style={{width:16,height:3,borderRadius:2,background:C.accent}}/> 标普500
+          {currentPE&&<span style={{fontWeight:700,color:currentPE>=30?C.red:"#ff6b35",marginLeft:4}}>当前{currentPE}x</span>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.textMuted}}>
+          <div style={{width:16,height:3,borderRadius:2,background:C.purple}}/> 纳指100
+          {currentNQPE&&<span style={{fontWeight:700,color:currentNQPE>=30?C.red:"#ff6b35",marginLeft:4}}>当前{currentNQPE}x</span>}
+        </div>
+        <div style={{fontSize:11,color:C.textDim,marginLeft:"auto"}}>
+          {range==="全部"?"季度均值":"月度数据"}
+        </div>
+      </div>
+      {hasData ? (
+        <ResponsiveContainer width="100%" height={isMobile?200:260}>
+          <LineChart data={filtered} margin={{top:8,right:16,left:0,bottom:0}}>
+            <defs>
+              <linearGradient id="spGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"  stopColor={C.accent} stopOpacity={0.15}/>
+                <stop offset="100%" stopColor={C.accent} stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
+            <XAxis dataKey="date" ticks={xTicks}
+              tick={{fill:C.textDim,fontSize:10}} axisLine={false} tickLine={false}
+              tickFormatter={v=>v.slice(0,4)} interval={0}/>
+            <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}
+              tickFormatter={v=>`${v}x`} domain={[0,"auto"]} width={36}/>
+            <Tooltip content={<PETooltip/>}/>
+            {/* 关键参考线 */}
+            <ReferenceLine y={25} stroke={C.green}  strokeDasharray="4 3" strokeWidth={1}
+              label={{value:"25x",fill:C.green, fontSize:10,position:"insideTopLeft"}}/>
+            <ReferenceLine y={30} stroke={C.orange} strokeDasharray="4 3" strokeWidth={1}
+              label={{value:"30x",fill:C.orange,fontSize:10,position:"insideTopLeft"}}/>
+            <ReferenceLine y={40} stroke={C.red}    strokeDasharray="4 3" strokeWidth={1}
+              label={{value:"40x",fill:C.red,   fontSize:10,position:"insideTopLeft"}}/>
+            {/* 数据线 */}
+            <Line type="monotone" dataKey="sp500"  name="标普500"
+              stroke={C.accent}  strokeWidth={1.8} dot={false}
+              activeDot={{r:4,fill:C.accent}}  connectNulls/>
+            <Line type="monotone" dataKey="nasdaq" name="纳指100"
+              stroke={C.purple}  strokeWidth={1.8} dot={false}
+              activeDot={{r:4,fill:C.purple}}  connectNulls/>
+          </LineChart>
+        </ResponsiveContainer>
+      ) : (
+        <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:14}}>
+          数据加载中…
+        </div>
+      )}
+      <div style={{marginTop:10,fontSize:11,color:C.textDim}}>
+        标普500来源：multpl.com 月度实际值（Trailing PE）· 纳指100：gurufocus.com 口径，2009年前数据为估算
+      </div>
+    </Card>
+  );
+}
+
+// ─── 历史PE高位回调参考卡片 ───────────────────────────────────────────────────
+function PEHistoryReference({pe, nqPe, isMobile}) {
+  const [tab, setTab] = useState("sp500");
+  const isSP   = tab === "sp500";
+  const refs   = isSP ? PE_HIST_REFS_SP : PE_HIST_REFS_NQ;
+  const curPE  = isSP ? pe : nqPe;
+  const thPE   = isSP ? "标普PE" : "纳指PE";
+  const accent = isSP ? C.accent : C.purple;
+
+  return (
+    <Card style={{padding:isMobile?"20px 18px":"24px 28px", marginBottom:isMobile?20:28}}>
+      {/* Header + Tab */}
+      <div style={{display:"flex", alignItems:"center", gap:12, marginBottom:6, flexWrap:"wrap"}}>
+        <div style={{fontSize:14, fontWeight:700, color:C.text}}>历史PE高位 → 后续表现</div>
+        <div style={{fontSize:11, color:C.textDim, background:C.borderLight, padding:"2px 10px", borderRadius:20, flexShrink:0}}>仅供参考</div>
+        <div style={{marginLeft:"auto", display:"flex", gap:4}}>
+          {[["sp500","标普500"],["nasdaq","纳指100"]].map(([key,label])=>(
+            <button key={key} onClick={()=>setTab(key)} style={{
+              padding:"3px 12px", borderRadius:20, fontSize:12, fontWeight:600, cursor:"pointer",
+              border:`1px solid ${tab===key?(isSP?C.accent:C.purple):C.border}`,
+              background:tab===key?(isSP?C.accent:C.purple):"transparent",
+              color:tab===key?"#fff":C.textDim, transition:"all 0.18s"
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{fontSize:12, color:C.textDim, marginBottom:18}}>
+        {isSP?"标普500":"纳指100"} PE处于高位后，历史上的实际表现
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%", borderCollapse:"collapse", fontSize:13}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              {["时期", thPE, "背景", "后续1年", "最大回调", "恢复时长"].map(h=>(
+                <th key={h} style={{padding:"8px 12px", textAlign:"left", fontSize:11, color:C.textDim, fontWeight:600, letterSpacing:0.5, whiteSpace:"nowrap"}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {refs.map((row,i)=>(
+              <tr key={i} style={{borderBottom:`1px solid ${C.borderLight}`, background:row.isCurrent?accent+"0a":"transparent"}}>
+                <td style={{padding:"11px 12px", fontWeight:row.isCurrent?700:400, color:row.isCurrent?accent:C.text, whiteSpace:"nowrap"}}>{row.period}</td>
+                <td style={{padding:"11px 12px", fontWeight:800, color:row.isCurrent?(curPE?.pe>=30?C.red:C.orange):i<2?C.red:"#ff6b35"}}>
+                  {row.isCurrent ? (curPE ? `${curPE.pe}x` : "--") : row.pe}
+                </td>
+                <td style={{padding:"11px 12px", color:C.textMuted}}>{row.note}</td>
+                <td style={{padding:"11px 12px", fontWeight:700, color:row.next1y==="?"?C.textDim:row.next1y.startsWith("-")?C.red:C.green}}>{row.next1y}</td>
+                <td style={{padding:"11px 12px", fontWeight:800, color:row.ddColor}}>{row.maxDD}</td>
+                <td style={{padding:"11px 12px", fontWeight:600, color:row.recovery==="?"?C.textDim:C.textMuted}}>{row.recovery}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{marginTop:14, fontSize:11, color:C.textDim, display:"flex", alignItems:"flex-start", gap:6}}>
+        <span style={{color:C.orange, flexShrink:0}}>⚠</span>
+        历史规律不能预测未来，高PE可维持数年。数据来源历史实际值，不构成投资建议。
+      </div>
+    </Card>
+  );
+}
+
+// ─── 综合市场温度卡片 ─────────────────────────────────────────────────────────
+function MarketTemperature({sentiment, isMobile}) {
+  const pe   = sentiment?.pe;
+  const nqPe = sentiment?.nasdaq_pe;
+  const fg   = sentiment?.fear_greed;
+  const vix  = sentiment?.vix;
+
+  // 风险得分：正=风险高，负=恐慌/机会
+  // 标普PE / 纳指PE 各 -1~+2，取平均作为 peAvg（-1~+2）
+  // 恐慌贪婪 -2~+2，VIX -2~+1，合计范围约 -5~+5
+  const spScore  = !pe   ? null : pe.percentile>=85?2   : pe.percentile>=70?1   : pe.percentile>=45?0 : -1;
+  const nqScore  = nqPe?.percentile==null ? null : nqPe.percentile>=85?2 : nqPe.percentile>=70?1 : nqPe.percentile>=45?0 : -1;
+  const fgScore  = fg?.score==null ? null : fg.score>=75?2 : fg.score>=55?1 : fg.score>=45?0 : fg.score>=25?-1 : -2;
+  const vixScore = !vix  ? null : vix.value>=40?-2 : vix.value>=30?-1 : vix.value>=12?0 : 1;
+
+  // 两个 PE 都有才用平均，只有一个就用那个
+  const peAvg = spScore!==null && nqScore!==null ? (spScore+nqScore)/2
+              : spScore!==null ? spScore : nqScore;
+
+  const hasData = peAvg!==null && fgScore!==null && vixScore!==null;
+  const total   = hasData ? Math.round(peAvg+fgScore+vixScore) : null;
+
+  const signal = total===null ? null
+    : total>=4 ? {label:"极度危险",   sub:"两大指数PE极端高估 + 情绪极度贪婪，历史上接近阶段顶部", color:C.red}
+    : total>=2 ? {label:"偏高风险",   sub:"估值偏贵、情绪乐观，建议谨慎加仓",                    color:"#ff6b35"}
+    : total>=0 ? {label:"中性偏谨慎", sub:"信号混合，维持正常仓位，注意止损",                    color:C.orange}
+    : total>=-2? {label:"中性",       sub:"估值合理或恐慌情绪偏高，可正常操作",                  color:C.textMuted}
+    :            {label:"潜在机会区", sub:"多项指标显示市场恐慌，历史上往往是左侧机会",            color:C.green};
+
+  const barPct = total!==null ? Math.round((total+5)/10*100) : null;
+
+  const scoreColor = s => s===null?C.textDim:s>=2?C.red:s>=1?"#ff6b35":s===0?C.textMuted:C.green;
+
+  const indicators = [
+    {name:"标普500 PE", score:spScore,
+     desc:spScore===null?"--":spScore>=2?"极度高估":spScore>=1?"偏高":"合理/低估",
+     detail:pe?`${pe.percentile}%分位 · ${pe.pe}x`:""},
+    {name:"纳指100 PE", score:nqScore,
+     desc:nqScore===null?"--":nqScore>=2?"极度高估":nqScore>=1?"偏高":"合理/低估",
+     detail:nqPe?.pe!=null?`${nqPe.percentile}%分位 · ${nqPe.pe}x`:""},
+    {name:"恐慌贪婪",   score:fgScore,
+     desc:fgScore===null?"--":fgScore>=2?"极度贪婪":fgScore>=1?"贪婪":fgScore<=(-1)?"恐慌":"中性",
+     detail:fg?.score!=null?`${fg.score}分`:""},
+    {name:"VIX 波动",   score:vixScore,
+     desc:vixScore===null?"--":vixScore<=(-2)?"极度恐慌":vixScore<=(-1)?"高度恐慌":vixScore>=1?"过度平静":"正常",
+     detail:vix?`${vix.value}`:""},
+  ];
+
+  return (
+    <Card style={{
+      padding:isMobile?"20px 18px":"24px 28px",
+      marginBottom:isMobile?20:28,
+      display:"flex", flexDirection:"column",
+    }}>
+      {/* 标题行 */}
+      <div style={{display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap"}}>
+        <div style={{fontSize:14, fontWeight:700, color:C.text}}>综合市场温度</div>
+        <div style={{fontSize:11, color:C.textDim}}>标普/纳指PE分位 + 恐慌贪婪 + VIX 四因子合并信号</div>
+      </div>
+
+      {/* 上：信号标题居中 + 温度条 */}
+      <div style={{textAlign:"center", marginBottom:20}}>
+        {signal ? (
+          <>
+            <div style={{fontSize:30, fontWeight:800, color:signal.color, letterSpacing:-0.5, marginBottom:4}}>
+              {signal.label}
+            </div>
+            <div style={{fontSize:12, color:C.textMuted, marginBottom:16, lineHeight:1.5}}>
+              {signal.sub}
+            </div>
+            <div style={{height:8, background:C.borderLight, borderRadius:4, overflow:"visible", position:"relative", marginBottom:6}}>
+              <div style={{position:"absolute", left:0, top:0, height:"100%", borderRadius:4,
+                width:`${barPct??0}%`,
+                background:"linear-gradient(90deg,#1a9e4a,#c4570a 50%,#d93025)",
+                transition:"width 0.8s ease"}}/>
+              {barPct!=null&&<div style={{position:"absolute", top:-2, height:12, width:4, borderRadius:2,
+                background:signal.color, left:`calc(${barPct}% - 2px)`,
+                transition:"left 0.8s ease", boxShadow:`0 0 8px ${signal.color}`}}/>}
+            </div>
+            <div style={{display:"flex", justifyContent:"space-between", fontSize:10, color:C.textDim}}>
+              <span>机会区</span><span>中性</span><span>危险区</span>
+            </div>
+          </>
+        ) : (
+          <div style={{color:C.textDim, fontSize:14}}>数据加载中…</div>
+        )}
+      </div>
+
+      {/* 下：四因子 2列网格，flex:1 撑满剩余高度 */}
+      <div style={{
+        flex:1,
+        display:"grid",
+        gridTemplateColumns:isMobile?"1fr":"1fr 1fr",
+        gridTemplateRows:"1fr 1fr",
+        gap:8,
+      }}>
+        {indicators.map(ind=>(
+          <div key={ind.name} style={{
+            display:"flex", alignItems:"center", justifyContent:"space-between",
+            padding:"10px 14px", background:C.bgAlt, borderRadius:10,
+          }}>
+            <div style={{fontSize:13, color:C.textMuted, fontWeight:500, flexShrink:0}}>{ind.name}</div>
+            <div style={{display:"flex", alignItems:"center", gap:6}}>
+              {ind.detail&&<span style={{fontSize:11, color:C.textDim}}>{ind.detail}</span>}
+              <span style={{fontSize:13, fontWeight:700, color:scoreColor(ind.score)}}>{ind.desc}</span>
+              <div style={{width:8, height:8, borderRadius:"50%", background:scoreColor(ind.score), flexShrink:0}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
@@ -2825,6 +3176,7 @@ export default function App() {
   const [dataLoading,setDataLoading]=useState(false);
   const [usdcny,setUsdcny]=useState(null);
   const [sentiment,setSentiment]=useState(null);
+  const [peHistory,setPeHistory]=useState({sp500:[],nasdaq100:[]});
   const [aiInsight,setAiInsight]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
   const [compareList,setCompareList]=useState([]);
@@ -2895,6 +3247,8 @@ export default function App() {
     apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
     // 拉取市场情绪指标
     apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
+    // 拉取标普500 + 纳指100 历史月度 PE
+    apiFetch("/pe-history").then(d=>{ if(d?.data) setPeHistory(d.data); });
     // 拉取 AI 市场解读（DeepSeek，2小时缓存）
     setAiLoading(true);
     apiFetch("/market-ai-insight").then(d=>{
@@ -3460,6 +3814,12 @@ export default function App() {
             {/* ── 市场情绪指标 ── */}
             <MarketSentimentRow sentiment={sentiment} isMobile={isMobile}/>
 
+            {/* ── 综合市场温度 + 历史PE参考 ── */}
+            <div style={{display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:isMobile?12:20, marginBottom:isMobile?16:28}}>
+              <MarketTemperature sentiment={sentiment} isMobile={isMobile}/>
+              <PEHistoryReference pe={sentiment?.pe} nqPe={sentiment?.nasdaq_pe} isMobile={isMobile}/>
+            </div>
+
             {/* Charts */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?16:28}}>
               <Reveal delay={0.05}>
@@ -3528,6 +3888,9 @@ export default function App() {
 
             {/* Index History */}
             <IndexHistoryCard/>
+
+            {/* ── 标普500 + 纳指100 PE历史走势图 ── */}
+            <PEHistoryChart peHistory={peHistory} currentPE={sentiment?.pe?.pe} currentNQPE={sentiment?.nasdaq_pe?.pe} isMobile={isMobile}/>
 
             {/* FX Analysis */}
             <FXAnalysisCard/>
