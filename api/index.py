@@ -730,12 +730,12 @@ def fetch_nasdaq100_pe() -> dict:
         percentile = round(rank / len(_PE_HIST) * 100)
         return {"pe": round(pe_val, 1), "percentile": percentile}
 
-    # 方案1：直接调 Yahoo Finance v10 quoteSummary（无需 yfinance 库，速度更快）
+    # 方案1：直接调 Yahoo Finance v10 quoteSummary（短超时，避免拖慢整体）
     try:
         resp = _get(
             "https://query1.finance.yahoo.com/v10/finance/quoteSummary/QQQ",
             params={"modules": "summaryDetail"},
-            timeout=(4, 10),
+            timeout=(3, 6),
             headers={**YF_HEADERS, "Accept": "application/json"},
         )
         if resp and resp.ok:
@@ -747,17 +747,7 @@ def fetch_nasdaq100_pe() -> dict:
     except Exception as e:
         logger.warning(f"[nasdaq100_pe] yahoo direct: {e}")
 
-    # 方案2：yfinance（备用，较慢）
-    try:
-        import yfinance as _yf
-        pe = _yf.Ticker("QQQ").info.get("trailingPE")
-        result = _calc(pe)
-        if result:
-            return result
-    except Exception as e:
-        logger.warning(f"[nasdaq100_pe] yfinance: {e}")
-
-    # 方案3：硬编码兜底（取最近一个月的已知值，外部API全部不可用时使用）
+    # 方案2：硬编码兜底（外部API不可达时立即返回，不依赖任何网络请求）
     from datetime import date as _date
     _FALLBACK = {
         "2026-04": 35.1, "2026-03": 30.5, "2026-02": 32.0,
@@ -768,7 +758,7 @@ def fetch_nasdaq100_pe() -> dict:
         if ym <= cur_ym:
             result = _calc(_FALLBACK[ym])
             if result:
-                logger.info(f"[nasdaq100_pe] using hardcoded fallback {ym}: {_FALLBACK[ym]}")
+                logger.info(f"[nasdaq100_pe] fallback {ym}: {_FALLBACK[ym]}")
                 return result
 
     return {}
