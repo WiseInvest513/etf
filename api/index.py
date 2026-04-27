@@ -711,28 +711,52 @@ def fetch_sp500_pe_history(start_year: int = 1990) -> list:
 
 
 def fetch_nasdaq100_pe() -> dict:
-    """通过 yfinance 获取 QQQ（纳斯达克100）当前市盈率，结合历史年度 PE 分布计算分位。
-    当前 PE：yfinance QQQ trailingPE（Yahoo Finance，实时更新）；
-    历史分位：使用 2000–2025 年度 PE 数据。
+    """获取 QQQ（纳斯达克100）当前市盈率，结合历史年度 PE 分布计算分位。
+    当前 PE：优先直接调 Yahoo Finance quoteSummary API（快速）；备用 yfinance。
+    历史分位：使用 2000–2025 年度 PE 数据（Trailing PE，gurufocus.com 口径）。
     """
     # 纳斯达克100年度 PE 历史分布（2000–2025）
-    # 来源：QQQ / NASDAQ-100 历史 PE 数据
+    # 来源：QQQ / NASDAQ-100 历史 PE 数据（Trailing PE）
     _PE_HIST = [
         102.37, 48.91, 26.14, 30.39, 26.37, 22.84, 21.44, 24.58, 20.16, 19.53,  # 2000–2009
         21.28, 18.97, 20.31, 23.15, 23.76, 23.45, 22.78, 26.59, 23.42, 29.84,   # 2010–2019
         36.20, 38.50, 24.36, 32.18, 34.62, 31.50,                                # 2020–2025
     ]
+
+    def _calc(pe_val):
+        if not pe_val or not (5.0 < pe_val < 500.0):
+            return {}
+        rank = sum(1 for x in _PE_HIST if x <= pe_val)
+        percentile = round(rank / len(_PE_HIST) * 100)
+        return {"pe": round(pe_val, 1), "percentile": percentile}
+
+    # 方案1：直接调 Yahoo Finance v10 quoteSummary（无需 yfinance 库，速度更快）
+    try:
+        resp = _get(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/QQQ",
+            params={"modules": "summaryDetail"},
+            timeout=(4, 10),
+            headers={**YF_HEADERS, "Accept": "application/json"},
+        )
+        if resp and resp.ok:
+            detail = resp.json()["quoteSummary"]["result"][0]["summaryDetail"]
+            pe = detail.get("trailingPE", {}).get("raw")
+            result = _calc(pe)
+            if result:
+                return result
+    except Exception as e:
+        logger.warning(f"[nasdaq100_pe] yahoo direct: {e}")
+
+    # 方案2：yfinance（备用，较慢）
     try:
         import yfinance as _yf
-        info = _yf.Ticker("QQQ").info
-        current_pe = info.get("trailingPE")
-        if not current_pe or not (5.0 < current_pe < 500.0):
-            return {}
-        rank = sum(1 for x in _PE_HIST if x <= current_pe)
-        percentile = round(rank / len(_PE_HIST) * 100)
-        return {"pe": round(current_pe, 1), "percentile": percentile}
+        pe = _yf.Ticker("QQQ").info.get("trailingPE")
+        result = _calc(pe)
+        if result:
+            return result
     except Exception as e:
-        logger.warning(f"[nasdaq100_pe] {e}")
+        logger.warning(f"[nasdaq100_pe] yfinance: {e}")
+
     return {}
 
 
