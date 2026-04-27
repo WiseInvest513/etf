@@ -2596,6 +2596,252 @@ function _fit(c,v,maxW){
   return t+'…';
 }
 
+// ─── Overview Canvas 1: 市场温度与估值 ─────────────────────────────────────
+function drawOverviewCanvas1({sentiment, peHistory}){
+  const W=1000,SC=2,PX=28,GAP=14;
+  const F=EC.F;
+  const L={
+    bg:'#f8fafc',card:'#ffffff',headBg:'#f0f6ff',
+    border:'#dde3f0',
+    blue:'#1a56db',cyan:'#0369a1',green:'#16a34a',
+    red:'#dc2626',orange:'#ea580c',purple:'#7c3aed',
+    dark:'#0f172a',mid:'#374151',dim:'#6b7280',muted:'#9ca3af',
+  };
+  const vix=sentiment?.vix, fg=sentiment?.fear_greed, pe=sentiment?.pe, nqPe=sentiment?.nasdaq_pe;
+  const BRAND_H=60,SENT_H=140,TEMP_H=230,REF_H=290,CHART_H=280,FOOTER_H=56;
+  const H=BRAND_H+SENT_H+TEMP_H+REF_H+CHART_H+FOOTER_H;
+  const cvs=document.createElement('canvas');
+  cvs.width=W*SC;cvs.height=H*SC;
+  const c=cvs.getContext('2d');c.scale(SC,SC);
+  c.fillStyle=L.bg;c.fillRect(0,0,W,H);
+
+  // ── Brand header ──
+  const ag=c.createLinearGradient(0,0,W,0);
+  ag.addColorStop(0,'#1a56db');ag.addColorStop(1,'#7c3aed');
+  c.fillStyle=ag;c.fillRect(0,0,W,5);
+  c.fillStyle=L.headBg;c.fillRect(0,5,W,BRAND_H-5);
+  c.font=`bold 16px ${F}`;c.fillStyle=L.blue;c.fillText('Wise ETF',PX,34);
+  c.font=`bold 14px ${F}`;c.fillStyle=L.mid;c.fillText('市场温度与估值',PX+88,34);
+  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+  c.font=`12px ${F}`;c.fillStyle=L.muted;c.fillText(today,PX,52);
+
+  // ── Section 1: 市场情绪4卡片 ──
+  const sentY=BRAND_H+16;
+  const ic4W=(W-PX*2-GAP*3)/4,ic4H=108;
+  const drawSentCard=(x,y,w,h,title,value,label,col,barPct,sub)=>{
+    _rr(c,x,y,w,h,10);c.fillStyle=L.card;c.fill();
+    c.strokeStyle=L.border;c.lineWidth=0.5;c.stroke();
+    const tg=c.createLinearGradient(x,y,x+w,y);
+    tg.addColorStop(0,col);tg.addColorStop(1,col+'88');
+    _rr(c,x,y,w,4,2);c.fillStyle=tg;c.fill();
+    c.font=`bold 10px ${F}`;c.fillStyle=L.dim;c.textAlign='center';c.fillText(title,x+w/2,y+18);
+    c.font=`bold 20px ${F}`;c.fillStyle=col;c.fillText(String(value??'--'),x+w/2,y+44);
+    c.font=`bold 11px ${F}`;c.fillStyle=col;c.fillText(label||'--',x+w/2,y+60);
+    if(barPct!=null){
+      const bx=x+12,by=y+70,bw=w-24;
+      _rr(c,bx,by,bw,4,2);c.fillStyle=L.border;c.fill();
+      _rr(c,bx,by,bw*Math.min(barPct/100,1),4,2);c.fillStyle=col;c.fill();
+    }
+    if(sub){c.font=`9px ${F}`;c.fillStyle=L.muted;c.fillText(sub,x+w/2,y+h-8);}
+    c.textAlign='left';
+  };
+  const vixVal=vix?.value;
+  const vixCol=!vixVal?L.muted:vixVal>=40?L.red:vixVal>=30?'#ff6b35':vixVal>=20?L.orange:L.green;
+  const vixLbl=!vixVal?'--':vixVal>=40?'极度恐慌':vixVal>=30?'高度恐慌':vixVal>=20?'市场警惕':vixVal>=12?'相对平静':'极度平静';
+  const fgScore=fg?.score;
+  const fgCol=fgScore==null?L.muted:fgScore<=25?L.red:fgScore<=45?L.orange:fgScore<=55?L.dim:fgScore<=75?L.green:'#15803d';
+  const fgLblMap={'extreme fear':'极度恐慌','fear':'恐慌','neutral':'中性','greed':'贪婪','extreme greed':'极度贪婪'};
+  const fgLbl=fgLblMap[(fg?.rating||'').toLowerCase()]||fg?.rating||'--';
+  const peCol=!pe?L.muted:pe.percentile>=85?L.red:pe.percentile>=70?L.orange:pe.percentile>=45?L.dim:L.green;
+  const peLbl=!pe?'--':pe.percentile>=85?'高估':pe.percentile>=70?'偏高':pe.percentile>=45?'合理':'低估';
+  const nqPeCol=!nqPe?L.muted:nqPe.percentile>=85?L.red:nqPe.percentile>=70?L.orange:nqPe.percentile>=45?L.dim:L.green;
+  const nqPeLbl=!nqPe?'--':nqPe.percentile>=85?'高估':nqPe.percentile>=70?'偏高':nqPe.percentile>=45?'合理':'低估';
+  drawSentCard(PX,sentY,ic4W,ic4H,'VIX 恐慌指数',vixVal??'--',vixLbl,vixCol,vixVal?Math.min(vixVal/60*100,100):null,vixVal?`今日${vix.change_pct!=null?(vix.change_pct>=0?'+':'')+vix.change_pct+'%':''}`:null);
+  drawSentCard(PX+ic4W+GAP,sentY,ic4W,ic4H,'CNN 恐慌贪婪',fgScore??'--',fgLbl,fgCol,fgScore,fg?.previous_close!=null?`昨收 ${fg.previous_close}`:null);
+  drawSentCard(PX+(ic4W+GAP)*2,sentY,ic4W,ic4H,'标普500 PE分位',pe?`${pe.pe}x`:'--',peLbl,peCol,pe?.percentile,pe?`历史${pe.percentile}%分位`:null);
+  drawSentCard(PX+(ic4W+GAP)*3,sentY,ic4W,ic4H,'纳指100 PE分位',nqPe?`${nqPe.pe}x`:'--',nqPeLbl,nqPeCol,nqPe?.percentile,nqPe?`历史${nqPe.percentile}%分位`:null);
+
+  // ── Section 2: 综合市场温度 ──
+  const tempY=BRAND_H+SENT_H;
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,tempY);c.lineTo(W,tempY);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,tempY,W,TEMP_H);
+  c.fillStyle=L.blue;c.fillRect(PX,tempY+14,3,16);
+  c.font=`bold 13px ${F}`;c.fillStyle=L.dark;c.fillText('综合市场温度',PX+10,tempY+26);
+  c.font=`10px ${F}`;c.fillStyle=L.muted;c.fillText('标普/纳指PE分位 + 恐慌贪婪 + VIX 四因子合并信号',PX+10,tempY+42);
+  const spScore=!pe?null:pe.percentile>=85?2:pe.percentile>=70?1:pe.percentile>=45?0:-1;
+  const nqScore=nqPe?.percentile==null?null:nqPe.percentile>=85?2:nqPe.percentile>=70?1:nqPe.percentile>=45?0:-1;
+  const fgScoreV=fgScore==null?null:fgScore>=75?2:fgScore>=55?1:fgScore>=45?0:fgScore>=25?-1:-2;
+  const vixScoreV=!vix?null:vixVal>=40?-2:vixVal>=30?-1:vixVal>=12?0:1;
+  const peAvg=spScore!==null&&nqScore!==null?(spScore+nqScore)/2:spScore!==null?spScore:nqScore;
+  const total=peAvg!==null&&fgScoreV!==null&&vixScoreV!==null?Math.round(peAvg+fgScoreV+vixScoreV):null;
+  const signal=total===null?null
+    :total>=4?{label:"极度危险",   sub:"两大指数PE极端高估 + 情绪极度贪婪，历史上接近阶段顶部",color:L.red}
+    :total>=2?{label:"偏高风险",   sub:"估值偏贵、情绪乐观，建议谨慎加仓",color:'#ff6b35'}
+    :total>=0?{label:"中性偏谨慎", sub:"信号混合，维持正常仓位，注意止损",color:L.orange}
+    :total>=-2?{label:"中性",      sub:"估值合理或恐慌情绪偏高，可正常操作",color:L.dim}
+    :{label:"潜在机会区",sub:"多项指标显示市场恐慌，历史上往往是左侧机会",color:L.green};
+  const barPctT=total!==null?Math.round((total+5)/10*100):null;
+  if(signal){
+    c.font=`bold 28px ${F}`;c.fillStyle=signal.color;c.textAlign='center';c.fillText(signal.label,W/2,tempY+78);
+    c.font=`11px ${F}`;c.fillStyle=L.dim;c.fillText(signal.sub,W/2,tempY+96);
+    c.textAlign='left';
+    const bx=PX+60,by=tempY+112,bw=W-PX*2-120;
+    _rr(c,bx,by,bw,10,5);
+    const barGrad=c.createLinearGradient(bx,0,bx+bw,0);
+    barGrad.addColorStop(0,'#1a9e4a');barGrad.addColorStop(0.5,'#c4570a');barGrad.addColorStop(1,'#d93025');
+    c.fillStyle=barGrad;_rr(c,bx,by,bw,10,5);c.fill();
+    if(barPctT!=null){
+      const ix=bx+bw*(barPctT/100);
+      _rr(c,ix-4,by-4,8,18,3);c.fillStyle='#fff';c.fill();
+      c.strokeStyle=signal.color;c.lineWidth=2;_rr(c,ix-4,by-4,8,18,3);c.stroke();
+    }
+    c.font=`9px ${F}`;c.fillStyle=L.muted;
+    c.textAlign='left';c.fillText('机会区',bx,by+26);
+    c.textAlign='center';c.fillText('中性',bx+bw/2,by+26);
+    c.textAlign='right';c.fillText('危险区',bx+bw,by+26);
+    c.textAlign='left';
+  }
+  const scoreColor2=s=>s===null?L.muted:s>=2?L.red:s>=1?'#ff6b35':s===0?L.muted:L.green;
+  const indicators2=[
+    {name:"标普500 PE",score:spScore,desc:spScore===null?"--":spScore>=2?"极度高估":spScore>=1?"偏高":"合理/低估",detail:pe?`${pe.percentile}%分位 · ${pe.pe}x`:""},
+    {name:"纳指100 PE",score:nqScore,desc:nqScore===null?"--":nqScore>=2?"极度高估":nqScore>=1?"偏高":"合理/低估",detail:nqPe?.pe!=null?`${nqPe.percentile}%分位 · ${nqPe.pe}x`:""},
+    {name:"恐慌贪婪",  score:fgScoreV,desc:fgScoreV===null?"--":fgScoreV>=2?"极度贪婪":fgScoreV>=1?"贪婪":fgScoreV<=-1?"恐慌":"中性",detail:fgScore!=null?`${fgScore}分`:""},
+    {name:"VIX 波动",  score:vixScoreV,desc:vixScoreV===null?"--":vixScoreV<=-2?"极度恐慌":vixScoreV<=-1?"高度恐慌":vixScoreV>=1?"过度平静":"正常",detail:vixVal?`${vixVal}`:""},
+  ];
+  const indW=(W-PX*2-GAP)/2,indH=32,ind0Y=tempY+148;
+  indicators2.forEach((ind,i)=>{
+    const ix=PX+(i%2)*(indW+GAP),iy=ind0Y+Math.floor(i/2)*(indH+6);
+    _rr(c,ix,iy,indW,indH,6);c.fillStyle='#f1f5f9';c.fill();
+    c.font=`11px ${F}`;c.fillStyle=L.mid;c.fillText(ind.name,ix+12,iy+20);
+    c.textAlign='right';
+    if(ind.detail){c.font=`10px ${F}`;c.fillStyle=L.muted;c.fillText(ind.detail,ix+indW-64,iy+20);}
+    c.font=`bold 12px ${F}`;c.fillStyle=scoreColor2(ind.score);c.fillText(ind.desc,ix+indW-8,iy+20);
+    c.textAlign='left';
+  });
+
+  // ── Section 3: 历史PE高位参考 ──
+  const refY=BRAND_H+SENT_H+TEMP_H;
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,refY);c.lineTo(W,refY);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,refY,W,REF_H);
+  c.fillStyle=L.blue;c.fillRect(PX,refY+14,3,16);
+  c.font=`bold 13px ${F}`;c.fillStyle=L.dark;c.fillText('历史PE高位 → 后续表现',PX+10,refY+26);
+  c.font=`10px ${F}`;c.fillStyle=L.muted;c.fillText('历史规律仅供参考，不构成投资建议',PX+10,refY+40);
+
+  const drawPERefTable=(tX,tY,tW,refs,accent,label,curPE)=>{
+    c.font=`bold 11px ${F}`;c.fillStyle=accent;c.fillText(label,tX,tY+14);
+    if(curPE?.pe){
+      c.font=`10px ${F}`;c.fillStyle=L.muted;
+      const lw=c.measureText(label).width;
+      c.fillText(`当前: ${curPE.pe}x (${curPE.percentile}%分位)`,tX+lw+8,tY+14);
+    }
+    const hdrs=['时期','PE','后1年','最大回调','恢复时长'];
+    const cWs=[tW*0.30,tW*0.11,tW*0.15,tW*0.18,tW*0.26];
+    const hY=tY+22;
+    c.fillStyle='#f1f5f9';c.fillRect(tX,hY,tW,18);
+    c.strokeStyle=L.border;c.lineWidth=0.5;c.strokeRect(tX,hY,tW,18);
+    let hx=tX+4;
+    hdrs.forEach((h,i)=>{
+      c.font=`bold 9px ${F}`;c.fillStyle=L.muted;
+      c.textAlign=i>0?'right':'left';
+      c.fillText(h,i===0?hx:hx+cWs[i]-4,hY+12);
+      hx+=cWs[i];
+    });c.textAlign='left';
+    refs.forEach((row,ri)=>{
+      const ry=hY+18+ri*28;
+      if(row.isCurrent){c.fillStyle=accent+'12';c.fillRect(tX,ry,tW,28);}
+      else if(ri%2===0){c.fillStyle='#fafafa';c.fillRect(tX,ry,tW,28);}
+      c.strokeStyle=L.border+'50';c.lineWidth=0.3;
+      c.beginPath();c.moveTo(tX,ry+28);c.lineTo(tX+tW,ry+28);c.stroke();
+      const peStr=row.isCurrent?(curPE?`${curPE.pe}x`:'--'):row.pe;
+      const rowData=[row.period,peStr,row.next1y,row.maxDD,row.recovery];
+      const rowCols=[row.isCurrent?accent:L.dark,row.isCurrent?(curPE?.pe>=30?L.red:L.orange):ri<2?L.red:'#ff6b35',row.next1y==='?'?L.muted:row.next1y.startsWith('-')?L.red:L.green,row.ddColor,L.muted];
+      let rx=tX+4;
+      rowData.forEach((val,i)=>{
+        c.font=`${i===0&&row.isCurrent?'bold ':''}9px ${F}`;c.fillStyle=rowCols[i];
+        c.textAlign=i>0?'right':'left';
+        if(i===0){c.fillText(_fit(c,val,cWs[0]-8),rx,ry+18);}
+        else{c.fillText(val,rx+cWs[i]-4,ry+18);}
+        rx+=cWs[i];
+      });c.textAlign='left';
+    });
+  };
+  const refHalf=(W-PX*2-GAP*2)/2;
+  drawPERefTable(PX,refY+48,refHalf,PE_HIST_REFS_SP,L.blue,'标普500',pe);
+  drawPERefTable(PX+refHalf+GAP*2,refY+48,refHalf,PE_HIST_REFS_NQ,L.purple,'纳指100',nqPe);
+
+  // ── Section 4: PE历史走势图 ──
+  const chartY2=BRAND_H+SENT_H+TEMP_H+REF_H;
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,chartY2);c.lineTo(W,chartY2);c.stroke();
+  c.fillStyle=L.bg;c.fillRect(0,chartY2,W,CHART_H);
+  c.fillStyle=L.blue;c.fillRect(PX,chartY2+14,3,16);
+  c.font=`bold 13px ${F}`;c.fillStyle=L.dark;c.fillText('PE历史走势（10年）',PX+10,chartY2+26);
+  c.font=`10px ${F}`;c.fillStyle=L.muted;c.fillText('月度数据 · 标普500 vs 纳指100',PX+10,chartY2+40);
+  c.fillStyle=L.blue;c.fillRect(W-PX-130,chartY2+18,14,3);
+  c.font=`10px ${F}`;c.fillStyle=L.muted;c.textAlign='right';c.fillText('标普500',W-PX,chartY2+26);
+  c.fillStyle=L.purple;c.fillRect(W-PX-58,chartY2+18,14,3);
+  c.fillText('纳指100',W-PX-42,chartY2+26);
+  c.textAlign='left';
+
+  const sp500D=(peHistory?.sp500||[]);
+  const nasdaqD=(peHistory?.nasdaq100||[]);
+  const now2=new Date();
+  const cutoff=`${now2.getFullYear()-10}-${String(now2.getMonth()+1).padStart(2,'0')}`;
+  const sp500F=sp500D.filter(d=>d.date>=cutoff);
+  const nasdaqF=nasdaqD.filter(d=>d.date>=cutoff);
+  const pcX=PX+44,pcY=chartY2+54,pcW=W-PX*2-48,pcH=185;
+
+  if(sp500F.length>1||nasdaqF.length>1){
+    const allPE=[...sp500F.map(d=>d.pe),...nasdaqF.map(d=>d.pe)].filter(v=>v!=null);
+    const pMin=Math.floor(Math.min(...allPE)*0.9/5)*5;
+    const pMax=Math.ceil(Math.max(...allPE)*1.05/5)*5;
+    const toY4=v=>pcY+pcH*(1-(v-pMin)/(pMax-pMin));
+    [25,30,40].forEach(v=>{
+      if(v<pMin||v>pMax)return;
+      const yy=toY4(v);
+      const col=v===25?L.green:v===30?L.orange:L.red;
+      c.strokeStyle=col+'70';c.lineWidth=0.8;c.setLineDash([4,3]);
+      c.beginPath();c.moveTo(pcX,yy);c.lineTo(pcX+pcW,yy);c.stroke();c.setLineDash([]);
+      c.font=`9px ${F}`;c.fillStyle=col;c.textAlign='left';c.fillText(`${v}x`,PX,yy+3);
+    });
+    for(let v=Math.ceil(pMin/5)*5;v<=pMax;v+=5){
+      const yy=toY4(v);
+      if(yy<pcY-4||yy>pcY+pcH+4)continue;
+      c.strokeStyle=L.border+'50';c.lineWidth=0.4;
+      c.beginPath();c.moveTo(pcX,yy);c.lineTo(pcX+pcW,yy);c.stroke();
+      c.font=`9px ${F}`;c.fillStyle=L.muted;c.textAlign='right';c.fillText(`${v}x`,pcX-4,yy+3);
+    }c.textAlign='left';
+    if(sp500F.length>1){
+      c.strokeStyle=L.blue;c.lineWidth=2;c.beginPath();
+      sp500F.forEach((d,i)=>{const xx=pcX+i/(sp500F.length-1)*pcW;const yy=toY4(d.pe);i===0?c.moveTo(xx,yy):c.lineTo(xx,yy);});
+      c.stroke();
+    }
+    if(nasdaqF.length>1){
+      c.strokeStyle=L.purple;c.lineWidth=2;c.setLineDash([6,3]);c.beginPath();
+      nasdaqF.forEach((d,i)=>{const xx=pcX+i/(nasdaqF.length-1)*pcW;const yy=toY4(d.pe);i===0?c.moveTo(xx,yy):c.lineTo(xx,yy);});
+      c.stroke();c.setLineDash([]);
+    }
+    const refArr=sp500F.length>=nasdaqF.length?sp500F:nasdaqF;
+    const rn=refArr.length;
+    [0,Math.floor(rn/4),Math.floor(rn/2),Math.floor(3*rn/4),rn-1].forEach(i=>{
+      if(i>=rn)return;
+      const xx=pcX+i/(rn-1)*pcW;
+      c.font=`9px ${F}`;c.fillStyle=L.muted;c.textAlign='center';c.fillText(refArr[i].date.slice(0,7),xx,pcY+pcH+14);
+    });c.textAlign='left';
+  } else {
+    c.font=`12px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
+    c.fillText('PE历史数据加载中…',W/2,pcY+pcH/2);c.textAlign='left';
+  }
+
+  // ── Footer ──
+  const fy=H-FOOTER_H;
+  c.fillStyle=L.headBg;c.fillRect(0,fy,W,FOOTER_H);
+  c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fy);c.lineTo(W,fy);c.stroke();
+  c.font=`12px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
+  c.fillText('Wise-etf.org  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
+  c.textAlign='left';
+  return cvs;
+}
+
 function drawTableCanvas({titleParts,date,cols,rows}){
   const W=1080,SC=2,PX=20;
   const F=EC.F;
@@ -3139,9 +3385,225 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   return cvs;
 }
 
+// ─── Report Page ──────────────────────────────────────────────────────────────
+function ReportPage() {
+  const [sentiment, setSentiment] = useState(null);
+  const [peHistory, setPeHistory] = useState({sp500:[],nasdaq100:[]});
+  const [etfs, setEtfs] = useState(FALLBACK.etfs);
+  const [images, setImages] = useState([]); // [{title, url, filename}]
+  const [generating, setGenerating] = useState(false);
+  const [toast, setToast] = useState(null); // {msg, ok}
+  const isMobile = typeof window!=="undefined" && window.innerWidth<=768;
+
+  useEffect(()=>{
+    apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
+    apiFetch("/pe-history").then(d=>{ if(d?.data) setPeHistory(d.data); });
+    apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
+  },[]);
+
+  const showToast=(msg,ok=true)=>{
+    setToast({msg,ok});
+    setTimeout(()=>setToast(null),2000);
+  };
+
+  const byLimit=(arr)=>{
+    const parse=s=>{if(!s||s==='暂停申购')return 0;if(s==='不限额')return 9999999;return parseFloat(s)||0;};
+    return [...arr].sort((a,b)=>parse(b.daily_limit)-parse(a.daily_limit));
+  };
+
+  const handleGenerate=()=>{
+    setGenerating(true);
+    const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const ds=today.replace(/\//g,'-');
+    try{
+      const imgs=[];
+      // Image 1: 市场温度与估值
+      const c1=drawOverviewCanvas1({sentiment,peHistory});
+      imgs.push({title:'市场温度与估值',url:c1.toDataURL('image/png'),filename:`wise-etf-market-temp-${ds}.png`});
+      // Image 2: 基金快照
+      const c2=drawOverviewCanvas({nasdaq:FALLBACK.nasdaq_passive,sp500:FALLBACK.sp500_passive,active:FALLBACK.us_active,etfs,usdcny:sentiment?.ndx_price?null:null,sentiment});
+      imgs.push({title:'基金数据快照',url:c2.toDataURL('image/png'),filename:`wise-etf-overview-${ds}.png`});
+      // Image 3: 纳指表格
+      const nasdaqCols=[
+        {label:'A类代码',key:'code',w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
+        {label:'基金名称',key:'name',w:262,render:v=>({text:v,color:'#0f172a'})},
+        {label:'C类代码',key:'code_c',w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
+        {label:'总费率',key:'fee_rate',w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.8?'#e85d04':'#374151'})},
+        {label:'规模(亿)',key:'scale',w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
+        {label:'25年涨幅',key:'ytd_return',w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
+        {label:'昨日涨幅',key:'day_change',w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
+        {label:'跟踪误差',key:'track_error',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
+        {label:'每日申购上限',key:'daily_limit',w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+        {label:'申购状态',key:'buy_status',w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
+      ];
+      const c3=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'纳斯达克',color:'#e85d04'},{text:'（被动型）基金对比',color:'#0f172a'}],date:today,cols:nasdaqCols,rows:byLimit(FALLBACK.nasdaq_passive)});
+      imgs.push({title:'纳指基金表格',url:c3.toDataURL('image/png'),filename:`wise-etf-nasdaq-${ds}.png`});
+      // Image 4: 标普+ETF
+      const sp500Cols=[
+        {label:'A类代码',key:'code',w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
+        {label:'基金名称',key:'name',w:260,render:v=>({text:v,color:'#0f172a'})},
+        {label:'C类代码',key:'code_c',w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
+        {label:'总费率',key:'fee_rate',w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.9?'#e85d04':'#374151'})},
+        {label:'规模(亿)',key:'scale',w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
+        {label:'25年涨幅',key:'ytd_return',w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
+        {label:'昨日涨幅',key:'day_change',w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
+        {label:'跟踪误差',key:'track_error',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
+        {label:'每日申购上限',key:'daily_limit',w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+        {label:'申购状态',key:'buy_status',w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
+      ];
+      const etfCols=[
+        {label:'代码',key:'code',w:76,render:v=>({text:v,color:'#1a56db',bold:true})},
+        {label:'ETF名称',key:'name',w:238,render:v=>({text:v,color:'#0f172a'})},
+        {label:'跟踪指数',key:'tracking_index',w:150,render:v=>({text:v||'—',color:'#6b7280'})},
+        {label:'总费率',key:'fee_rate',w:70,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>=1.0?'#e85d04':'#374151'})},
+        {label:'规模(亿)',key:'scale',w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
+        {label:'近1年涨幅',key:'ytd_return',w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
+        {label:'溢价率',key:'premium',w:80,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.5?'#e85d04':v>0?'#374151':'#9ca3af'})},
+        {label:'日均成交(亿)',key:'volume',w:96,right:true,render:v=>({text:v??'—',color:'#374151'})},
+        {label:'交易方式',key:'buy_status',w:86,render:()=>({text:'场内交易',pill:true,pillBg:'#dbeafe',color:'#1a56db'})},
+      ];
+      const c4a=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'标普500',color:'#dc2626'},{text:'基金对比',color:'#0f172a'}],date:today,cols:sp500Cols,rows:byLimit(FALLBACK.sp500_passive)});
+      const c4b=drawTableCanvas({titleParts:[{text:'场内',color:'#0f172a'},{text:'ETF',color:'#1a56db'},{text:'（纳指 / 标普）',color:'#0f172a'}],date:today,cols:etfCols,rows:etfs});
+      const c4=document.createElement('canvas');
+      c4.width=c4a.width;c4.height=c4a.height+32+c4b.height;
+      const ctx4=c4.getContext('2d');ctx4.fillStyle='#fff';ctx4.fillRect(0,0,c4.width,c4.height);
+      ctx4.drawImage(c4a,0,0);ctx4.drawImage(c4b,0,c4a.height+32);
+      imgs.push({title:'标普500 + ETF表格',url:c4.toDataURL('image/png'),filename:`wise-etf-sp500-etf-${ds}.png`});
+      // Image 5: 主动基金
+      const activeCols=[
+        {label:'基金代码',key:'code',w:80,render:v=>({text:v,color:'#7c3aed',bold:true})},
+        {label:'基金名称',key:'name',w:316,render:v=>({text:v,color:'#0f172a'})},
+        {label:'运作费率',key:'fee_rate',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.4?'#e85d04':'#374151'})},
+        {label:'规模(亿)',key:'scale',w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
+        {label:'近1年涨幅',key:'ytd_return',w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
+        {label:'每日申购上限',key:'daily_limit',w:120,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+        {label:'申购状态',key:'buy_status',w:102,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
+      ];
+      const c5=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'美股',color:'#dc2626'},{text:'（主动型）基金对比',color:'#0f172a'}],date:today,cols:activeCols,rows:FALLBACK.us_active});
+      imgs.push({title:'主动基金表格',url:c5.toDataURL('image/png'),filename:`wise-etf-active-${ds}.png`});
+      setImages(imgs);
+    }finally{setGenerating(false);}
+  };
+
+  const handleDownload=(url,filename)=>{
+    const a=document.createElement('a');a.href=url;a.download=filename;a.click();
+  };
+
+  const handleDownloadAll=()=>{
+    images.forEach((img,i)=>{
+      setTimeout(()=>handleDownload(img.url,img.filename), i*300);
+    });
+    showToast(`开始下载全部 ${images.length} 张图片`);
+  };
+
+  const handleCopy=async(url,title)=>{
+    try{
+      const resp=await fetch(url);
+      const blob=await resp.blob();
+      await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+      showToast(`已复制：${title}`);
+    }catch{showToast('复制失败，请右键图片另存为',false);}
+  };
+
+  return (
+    <div style={{minHeight:'100vh',background:'#f8fafc',fontFamily:'"PingFang SC","Microsoft YaHei",Arial,sans-serif'}}>
+      {/* Toast */}
+      {toast&&(
+        <div style={{position:'fixed',top:20,left:'50%',transform:'translateX(-50%)',zIndex:9999,
+          background:toast.ok?'#0f172a':'#dc2626',color:'#fff',padding:'10px 20px',
+          borderRadius:24,fontSize:13,fontWeight:600,
+          boxShadow:'0 4px 20px rgba(0,0,0,0.25)',pointerEvents:'none',
+          animation:'toastIn 0.2s ease'}}>
+          {toast.ok?'✓ ':''}{toast.msg}
+        </div>
+      )}
+      {/* Header */}
+      <div style={{background:'linear-gradient(135deg,#1a56db,#7c3aed)',padding:'20px 24px',color:'#fff'}}>
+        <div style={{maxWidth:1100,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+          <div>
+            <div style={{fontSize:20,fontWeight:800,letterSpacing:-0.5}}>Wise ETF · 导出报告</div>
+            <div style={{fontSize:13,opacity:0.8,marginTop:4}}>一键生成全部图片，分享或存档</div>
+          </div>
+          <a href="/" style={{color:'rgba(255,255,255,0.85)',fontSize:13,textDecoration:'none',border:'1px solid rgba(255,255,255,0.4)',padding:'6px 16px',borderRadius:20}}>← 返回首页</a>
+        </div>
+      </div>
+
+      <div style={{maxWidth:1100,margin:'0 auto',padding:'28px 16px'}}>
+        {/* Action bar */}
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:32,flexWrap:'wrap'}}>
+          <button onClick={handleGenerate} disabled={generating}
+            style={{display:'flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:14,border:'none',background:generating?'#94a3b8':'linear-gradient(135deg,#007aff,#5856d6)',color:'#fff',fontSize:14,fontWeight:700,cursor:generating?'not-allowed':'pointer',boxShadow:'0 4px 16px rgba(0,122,255,0.3)'}}>
+            {generating?(
+              <><span style={{display:'inline-block',width:14,height:14,border:'2px solid #fff3',borderTop:'2px solid #fff',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/> 生成中…</>
+            ):(
+              <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg> 生成全部图片</>
+            )}
+          </button>
+          {images.length>0&&!isMobile&&(
+            <button onClick={handleDownloadAll}
+              style={{display:'flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:14,border:'none',background:'linear-gradient(135deg,#16a34a,#059669)',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 16px rgba(22,163,74,0.3)'}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              下载全部 ({images.length}张)
+            </button>
+          )}
+          {!sentiment&&<span style={{fontSize:13,color:'#94a3b8'}}>市场数据加载中…</span>}
+          {images.length>0&&<span style={{fontSize:13,color:'#16a34a',fontWeight:600}}>✓ 已生成 {images.length} 张</span>}
+        </div>
+
+        {/* Image gallery */}
+        {images.length>0&&(
+          <div style={{display:'flex',flexDirection:'column',gap:28}}>
+            {images.map((img,i)=>(
+              <div key={i} style={{background:'#fff',borderRadius:16,overflow:'hidden',boxShadow:'0 2px 12px rgba(0,0,0,0.08)',border:'1px solid #e2e8f0'}}>
+                <div style={{padding:'14px 20px',borderBottom:'1px solid #f1f5f9',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+                  <div style={{fontSize:15,fontWeight:700,color:'#0f172a'}}>{i+1}. {img.title}</div>
+                  <div style={{display:'flex',gap:8}}>
+                    {isMobile?(
+                      <span style={{fontSize:12,color:'#94a3b8',padding:'6px 0'}}>长按图片 → 保存到相册</span>
+                    ):(
+                      <>
+                        <button onClick={()=>handleCopy(img.url,img.title)}
+                          style={{display:'flex',alignItems:'center',gap:5,padding:'6px 14px',borderRadius:10,border:'1px solid #e2e8f0',background:'#f8fafc',color:'#374151',fontSize:13,fontWeight:600,cursor:'pointer'}}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                          复制
+                        </button>
+                        <button onClick={()=>handleDownload(img.url,img.filename)}
+                          style={{display:'flex',alignItems:'center',gap:5,padding:'6px 14px',borderRadius:10,border:'none',background:'linear-gradient(135deg,#007aff,#5856d6)',color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          下载
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div style={{padding:16,background:'#f8fafc',overflow:'auto'}}>
+                  <img src={img.url} alt={img.title} style={{maxWidth:'100%',borderRadius:8,display:'block'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {images.length===0&&!generating&&(
+          <div style={{textAlign:'center',padding:'60px 0',color:'#94a3b8'}}>
+            <div style={{fontSize:48,marginBottom:16}}>📊</div>
+            <div style={{fontSize:16,fontWeight:600,color:'#64748b',marginBottom:8}}>点击上方按钮生成报告</div>
+            <div style={{fontSize:13}}>将生成 5 张图片：市场温度、基金快照、纳指表格、标普+ETF、主动基金</div>
+          </div>
+        )}
+      </div>
+      <style>{`
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(-8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+      `}</style>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   if(window.location.pathname==="/admin") return <AdminPage/>;
+  if(window.location.pathname==="/report") return <ReportPage/>;
 
   const getInitialTab = () => {
     const path = window.location.pathname.replace(/^\//, "");
@@ -3163,7 +3625,6 @@ export default function App() {
     }
     return !localStorage.getItem("etf-disclaimer");
   });
-  const [exportPreview,setExportPreview]=useState(null); // { url, filename }
   const [showBriefing,setShowBriefing]=useState(()=>{
     if(!localStorage.getItem("etf-disclaimer")) return false;
     if(localStorage.getItem("group_chat_no_show")===new Date().toDateString()) return false;
@@ -3393,89 +3854,6 @@ export default function App() {
     return [...arr].sort((a,b)=>parse(b.daily_limit)-parse(a.daily_limit));
   },[]);
 
-  // ── Export handlers（放在 nasdaqM 之后才能引用）
-  const handleExport = useCallback(()=>{
-    const cvs = drawOverviewCanvas({nasdaq:nasdaqM, sp500:sp500M, active:activeM, etfs:etfsM, usdcny, sentiment});
-    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-    setExportPreview({url:cvs.toDataURL('image/png'), filename:`wise-etf-overview-${today.replace(/\//g,'-')}.png`});
-  },[nasdaqM, sp500M, activeM, etfsM, usdcny, sentiment]);
-
-  const handleExportNasdaqTable = useCallback(()=>{
-    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-    const cols=[
-      {label:'A类代码',    key:'code',        w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
-      {label:'基金名称',   key:'name',        w:262,render:v=>({text:v,color:'#0f172a'})},
-      {label:'C类代码',    key:'code_c',      w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
-      {label:'总费率',     key:'fee_rate',    w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.8?'#e85d04':'#374151'})},
-      {label:'规模(亿)',   key:'scale',       w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
-      {label:'25年涨幅',   key:'ytd_return',  w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
-      {label:'昨日涨幅',   key:'day_change',  w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
-      {label:'跟踪误差',   key:'track_error', w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
-      {label:'每日申购上限',key:'daily_limit', w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
-      {label:'申购状态',   key:'buy_status',  w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
-    ];
-    const cvs=drawTableCanvas({titleParts:[
-      {text:'场外',color:'#0f172a'},{text:'纳斯达克',color:'#e85d04'},{text:'（被动型）基金对比',color:'#0f172a'}
-    ],date:today,cols,rows:byLimit(nasdaqM)});
-    setExportPreview({url:cvs.toDataURL('image/png'),filename:`wise-etf-nasdaq-${today.replace(/\//g,'-')}.png`});
-  },[nasdaqM, byLimit]);
-
-  const handleExportSP500ETFTable = useCallback(()=>{
-    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-    const passiveCols=[
-      {label:'A类代码',    key:'code',        w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
-      {label:'基金名称',   key:'name',        w:260,render:v=>({text:v,color:'#0f172a'})},
-      {label:'C类代码',    key:'code_c',      w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
-      {label:'总费率',     key:'fee_rate',    w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.9?'#e85d04':'#374151'})},
-      {label:'规模(亿)',   key:'scale',       w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
-      {label:'25年涨幅',   key:'ytd_return',  w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
-      {label:'昨日涨幅',   key:'day_change',  w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
-      {label:'跟踪误差',   key:'track_error', w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
-      {label:'每日申购上限',key:'daily_limit', w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
-      {label:'申购状态',   key:'buy_status',  w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
-    ];
-    const etfCols=[
-      {label:'代码',       key:'code',           w:76,render:v=>({text:v,color:'#1a56db',bold:true})},
-      {label:'ETF名称',    key:'name',           w:238,render:v=>({text:v,color:'#0f172a'})},
-      {label:'跟踪指数',   key:'tracking_index', w:150,render:v=>({text:v||'—',color:'#6b7280'})},
-      {label:'总费率',     key:'fee_rate',       w:70,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>=1.0?'#e85d04':'#374151'})},
-      {label:'规模(亿)',   key:'scale',          w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
-      {label:'近1年涨幅',  key:'ytd_return',     w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
-      {label:'溢价率',     key:'premium',        w:80,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.5?'#e85d04':v>0?'#374151':'#9ca3af'})},
-      {label:'日均成交(亿)',key:'volume',         w:96,right:true,render:v=>({text:v??'—',color:'#374151'})},
-      {label:'交易方式',   key:'buy_status',     w:86,render:()=>({text:'场内交易',pill:true,pillBg:'#dbeafe',color:'#1a56db'})},
-    ];
-    const c1=drawTableCanvas({titleParts:[
-      {text:'场外',color:'#0f172a'},{text:'标普500',color:'#dc2626'},{text:'基金对比',color:'#0f172a'}
-    ],date:today,cols:passiveCols,rows:byLimit(sp500M)});
-    const c2=drawTableCanvas({titleParts:[
-      {text:'场内',color:'#0f172a'},{text:'ETF',color:'#1a56db'},{text:'（纳指 / 标普）',color:'#0f172a'}
-    ],date:today,cols:etfCols,rows:etfsM});
-    const GAP=32,W=c1.width;
-    const combined=document.createElement('canvas');
-    combined.width=W;combined.height=c1.height+GAP+c2.height;
-    const ctx=combined.getContext('2d');
-    ctx.fillStyle='#FFFFFF';ctx.fillRect(0,0,combined.width,combined.height);
-    ctx.drawImage(c1,0,0);ctx.drawImage(c2,0,c1.height+GAP);
-    setExportPreview({url:combined.toDataURL('image/png'),filename:`wise-etf-sp500-etf-${today.replace(/\//g,'-')}.png`});
-  },[sp500M, etfsM, byLimit]);
-
-  const handleExportActiveTable = useCallback(()=>{
-    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-    const cols=[
-      {label:'基金代码',   key:'code',        w:80,render:v=>({text:v,color:'#7c3aed',bold:true})},
-      {label:'基金名称',   key:'name',        w:316,render:v=>({text:v,color:'#0f172a'})},
-      {label:'运作费率',   key:'fee_rate',    w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.4?'#e85d04':'#374151'})},
-      {label:'规模(亿)',   key:'scale',       w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
-      {label:'近1年涨幅',  key:'ytd_return',  w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
-      {label:'每日申购上限',key:'daily_limit', w:120,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
-      {label:'申购状态',   key:'buy_status',  w:102,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
-    ];
-    const cvs=drawTableCanvas({titleParts:[
-      {text:'场外',color:'#0f172a'},{text:'美股',color:'#dc2626'},{text:'（主动型）基金对比',color:'#0f172a'}
-    ],date:today,cols,rows:activeM});
-    setExportPreview({url:cvs.toDataURL('image/png'),filename:`wise-etf-active-${today.replace(/\//g,'-')}.png`});
-  },[activeM]);
 
   const maxReturn  = Math.max(...[...nasdaqM,...sp500M,...activeM].map(f=>f.ytd_return||0));
 
@@ -3569,29 +3947,6 @@ export default function App() {
     <>
     <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif",overflowX:"hidden"}}>
       {showDisclaimer&&<DisclaimerModal onClose={dismissDisclaimer}/>}
-      {/* 导出预览弹窗 */}
-      {exportPreview&&(
-        <div onClick={()=>setExportPreview(null)}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(8px)",padding:24}}>
-          <div onClick={e=>e.stopPropagation()}
-            style={{background:"#1c1c1e",borderRadius:20,padding:20,display:"flex",flexDirection:"column",alignItems:"center",gap:16,maxHeight:"90vh"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%"}}>
-              <span style={{fontSize:15,fontWeight:700,color:"#fff"}}>预览</span>
-              <button onClick={()=>setExportPreview(null)}
-                style={{width:28,height:28,borderRadius:"50%",border:"none",background:"#3a3a3c",color:"#fff",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
-            </div>
-            <img src={exportPreview.url} alt="导出预览"
-              style={{maxHeight:"calc(90vh - 140px)",maxWidth:"100%",borderRadius:12,objectFit:"contain"}}/>
-            <a href={exportPreview.url} download={exportPreview.filename}
-              style={{display:"flex",alignItems:"center",gap:8,padding:"11px 32px",borderRadius:12,background:"linear-gradient(135deg,#007aff,#5856d6)",color:"#fff",fontSize:14,fontWeight:700,textDecoration:"none",letterSpacing:0.2}}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              下载图片
-            </a>
-          </div>
-        </div>
-      )}
       {/* 微信公众号二维码弹窗 */}
       {showWechat&&(
         <div onClick={()=>setShowWechat(false)}
@@ -3614,55 +3969,6 @@ export default function App() {
       )}
       {showBriefing&&!showDisclaimer&&(
         <GroupChatModal onClose={()=>setShowBriefing(false)}/>
-      )}
-      {/* 导出图片按钮（仅 overview 时显示） */}
-      {activeTab==="overview"&&!isMobile&&(
-        <button onClick={handleExport}
-          title="导出今日快照"
-          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#007aff,#5856d6)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(0,122,255,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
-          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(0,122,255,0.45)";}}
-          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(0,122,255,0.35)";}}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          导出图片
-        </button>
-      )}
-      {activeTab==="nasdaq"&&!isMobile&&(
-        <button onClick={handleExportNasdaqTable}
-          title="导出纳指表格"
-          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#007aff,#5856d6)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(0,122,255,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
-          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(0,122,255,0.45)";}}
-          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(0,122,255,0.35)";}}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          导出纳指表格
-        </button>
-      )}
-      {(activeTab==="sp500"||activeTab==="etf")&&!isMobile&&(
-        <button onClick={handleExportSP500ETFTable}
-          title="导出标普+ETF"
-          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#14c8b4,#007aff)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(20,200,180,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
-          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(20,200,180,0.45)";}}
-          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(20,200,180,0.35)";}}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          导出标普+ETF
-        </button>
-      )}
-      {activeTab==="active"&&!isMobile&&(
-        <button onClick={handleExportActiveTable}
-          title="导出主动型基金表格"
-          style={{position:"fixed",right:24,bottom:compareList.length>0?88:36,zIndex:90,display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#a04cf5,#5856d6)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 16px rgba(160,76,245,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
-          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 24px rgba(160,76,245,0.45)";}}
-          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 16px rgba(160,76,245,0.35)";}}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          导出主动型表格
-        </button>
       )}
 
       {/* ── Header ── */}
