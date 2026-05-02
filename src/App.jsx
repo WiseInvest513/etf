@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line, LineChart, PieChart, Pie, Cell } from "recharts";
 import { Analytics } from "@vercel/analytics/react";
+import LazyPage from "./LazyPage.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 async function apiFetch(path) {
@@ -2573,6 +2574,7 @@ const TABS=[
   {id:"etf",       label:"场内ETF"},
   {id:"active",    label:"美股主动"},
   {id:"watchlist", label:"自选"},
+  {id:"lazy",      label:"懒人组合", href:"/lazy"},
 ];
 
 // ─── Canvas Export Utilities ──────────────────────────────────────────────────
@@ -3390,6 +3392,7 @@ function ReportPage() {
   const [sentiment, setSentiment] = useState(null);
   const [peHistory, setPeHistory] = useState({sp500:[],nasdaq100:[]});
   const [etfs, setEtfs] = useState(FALLBACK.etfs);
+  const [liveData, setLiveData] = useState({});
   const [images, setImages] = useState([]); // [{title, url, filename}]
   const [generating, setGenerating] = useState(false);
   const [toast, setToast] = useState(null); // {msg, ok}
@@ -3399,7 +3402,15 @@ function ReportPage() {
     apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
     apiFetch("/pe-history").then(d=>{ if(d?.data) setPeHistory(d.data); });
     apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
+    apiFetch("/live_data").then(d=>{ if(d?.data) setLiveData(d.data); });
   },[]);
+
+  const mergeLive=(arr)=>arr.map(f=>{
+    const live=liveData[f.code];
+    if(!live) return f;
+    const patch=Object.fromEntries(Object.entries(live).filter(([,v])=>v!=null));
+    return {...f,...patch};
+  });
 
   const showToast=(msg,ok=true)=>{
     setToast({msg,ok});
@@ -3420,8 +3431,12 @@ function ReportPage() {
       // Image 1: 市场温度与估值
       const c1=drawOverviewCanvas1({sentiment,peHistory});
       imgs.push({title:'市场温度与估值',url:c1.toDataURL('image/png'),filename:`wise-etf-market-temp-${ds}.png`});
+      // 合并 liveData（昨日涨幅 / 申购状态 / 申购上限）
+      const nasdaqMerged=mergeLive(FALLBACK.nasdaq_passive);
+      const sp500Merged=mergeLive(FALLBACK.sp500_passive);
+      const activeMerged=mergeLive(FALLBACK.us_active);
       // Image 2: 基金快照
-      const c2=drawOverviewCanvas({nasdaq:FALLBACK.nasdaq_passive,sp500:FALLBACK.sp500_passive,active:FALLBACK.us_active,etfs,usdcny:sentiment?.ndx_price?null:null,sentiment});
+      const c2=drawOverviewCanvas({nasdaq:nasdaqMerged,sp500:sp500Merged,active:activeMerged,etfs,usdcny:sentiment?.ndx_price?null:null,sentiment});
       imgs.push({title:'基金数据快照',url:c2.toDataURL('image/png'),filename:`wise-etf-overview-${ds}.png`});
       // Image 3: 纳指表格
       const nasdaqCols=[
@@ -3436,7 +3451,7 @@ function ReportPage() {
         {label:'每日申购上限',key:'daily_limit',w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
         {label:'申购状态',key:'buy_status',w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
       ];
-      const c3=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'纳斯达克',color:'#e85d04'},{text:'（被动型）基金对比',color:'#0f172a'}],date:today,cols:nasdaqCols,rows:byLimit(FALLBACK.nasdaq_passive)});
+      const c3=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'纳斯达克',color:'#e85d04'},{text:'（被动型）基金对比',color:'#0f172a'}],date:today,cols:nasdaqCols,rows:byLimit(nasdaqMerged)});
       imgs.push({title:'纳指基金表格',url:c3.toDataURL('image/png'),filename:`wise-etf-nasdaq-${ds}.png`});
       // Image 4: 标普+ETF
       const sp500Cols=[
@@ -3462,7 +3477,7 @@ function ReportPage() {
         {label:'日均成交(亿)',key:'volume',w:96,right:true,render:v=>({text:v??'—',color:'#374151'})},
         {label:'交易方式',key:'buy_status',w:86,render:()=>({text:'场内交易',pill:true,pillBg:'#dbeafe',color:'#1a56db'})},
       ];
-      const c4a=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'标普500',color:'#dc2626'},{text:'基金对比',color:'#0f172a'}],date:today,cols:sp500Cols,rows:byLimit(FALLBACK.sp500_passive)});
+      const c4a=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'标普500',color:'#dc2626'},{text:'基金对比',color:'#0f172a'}],date:today,cols:sp500Cols,rows:byLimit(sp500Merged)});
       const c4b=drawTableCanvas({titleParts:[{text:'场内',color:'#0f172a'},{text:'ETF',color:'#1a56db'},{text:'（纳指 / 标普）',color:'#0f172a'}],date:today,cols:etfCols,rows:etfs});
       const c4=document.createElement('canvas');
       c4.width=c4a.width;c4.height=c4a.height+32+c4b.height;
@@ -3472,14 +3487,15 @@ function ReportPage() {
       // Image 5: 主动基金
       const activeCols=[
         {label:'基金代码',key:'code',w:80,render:v=>({text:v,color:'#7c3aed',bold:true})},
-        {label:'基金名称',key:'name',w:316,render:v=>({text:v,color:'#0f172a'})},
+        {label:'基金名称',key:'name',w:280,render:v=>({text:v,color:'#0f172a'})},
         {label:'运作费率',key:'fee_rate',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.4?'#e85d04':'#374151'})},
         {label:'规模(亿)',key:'scale',w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
-        {label:'近1年涨幅',key:'ytd_return',w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
-        {label:'每日申购上限',key:'daily_limit',w:120,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
+        {label:'25年涨幅',key:'ytd_return',w:96,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
+        {label:'昨日涨幅',key:'day_change',w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
+        {label:'每日申购上限',key:'daily_limit',w:110,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
         {label:'申购状态',key:'buy_status',w:102,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
       ];
-      const c5=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'美股',color:'#dc2626'},{text:'（主动型）基金对比',color:'#0f172a'}],date:today,cols:activeCols,rows:FALLBACK.us_active});
+      const c5=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'美股',color:'#dc2626'},{text:'（主动型）基金对比',color:'#0f172a'}],date:today,cols:activeCols,rows:activeMerged});
       imgs.push({title:'主动基金表格',url:c5.toDataURL('image/png'),filename:`wise-etf-active-${ds}.png`});
       setImages(imgs);
     }finally{setGenerating(false);}
@@ -3603,7 +3619,8 @@ function ReportPage() {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   if(window.location.pathname==="/admin") return <AdminPage/>;
-  if(window.location.pathname==="/report") return <ReportPage/>;
+  if(window.location.pathname==="/export") return <ReportPage/>;
+  if(window.location.pathname==="/lazy") return <LazyPage/>;
 
   const getInitialTab = () => {
     const path = window.location.pathname.replace(/^\//, "");
@@ -3997,20 +4014,19 @@ export default function App() {
             {/* Sliding indicator */}
             <div style={{position:"absolute",bottom:0,left:indicator.left,width:indicator.width,height:2,background:`linear-gradient(90deg,${C.accent},${C.accent}80)`,borderRadius:"2px 2px 0 0",transition:"left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1)",opacity:indicator.opacity}}/>
             {TABS.map(tab=>(
-              <button key={tab.id} data-tab={tab.id} onClick={()=>switchTab(tab.id)}
-                style={{height:"100%",padding:"0 20px",border:"none",background:"none",color:activeTab===tab.id?C.accent:C.textMuted,fontWeight:activeTab===tab.id?700:500,fontSize:14,cursor:"pointer",borderBottom:"2px solid transparent",transition:"color 0.2s",whiteSpace:"nowrap"}}>
-                {tab.label}
-              </button>
+              tab.href
+                ? <a key={tab.id} href={tab.href}
+                    style={{height:"100%",padding:"0 20px",border:"none",background:"none",color:C.textMuted,fontWeight:500,fontSize:14,cursor:"pointer",borderBottom:"2px solid transparent",transition:"color 0.2s",whiteSpace:"nowrap",display:"flex",alignItems:"center",textDecoration:"none"}}>
+                    {tab.label}
+                  </a>
+                : <button key={tab.id} data-tab={tab.id} onClick={()=>switchTab(tab.id)}
+                    style={{height:"100%",padding:"0 20px",border:"none",background:"none",color:activeTab===tab.id?C.accent:C.textMuted,fontWeight:activeTab===tab.id?700:500,fontSize:14,cursor:"pointer",borderBottom:"2px solid transparent",transition:"color 0.2s",whiteSpace:"nowrap"}}>
+                    {tab.label}
+                  </button>
             ))}
           </nav>
 
           <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:12}}>
-            {!isMobile&&usdcny&&(
-              <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:8,background:C.accentBg,border:`1px solid ${C.accent}22`}}>
-                <span style={{fontSize:10,color:C.textDim,letterSpacing:0.3}}>USD/CNY</span>
-                <span style={{fontSize:13,fontWeight:700,color:C.accent,fontFamily:"monospace",letterSpacing:0.5}}>{usdcny}</span>
-              </div>
-            )}
             {!isMobile&&<button onClick={()=>setShowBriefing(true)}
               title="加入群聊"
               style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
@@ -4053,10 +4069,15 @@ export default function App() {
         {mobileMenuOpen&&(
           <div className="mobile-menu" style={{borderTop:`1px solid ${C.border}`,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)"}}>
             {TABS.map(tab=>(
-              <button key={tab.id} onClick={()=>{switchTab(tab.id);setMobileMenuOpen(false);}}
-                style={{display:"block",width:"100%",padding:"14px 24px",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}30`,color:activeTab===tab.id?C.accent:C.text,fontWeight:activeTab===tab.id?700:400,fontSize:15,cursor:"pointer"}}>
-                {tab.label}
-              </button>
+              tab.href
+                ? <a key={tab.id} href={tab.href}
+                    style={{display:"block",width:"100%",padding:"14px 24px",textAlign:"left",borderBottom:`1px solid ${C.border}30`,color:C.text,fontWeight:400,fontSize:15,textDecoration:"none"}}>
+                    {tab.label}
+                  </a>
+                : <button key={tab.id} onClick={()=>{switchTab(tab.id);setMobileMenuOpen(false);}}
+                    style={{display:"block",width:"100%",padding:"14px 24px",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}30`,color:activeTab===tab.id?C.accent:C.text,fontWeight:activeTab===tab.id?700:400,fontSize:15,cursor:"pointer"}}>
+                    {tab.label}
+                  </button>
             ))}
           </div>
         )}
