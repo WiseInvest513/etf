@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import html2canvas from "html2canvas";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
@@ -769,6 +770,32 @@ function PortfolioDetailPage({ portfolio, onBack, isMobile }) {
   const worstYear = Math.min(...portfolio.returns);
   const positiveYears = portfolio.returns.filter(r => r > 0).length;
 
+  const [capturing, setCapturing] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const detailExportRef = useRef(null);
+
+  async function handleDetailCapture() {
+    if (capturing) return;
+    setCapturing(true);
+    try {
+      const el = detailExportRef.current;
+      const canvas = await html2canvas(el, {
+        useCORS: true, allowTaint: true, scale: 2,
+        scrollX: 0, scrollY: 0,
+        width: DETAIL_EXPORT_W,
+        height: DETAIL_EXPORT_H,
+        windowWidth: DETAIL_EXPORT_W,
+        windowHeight: DETAIL_EXPORT_H,
+        logging: false,
+      });
+      setPreviewUrl(canvas.toDataURL("image/png"));
+    } catch (e) {
+      console.error("截图失败", e);
+    } finally {
+      setCapturing(false);
+    }
+  }
+
   return (
     <div style={{ background:"#f8fafc", minHeight:"100vh" }}>
 
@@ -1076,17 +1103,628 @@ function PortfolioDetailPage({ portfolio, onBack, isMobile }) {
       <SiteFooter isMobile={isMobile} />
 
       <style>{`* { box-sizing:border-box; } ::-webkit-scrollbar{width:6px;height:6px} ::-webkit-scrollbar-track{background:#f1f5f9} ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px} ::-webkit-scrollbar-thumb:hover{background:#94a3b8}`}</style>
+
+      {/* ── 导出按钮 ── */}
+      {typeof window !== "undefined" && window.location.search.includes("export=1") && (
+      <button
+        onClick={handleDetailCapture}
+        title="导出为图片"
+        style={{
+          position:"fixed", bottom:24, right:24, zIndex:1000,
+          width:52, height:52, borderRadius:"50%",
+          background: capturing ? "#94a3b8" : `linear-gradient(135deg,${portfolio.color},${portfolio.color}aa)`,
+          color:"#fff", fontSize:22, border:"none", cursor: capturing ? "not-allowed" : "pointer",
+          boxShadow:"0 4px 16px rgba(0,0,0,0.25)",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          transition:"transform 0.2s",
+        }}
+        onMouseEnter={e => { if (!capturing) e.currentTarget.style.transform = "scale(1.1)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+      >
+        {capturing ? "⏳" : "📷"}
+      </button>
+      )}
+
+      <PortfolioExportCanvas portfolio={portfolio} canvasRef={detailExportRef} />
+      {previewUrl && <PreviewModal dataUrl={previewUrl} onClose={() => setPreviewUrl(null)} />}
     </div>
   );
 }
 
+// ─── Portfolio Export Canvas ──────────────────────────────────────────────────
+
+// 3:4 竖版画布尺寸（适配抖音/小红书）
+const DETAIL_EXPORT_W = 1080;
+const DETAIL_EXPORT_H = 1440;
+
+function SvgGrowthChart({ data, color, W = 440, H = 190 }) {
+  const values = data.map(d => d.value);
+  const minV = Math.min(...values), maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+  const pad = { top: 28, right: 12, bottom: 32, left: 52 };
+  const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
+  const gx = i => pad.left + (i / (data.length - 1)) * cW;
+  const gy = v => pad.top + cH - ((v - minV) / range) * cH;
+  const pathD = data.map((d, i) => `${i === 0 ? "M" : "L"}${gx(i)},${gy(d.value)}`).join(" ");
+  const areaD = `${pathD} L${gx(data.length-1)},${H-pad.bottom} L${gx(0)},${H-pad.bottom} Z`;
+  const ticks = [minV, minV + range * 0.5, maxV];
+  const gradId = `grad-${color.replace("#","")}`;
+
+  return (
+    <svg width={W} height={H} style={{ display: "block", width: "100%" }}>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.2" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.01" />
+        </linearGradient>
+      </defs>
+      {ticks.map((v, i) => (
+        <g key={i}>
+          <line x1={pad.left} y1={gy(v)} x2={W - pad.right} y2={gy(v)} stroke="#f1f5f9" strokeWidth={1} />
+          <text x={pad.left - 6} y={gy(v) + 4} textAnchor="end" fontSize={11} fill="#94a3b8">${Math.round(v)}</text>
+        </g>
+      ))}
+      <path d={areaD} fill={`url(#${gradId})`} />
+      <path d={pathD} fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+      {data.map((d, i) => (
+        <g key={i}>
+          <text x={gx(i)} y={H - 4} textAnchor="middle" fontSize={10} fill="#94a3b8">{d.year}</text>
+          <circle cx={gx(i)} cy={gy(d.value)} r={4} fill={color} />
+          <text x={gx(i)} y={gy(d.value) - 8} textAnchor="middle" fontSize={10} fontWeight="700" fill={color}>${d.value}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function SvgBarChart({ data, color, W = 440, H = 190 }) {
+  const maxAbs = Math.max(...data.map(d => Math.abs(d.return)), 1);
+  const pad = { top: 24, right: 8, bottom: 28, left: 8 };
+  const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
+  const bw = (cW / data.length) * 0.55;
+  const gap = cW / data.length;
+  const cy = pad.top + cH / 2;
+  const scale = (cH / 2 - 8) / maxAbs;
+
+  return (
+    <svg width={W} height={H} style={{ display: "block", width: "100%" }}>
+      <line x1={pad.left} y1={cy} x2={W - pad.right} y2={cy} stroke="#e2e8f0" strokeWidth={1.5} />
+      {data.map((d, i) => {
+        const bh = Math.max(Math.abs(d.return) * scale, 2);
+        const x = pad.left + i * gap + gap / 2 - bw / 2;
+        const y = d.return >= 0 ? cy - bh : cy;
+        const fc = d.return >= 0 ? "#22c55e" : "#ef4444";
+        const labelY = d.return >= 0 ? y - 4 : y + bh + 14;
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={bw} height={bh} fill={fc} rx={3} opacity={0.85} />
+            <text x={x + bw / 2} y={H - 4} textAnchor="middle" fontSize={10} fill="#94a3b8">{String(d.year).slice(2)}</text>
+            <text x={x + bw / 2} y={labelY} textAnchor="middle" fontSize={9} fontWeight="700" fill={fc}>
+              {d.return > 0 ? "+" : ""}{d.return}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function PortfolioExportCanvas({ portfolio, canvasRef }) {
+  const growthData = useMemo(() => calcGrowth(portfolio.returns), [portfolio]);
+  const barData = YEARS.map((yr, i) => ({ year: yr, return: portfolio.returns[i] }));
+  const finalValue = growthData[growthData.length - 1].value;
+  const bestYear = Math.max(...portfolio.returns);
+  const worstYear = Math.min(...portfolio.returns);
+  const positiveYears = portfolio.returns.filter(r => r > 0).length;
+
+  return (
+    <div
+      ref={canvasRef}
+      style={{
+        position: "absolute", left: -9999, top: 0,
+        width: DETAIL_EXPORT_W, height: DETAIL_EXPORT_H,
+        overflow: "hidden",
+        background: "#0f172a",
+        fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif",
+      }}
+    >
+      {/* ══ HEADER ══ */}
+      <div style={{
+        background: `linear-gradient(150deg,${portfolio.color}ee,${portfolio.color}88)`,
+        padding: "22px 20px 18px", color: "#fff", position: "relative", overflow: "hidden",
+      }}>
+        <div style={{ position:"absolute", width:300, height:300, borderRadius:"50%", background:"rgba(255,255,255,0.07)", top:-100, right:-80 }} />
+        <div style={{ position:"absolute", width:160, height:160, borderRadius:"50%", background:"rgba(255,255,255,0.05)", bottom:-60, left:60 }} />
+
+        <div style={{ fontSize:12, fontWeight:700, letterSpacing:"0.1em", opacity:0.7, marginBottom:8 }}>
+          LAZY PORTFOLIO #{portfolio.id} · WISE-ETF.COM
+        </div>
+        <div style={{ fontSize:38, fontWeight:900, lineHeight:1.15, marginBottom:4, letterSpacing:"-0.02em" }}>
+          {portfolio.name}
+        </div>
+        <div style={{ fontSize:15, opacity:0.8, marginBottom:2 }}>{portfolio.nameEn}</div>
+        <div style={{ fontSize:13, opacity:0.6, marginBottom:18 }}>by {portfolio.author}</div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
+          {[
+            { label:"年化收益", value:`${portfolio.cagr}%`, bg:"rgba(74,222,128,0.2)", vc:"#4ade80" },
+            { label:"最大回撤", value:`${portfolio.maxDrawdown}%`, bg:"rgba(248,113,113,0.2)", vc:"#f87171" },
+            { label:"夏普比率", value:portfolio.sharpe, bg:"rgba(96,165,250,0.2)", vc:"#60a5fa" },
+            { label:"$100终值", value:`$${finalValue}`, bg:"rgba(192,132,252,0.2)", vc:"#c084fc" },
+          ].map(s => (
+            <div key={s.label} style={{ background:s.bg, border:`1px solid ${s.vc}44`, borderRadius:12, padding:"12px 8px", textAlign:"center" }}>
+              <div style={{ fontSize:26, fontWeight:900, color:s.vc, lineHeight:1 }}>{s.value}</div>
+              <div style={{ fontSize:12, color:"rgba(255,255,255,0.65)", marginTop:5, fontWeight:500 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ══ 7-METRIC BAR ══ */}
+      <div style={{ background:"#1e293b", padding:"12px 14px" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
+          {[
+            { label:"年化收益", value:`${portfolio.cagr}%`, color:"#4ade80" },
+            { label:"最大回撤", value:`${portfolio.maxDrawdown}%`, color:"#f87171" },
+            { label:"夏普", value:portfolio.sharpe, color:"#60a5fa" },
+            { label:"索提诺", value:portfolio.sortino, color:"#c084fc" },
+            { label:"波动率", value:`${portfolio.volatility}%`, color:"#fbbf24" },
+            { label:"最佳年", value:`+${bestYear.toFixed(1)}%`, color:"#34d399" },
+            { label:"最差年", value:`${worstYear.toFixed(1)}%`, color:"#fb7185" },
+          ].map(m => (
+            <div key={m.label} style={{ textAlign:"center", padding:"8px 4px", background:"rgba(255,255,255,0.05)", borderRadius:8, border:"1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ fontSize:17, fontWeight:800, color:m.color }}>{m.value}</div>
+              <div style={{ fontSize:11, color:"rgba(255,255,255,0.45)", marginTop:3 }}>{m.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ══ DESCRIPTION + ALLOCATION ══ */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, padding:"10px 10px 0" }}>
+        <div style={{ background:"#1e293b", borderRadius:12, padding:"14px", border:"1px solid rgba(255,255,255,0.08)" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+            <div style={{ width:4, height:20, borderRadius:2, background:portfolio.color }} />
+            <span style={{ fontSize:16, fontWeight:800, color:"#f1f5f9" }}>策略详解</span>
+          </div>
+          <p style={{ fontSize:13, color:"#94a3b8", lineHeight:1.7, margin:"0 0 10px" }}>
+            {portfolio.longDescription[0]}
+          </p>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {[`📅 2017–2025`,`💵 美元·年再平衡`,`✅ 正收益 ${positiveYears}/9年`].map(b => (
+              <div key={b} style={{ fontSize:11, color:"#94a3b8", background:"rgba(255,255,255,0.07)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:20, padding:"3px 10px" }}>{b}</div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background:"#1e293b", borderRadius:12, padding:"14px", border:"1px solid rgba(255,255,255,0.08)" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+            <div style={{ width:4, height:20, borderRadius:2, background:portfolio.color }} />
+            <span style={{ fontSize:16, fontWeight:800, color:"#f1f5f9" }}>资产配置</span>
+          </div>
+          {portfolio.allocs.map(([ticker, weight], i) => (
+            <div key={ticker} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom: i < portfolio.allocs.length-1 ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+              <div style={{ width:10, height:10, borderRadius:"50%", background:PIE_COLORS[i % PIE_COLORS.length], flexShrink:0 }} />
+              <span style={{ fontSize:13, fontWeight:800, color:portfolio.color, background:portfolio.color+"22", borderRadius:5, padding:"1px 8px", flexShrink:0 }}>{ticker}</span>
+              <span style={{ fontSize:13, color:"#64748b", flex:1, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{portfolio.allocLabels[ticker] || "-"}</span>
+              <div style={{ height:6, borderRadius:3, width:`${weight * 1.5}px`, background:PIE_COLORS[i % PIE_COLORS.length], flexShrink:0 }} />
+              <span style={{ fontSize:15, fontWeight:800, color:"#f1f5f9", minWidth:38, textAlign:"right" }}>{weight}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ══ CHARTS ══ */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, padding:"10px 10px 0" }}>
+        <div style={{ background:"#1e293b", borderRadius:12, padding:"14px", border:"1px solid rgba(255,255,255,0.08)" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <div style={{ width:4, height:20, borderRadius:2, background:portfolio.color }} />
+            <span style={{ fontSize:15, fontWeight:800, color:"#f1f5f9" }}>累计净值（$100起）</span>
+          </div>
+          <SvgGrowthChart data={growthData} color={portfolio.color} />
+        </div>
+        <div style={{ background:"#1e293b", borderRadius:12, padding:"14px", border:"1px solid rgba(255,255,255,0.08)" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <div style={{ width:4, height:20, borderRadius:2, background:portfolio.color }} />
+            <span style={{ fontSize:15, fontWeight:800, color:"#f1f5f9" }}>历年收益率</span>
+          </div>
+          <SvgBarChart data={barData} color={portfolio.color} />
+        </div>
+      </div>
+
+      {/* ══ YEAR TABLE ══ */}
+      <div style={{ padding:"10px 10px 0" }}>
+        <div style={{ background:"#1e293b", borderRadius:12, border:"1px solid rgba(255,255,255,0.08)", overflow:"hidden" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px 10px" }}>
+            <div style={{ width:4, height:20, borderRadius:2, background:portfolio.color }} />
+            <span style={{ fontSize:16, fontWeight:800, color:"#f1f5f9" }}>逐年回报明细</span>
+          </div>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <thead>
+              <tr style={{ background:`linear-gradient(90deg,${portfolio.color},${portfolio.color}99)` }}>
+                {["年份","年度收益率","累计净值","较上年变化"].map(h => (
+                  <th key={h} style={{ padding:"9px 14px", textAlign: h==="年份"?"left":"center", fontSize:13, fontWeight:700, color:"#fff" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {YEARS.map((yr, i) => {
+                const ret = portfolio.returns[i];
+                const nav = growthData[i].value;
+                const prevNav = i===0 ? 100 : growthData[i-1].value;
+                const diff = nav - prevNav;
+                return (
+                  <tr key={yr} style={{ background: i%2===0 ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.05)" }}>
+                    <td style={{ padding:"8px 14px", fontSize:15, fontWeight:700, color:"#e2e8f0" }}>{yr}</td>
+                    <td style={{ padding:"8px 14px", textAlign:"center" }}>
+                      <span style={{ display:"inline-block", background: ret>=0?"rgba(74,222,128,0.15)":"rgba(248,113,113,0.15)", color: ret>=0?"#4ade80":"#f87171", fontWeight:800, fontSize:15, padding:"3px 12px", borderRadius:20, border:`1px solid ${ret>=0?"#4ade8044":"#f8717144"}` }}>
+                        {ret>0?"+":""}{ret.toFixed(2)}%
+                      </span>
+                    </td>
+                    <td style={{ padding:"8px 14px", textAlign:"center", fontSize:15, fontWeight:700, color:"#e2e8f0" }}>${nav.toFixed(1)}</td>
+                    <td style={{ padding:"8px 14px", textAlign:"center", fontSize:15, fontWeight:700, color: diff>=0?"#4ade80":"#f87171" }}>
+                      {diff>=0?"+":""}{diff.toFixed(1)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ══ FOOTER ══ */}
+      <div style={{ padding:"10px 14px", marginTop:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <span style={{ fontSize:12, color:"rgba(255,255,255,0.35)", fontWeight:700 }}>Wise ETF · wise-etf.com</span>
+        <span style={{ fontSize:11, color:"rgba(255,255,255,0.2)" }}>仅供参考，不构成投资建议</span>
+      </div>
+    </div>
+  );
+}
+
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
+
+// ─── Export Canvas (off-screen landscape layout for image export) ─────────────
+
+const EXPORT_W = 3600;
+
+function LazyExportCanvas({ canvasRef }) {
+  return (
+    <div
+      ref={canvasRef}
+      style={{
+        position: "absolute", left: -9999, top: 0,
+        width: EXPORT_W,
+        background: "#f8fafc",
+        fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif",
+      }}
+    >
+      {/* ── Header ── */}
+      <div style={{ background: "linear-gradient(135deg,#1a56db,#7c3aed)", padding: "56px 80px", color: "#fff", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", width: 700, height: 700, borderRadius: "50%", background: "rgba(255,255,255,0.04)", top: -200, right: -100, pointerEvents: "none" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 80 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 16, opacity: 0.6, marginBottom: 14, letterSpacing: "0.08em", fontWeight: 600 }}>LAZY PORTFOLIO · WISE-ETF.COM</div>
+            <h1 style={{ fontSize: 64, fontWeight: 800, margin: "0 0 18px", letterSpacing: "-0.02em" }}>懒人组合指南</h1>
+            <p style={{ fontSize: 22, opacity: 0.85, margin: "0 0 26px", lineHeight: 1.7, maxWidth: 900 }}>
+              世界顶级投资大师的资产配置智慧结晶。买入并持有，无需择时，定期再平衡，让时间复利发挥力量。
+            </p>
+            <div style={{ display: "flex", gap: 16 }}>
+              {["📊 15 款经典组合", "📅 2017–2025 回测", "💰 美元口径", "🔄 年度再平衡"].map(t => (
+                <div key={t} style={{ background: "rgba(255,255,255,0.15)", borderRadius: 24, padding: "10px 24px", fontSize: 18 }}>{t}</div>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 20, width: 1200, flexShrink: 0 }}>
+            {[
+              { val: "12.41%", label: "最高年化收益", sub: "巴菲特 90/10" },
+              { val: "-15.93%", label: "最小最大回撤", sub: "永久组合" },
+              { val: "0.77", label: "最高夏普比率", sub: "永久组合" },
+              { val: "2017–2025", label: "回测区间", sub: "9年历史数据" },
+            ].map(s => (
+              <div key={s.label} style={{ background: "rgba(255,255,255,0.1)", borderRadius: 18, padding: "28px 20px", textAlign: "center" }}>
+                <div style={{ fontSize: 36, fontWeight: 800, color: "#fff", lineHeight: 1 }}>{s.val}</div>
+                <div style={{ fontSize: 17, color: "rgba(255,255,255,0.7)", marginTop: 10, lineHeight: 1.4 }}>{s.label}</div>
+                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.45)", marginTop: 5 }}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Concept strip ── */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "32px 80px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 60 }}>
+          {[
+            { icon: "🧘", title: "被动持有", desc: "买入后无需频繁操作，降低交易成本和情绪干扰" },
+            { icon: "🌍", title: "广泛分散", desc: "覆盖股票、债券、大宗商品等多类资产，降低单一风险" },
+            { icon: "🔄", title: "定期再平衡", desc: "每年或每半年恢复目标权重，低买高卖自动执行" },
+            { icon: "⏳", title: "长期复利", desc: "无需预测市场，让时间和复利完成增长使命" },
+          ].map(item => (
+            <div key={item.title} style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+              <span style={{ fontSize: 40, lineHeight: 1, flexShrink: 0 }}>{item.icon}</span>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#1e293b", marginBottom: 8 }}>{item.title}</div>
+                <div style={{ fontSize: 17, color: "#64748b", lineHeight: 1.6 }}>{item.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Portfolio Cards (5-column grid) ── */}
+      <div style={{ padding: "52px 80px 40px" }}>
+        <h2 style={{ fontSize: 36, fontWeight: 700, color: "#1e293b", margin: "0 0 28px" }}>15 款经典懒人组合</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 28 }}>
+          {PORTFOLIOS.map(p => (
+            <div key={p.id} style={{ background: "#fff", borderRadius: 20, overflow: "hidden", border: "1px solid #f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.07)" }}>
+              <div style={{ height: 7, background: p.color }} />
+              <div style={{ padding: "24px" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
+                  <div style={{ minWidth: 38, height: 38, borderRadius: "50%", background: p.color + "18", color: p.color, fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{p.id}</div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: "#1e293b", lineHeight: 1.3 }}>{p.name}</div>
+                    <div style={{ fontSize: 15, color: "#94a3b8", marginTop: 3 }}>{p.nameEn}</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 15, color: "#64748b", background: "#f8fafc", borderRadius: 8, padding: "4px 12px", display: "inline-block", marginBottom: 14 }}>by {p.author}</div>
+                <div style={{ fontSize: 16, color: "#64748b", lineHeight: 1.6, marginBottom: 18, minHeight: 52 }}>{p.description.slice(0, 62)}…</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+                  {[
+                    { label: "年化收益", value: `${p.cagr}%`, color: "#16a34a" },
+                    { label: "最大回撤", value: `${p.maxDrawdown}%`, color: "#dc2626" },
+                    { label: "夏普比率", value: p.sharpe, color: "#0284c7" },
+                  ].map(m => (
+                    <div key={m.label} style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 6px", textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: m.color }}>{m.value}</div>
+                      <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 4 }}>{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                  {p.allocs.map(([ticker, weight]) => (
+                    <div key={ticker} style={{ background: p.color + "12", border: `1px solid ${p.color}30`, borderRadius: 24, padding: "4px 12px", fontSize: 15 }}>
+                      <span style={{ fontWeight: 700, color: p.color }}>{ticker}</span>
+                      <span style={{ color: "#94a3b8", marginLeft: 4 }}>{weight}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Bottom: Annual Returns (left) + Comparison Table (right) ── */}
+      <div style={{ padding: "0 80px 20px", display: "grid", gridTemplateColumns: "57% 41%", gap: 40 }}>
+
+        {/* Annual returns table */}
+        <div>
+          <h2 style={{ fontSize: 30, fontWeight: 700, color: "#1e293b", margin: "0 0 20px" }}>逐年收益率 (%)</h2>
+          <div style={{ borderRadius: 18, overflow: "hidden", border: "1px solid #e2e8f0" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "linear-gradient(135deg,#1a56db,#7c3aed)", height: 56 }}>
+                  <th style={{ padding: "0 20px", textAlign: "left", color: "#fff", fontWeight: 600, fontSize: 17 }}>组合</th>
+                  {YEARS.map(yr => (
+                    <th key={yr} style={{ padding: "0 14px", textAlign: "center", color: "#fff", fontWeight: 600, fontSize: 17, whiteSpace: "nowrap" }}>{yr}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PORTFOLIOS.map((p, i) => (
+                  <tr key={p.id} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc", height: 60 }}>
+                    <td style={{ padding: "0 20px", whiteSpace: "nowrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 12, height: 12, borderRadius: "50%", background: p.color, flexShrink: 0 }} />
+                        <div>
+                          <div style={{ fontSize: 16, fontWeight: 600, color: "#1e293b" }}>{p.name}</div>
+                          <div style={{ fontSize: 13, color: "#94a3b8" }}>{p.author}</div>
+                        </div>
+                      </div>
+                    </td>
+                    {p.returns.map((r, ri) => (
+                      <td key={ri} style={{ padding: "0 14px", textAlign: "center" }}>
+                        <span style={{ fontSize: 16, fontWeight: 700, color: r >= 0 ? "#16a34a" : "#dc2626" }}>
+                          {r > 0 ? "+" : ""}{r}
+                        </span>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Comparison table */}
+        <div>
+          <h2 style={{ fontSize: 30, fontWeight: 700, color: "#1e293b", margin: "0 0 20px" }}>组合横向对比</h2>
+          <div style={{ borderRadius: 18, overflow: "hidden", border: "1px solid #e2e8f0" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "linear-gradient(135deg,#1a56db,#7c3aed)", height: 56 }}>
+                  {["#","组合名称","年化收益","最大回撤","夏普","索提诺","波动率"].map(h => (
+                    <th key={h} style={{ padding: "0 16px", color: "#fff", fontWeight: 600, fontSize: 17, whiteSpace: "nowrap", textAlign: h === "组合名称" ? "left" : "center" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[...PORTFOLIOS].sort((a, b) => b.cagr - a.cagr).map((p, i) => (
+                  <tr key={p.id} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc", height: 60 }}>
+                    <td style={{ padding: "0 16px", textAlign: "center", fontSize: 17, color: "#94a3b8", fontWeight: 600 }}>{i + 1}</td>
+                    <td style={{ padding: "0 16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 12, height: 12, borderRadius: "50%", background: p.color, flexShrink: 0 }} />
+                        <div>
+                          <div style={{ fontSize: 18, fontWeight: 600, color: "#1e293b" }}>{p.name}</div>
+                          <div style={{ fontSize: 14, color: "#94a3b8" }}>{p.author}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ padding: "0 16px", textAlign: "center" }}><span style={{ fontSize: 18, fontWeight: 700, color: "#16a34a" }}>{p.cagr}%</span></td>
+                    <td style={{ padding: "0 16px", textAlign: "center" }}><span style={{ fontSize: 18, fontWeight: 700, color: "#dc2626" }}>{p.maxDrawdown}%</span></td>
+                    <td style={{ padding: "0 16px", textAlign: "center" }}><span style={{ fontSize: 18, fontWeight: 600, color: "#0284c7" }}>{p.sharpe}</span></td>
+                    <td style={{ padding: "0 16px", textAlign: "center" }}><span style={{ fontSize: 18, fontWeight: 600, color: "#7c3aed" }}>{p.sortino}</span></td>
+                    <td style={{ padding: "0 16px", textAlign: "center" }}><span style={{ fontSize: 18, fontWeight: 600, color: "#f59e0b" }}>{p.volatility}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* 注释独立放在两表之下 */}
+      <div style={{ padding: "0 80px 48px", fontSize: 15, color: "#94a3b8", lineHeight: 1.6, textAlign: "center" }}>
+        数据来源：Portfolio Visualizer · 回测区间：2017–2025 · 口径：美元 · 年度再平衡 · 仅供参考，不构成投资建议
+      </div>
+
+      {/* ── Footer ── */}
+      <div style={{ background: "#1e293b", padding: "26px 80px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 18, color: "rgba(255,255,255,0.6)", fontWeight: 600 }}>Wise ETF · wise-etf.com</div>
+        <div style={{ fontSize: 16, color: "rgba(255,255,255,0.4)" }}>以上内容仅供参考，不构成投资建议。历史回测数据不代表未来表现。</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Preview Modal ────────────────────────────────────────────────────────────
+
+function PreviewModal({ dataUrl, onClose }) {
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:9999, background:"#0f172a", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+      {/* Sticky toolbar */}
+      <div style={{
+        flexShrink:0, background:"rgba(15,23,42,0.97)", borderBottom:"1px solid rgba(255,255,255,0.1)",
+        padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
+      }}>
+        <span style={{ color:"#fff", fontSize:15, fontWeight:600 }}>预览图片（可滚动）</span>
+        <div style={{ display:"flex", gap:10 }}>
+          <a
+            href={dataUrl}
+            download="wise-etf-lazy.png"
+            style={{ padding:"8px 20px", borderRadius:8, background:"#1a56db", color:"#fff", fontSize:14, fontWeight:600, textDecoration:"none" }}
+          >
+            下载 PNG
+          </a>
+          <button
+            onClick={onClose}
+            style={{ padding:"8px 20px", borderRadius:8, background:"rgba(255,255,255,0.12)", color:"#fff", fontSize:14, fontWeight:600, border:"none", cursor:"pointer" }}
+          >
+            关闭 ×
+          </button>
+        </div>
+      </div>
+      {/* Scrollable image area */}
+      <div style={{ flex:1, overflow:"auto" }}>
+        <img src={dataUrl} alt="预览" style={{ width:"100%", display:"block" }} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Batch Exporter (temporary: download all 15 portfolio images) ─────────────
+
+function BatchExporter() {
+  const [progress, setProgress] = useState(null);
+  const canvasRefs = useRef(PORTFOLIOS.map(() => ({ current: null })));
+
+  async function handleBatchExport() {
+    if (progress !== null) return;
+    setProgress({ done: 0, total: PORTFOLIOS.length });
+    for (let i = 0; i < PORTFOLIOS.length; i++) {
+      const p = PORTFOLIOS[i];
+      const el = canvasRefs.current[i].current;
+      try {
+        const canvas = await html2canvas(el, {
+          useCORS: true, allowTaint: true, scale: 2,
+          scrollX: 0, scrollY: 0,
+          width: DETAIL_EXPORT_W, height: DETAIL_EXPORT_H,
+          windowWidth: DETAIL_EXPORT_W, windowHeight: DETAIL_EXPORT_H,
+          logging: false,
+        });
+        const dataUrl = canvas.toDataURL("image/png");
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `${String(p.id).padStart(2, "0")}_${p.name}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (e) {
+        console.error("Export failed for", p.name, e);
+      }
+      setProgress({ done: i + 1, total: PORTFOLIOS.length });
+      await new Promise(r => setTimeout(r, 400));
+    }
+    setProgress(null);
+  }
+
+  const busy = progress !== null;
+
+  return (
+    <>
+      {PORTFOLIOS.map((p, i) => (
+        <PortfolioExportCanvas key={p.id} portfolio={p} canvasRef={canvasRefs.current[i]} />
+      ))}
+      <button
+        onClick={handleBatchExport}
+        disabled={busy}
+        title="批量导出所有组合图片"
+        style={{
+          position: "fixed", bottom: 88, right: 24, zIndex: 1000,
+          borderRadius: 28,
+          background: busy ? "#94a3b8" : "linear-gradient(135deg,#0f766e,#059669)",
+          color: "#fff", fontSize: 14, fontWeight: 700, border: "none",
+          cursor: busy ? "not-allowed" : "pointer",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+          padding: "12px 20px",
+          display: "flex", alignItems: "center", gap: 8,
+          transition: "transform 0.2s",
+        }}
+        onMouseEnter={e => { if (!busy) e.currentTarget.style.transform = "scale(1.05)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+      >
+        {busy ? `⏳ ${progress.done} / ${progress.total}` : "📥 批量导出 15 张"}
+      </button>
+    </>
+  );
+}
 
 export default function LazyPage() {
   document.title = "懒人组合 | Wise ETF";
 
   const [selectedPortfolio, setSelectedPortfolio] = useState(null);
+  const [capturing, setCapturing] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const exportRef = useRef(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+
+  async function handleCapture() {
+    if (capturing) return;
+    setCapturing(true);
+    try {
+      const el = exportRef.current;
+      const canvas = await html2canvas(el, {
+        useCORS: true,
+        allowTaint: true,
+        scale: 2,
+        scrollX: 0,
+        scrollY: 0,
+        width: EXPORT_W,
+        height: el.scrollHeight,
+        windowWidth: EXPORT_W,
+        windowHeight: el.scrollHeight,
+        logging: false,
+      });
+      setPreviewUrl(canvas.toDataURL("image/png"));
+    } catch (e) {
+      console.error("截图失败", e);
+    } finally {
+      setCapturing(false);
+    }
+  }
 
   // Show detail page
   if (selectedPortfolio) {
@@ -1101,6 +1739,7 @@ export default function LazyPage() {
 
   return (
     <div style={{ background:"#f8fafc", minHeight:"100vh", fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
+      <LazyExportCanvas canvasRef={exportRef} />
 
       {/* ── Header ── */}
       <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden" }}>
@@ -1229,6 +1868,30 @@ export default function LazyPage() {
       <SiteFooter isMobile={isMobile} />
 
       <style>{`* { box-sizing:border-box; } ::-webkit-scrollbar{width:6px;height:6px} ::-webkit-scrollbar-track{background:#f1f5f9} ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px} ::-webkit-scrollbar-thumb:hover{background:#94a3b8}`}</style>
+
+      {/* ── 导出预览按钮 ── */}
+      {typeof window !== "undefined" && window.location.search.includes("export=1") && (
+      <button
+        onClick={handleCapture}
+        title="导出为图片"
+        style={{
+          position:"fixed", bottom:24, right:24, zIndex:1000,
+          width:52, height:52, borderRadius:"50%",
+          background: capturing ? "#94a3b8" : "linear-gradient(135deg,#1a56db,#7c3aed)",
+          color:"#fff", fontSize:22, border:"none", cursor: capturing ? "not-allowed" : "pointer",
+          boxShadow:"0 4px 16px rgba(0,0,0,0.25)",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          transition:"transform 0.2s",
+        }}
+        onMouseEnter={e => { if (!capturing) e.currentTarget.style.transform = "scale(1.1)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+      >
+        {capturing ? "⏳" : "📷"}
+      </button>
+      )}
+
+      {previewUrl && <PreviewModal dataUrl={previewUrl} onClose={() => setPreviewUrl(null)} />}
+      {typeof window !== "undefined" && window.location.search.includes("export=1") && <BatchExporter />}
     </div>
   );
 }

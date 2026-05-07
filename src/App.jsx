@@ -2839,7 +2839,7 @@ function drawOverviewCanvas1({sentiment, peHistory}){
   c.fillStyle=L.headBg;c.fillRect(0,fy,W,FOOTER_H);
   c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fy);c.lineTo(W,fy);c.stroke();
   c.font=`12px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
-  c.fillText('Wise-etf.org  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
+  c.fillText('wise-etf.com  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
   c.textAlign='left';
   return cvs;
 }
@@ -2866,7 +2866,7 @@ function drawTableCanvas({titleParts,date,cols,rows}){
   c.font=`bold 15px ${F}`;c.fillStyle='#1a56db';
   c.fillText('Wise 定投致富 整理',PX+4,32);
   c.font=`12px ${F}`;c.fillStyle='#9ca3af';
-  c.textAlign='right';c.fillText('Wise-etf.org',W-PX,32);c.textAlign='left';
+  c.textAlign='right';c.fillText('wise-etf.com',W-PX,32);c.textAlign='left';
 
   // Title row
   c.fillStyle='#FFFFFF';c.fillRect(0,BRAND_H,W,TITLE_H);
@@ -2938,9 +2938,280 @@ function drawTableCanvas({titleParts,date,cols,rows}){
   c.strokeStyle='#dde3f0';c.lineWidth=1;
   c.beginPath();c.moveTo(0,fy);c.lineTo(W,fy);c.stroke();
   c.font=`12px ${F}`;c.fillStyle='#9ca3af';c.textAlign='center';
-  c.fillText(`Wise-etf.org  ·  @Wise 定投致富 整理  ·  ${dd}`,W/2,fy+FH/2+5);
+  c.fillText(`wise-etf.com  ·  @Wise 定投致富 整理  ·  ${dd}`,W/2,fy+FH/2+5);
   c.textAlign='left';
   return cvs;
+}
+
+// ─── Generic Fund Export Canvas Engine ──────────────────────────────────────
+function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
+  const W=1200,H=1600,SC=2,PX=32;
+  const F=EC.F;
+  const BRAND_H=82,TITLE_H=132,CH=66,FH=148;
+  const FIXED=BRAND_H+TITLE_H+CH+FH;
+  const RH=Math.floor((H-FIXED)/Math.max(rows.length,1));
+  const FS=parseFloat(Math.min(1.3,Math.max(0.9,RH/68)).toFixed(2));
+  const fs=n=>Math.round(n*FS)+'px';
+
+  const cvs=document.createElement('canvas');
+  cvs.width=W*SC;cvs.height=H*SC;
+  const c=cvs.getContext('2d');c.scale(SC,SC);
+
+  c.fillStyle='#f0f4ff';c.fillRect(0,0,W,H);
+
+  // Top accent bar (14px)
+  const ag=c.createLinearGradient(0,0,W,0);
+  colors.topBar.forEach(([stop,col])=>ag.addColorStop(stop,col));
+  c.fillStyle=ag;c.fillRect(0,0,W,14);
+
+  // Brand header
+  c.fillStyle='#e8eeff';c.fillRect(0,14,W,BRAND_H-14);
+  const brandY=Math.round((14+BRAND_H)/2+Math.round(28*FS)*0.38);
+  c.font=`bold ${fs(30)} ${F}`;c.fillStyle=colors.primary;c.fillText('Wise',PX,brandY);
+  const wW=c.measureText('Wise').width;
+  c.font=`bold ${fs(30)} ${F}`;c.fillStyle=colors.secondary;c.fillText('ETF',PX+wW,brandY);
+  const eW=c.measureText('ETF').width;
+  c.font=`${fs(18)} ${F}`;c.fillStyle='#475569';c.fillText('  @WiseInvest 整理',PX+wW+eW,brandY);
+  c.textAlign='right';
+  c.font=`bold ${fs(18)} ${F}`;c.fillStyle=colors.primary;c.fillText('wise-etf.com',W-PX,brandY);
+  c.textAlign='left';
+
+  // Title section
+  c.fillStyle='#ffffff';c.fillRect(0,BRAND_H,W,TITLE_H);
+  const lsg=c.createLinearGradient(0,BRAND_H,0,BRAND_H+TITLE_H);
+  lsg.addColorStop(0,colors.primary);lsg.addColorStop(1,colors.accent);
+  c.fillStyle=lsg;c.fillRect(0,BRAND_H,7,TITLE_H);
+  let ttx=PX+18;
+  c.font=`bold ${fs(50)} ${F}`;
+  const TY=BRAND_H+70;
+  titleParts.forEach(p=>{c.fillStyle=p.color;c.fillText(p.text,ttx,TY);ttx+=c.measureText(p.text).width;});
+  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+  const dd=today.replace(/\//g,'.');
+  c.font=`bold ${fs(32)} ${F}`;c.fillStyle=colors.primary;c.fillText(`  ${dd}`,ttx,TY);
+  c.font=`${fs(17)} ${F}`;c.fillStyle='#64748b';
+  c.fillText('数据仅供参考，不构成投资建议',PX+18,BRAND_H+106);
+  c.textAlign='right';
+  c.font=`bold ${fs(17)} ${F}`;c.fillStyle=colors.accent;
+  c.fillText('wise-etf.com 查看实时数据 →',W-PX,BRAND_H+106);
+  c.textAlign='left';
+
+  const tableY=BRAND_H+TITLE_H;
+  const totalColW=cols.reduce((s,col)=>s+col.w,0);
+  const colSc=(W-PX*2)/totalColW;
+  const sCols=cols.map(col=>({...col,w:col.w*colSc}));
+  const xp=[];let cx2=PX;sCols.forEach(col=>{xp.push(cx2);cx2+=col.w;});
+
+  // Table header
+  const hg=c.createLinearGradient(0,tableY,W,tableY);
+  hg.addColorStop(0,colors.headerDark);hg.addColorStop(1,colors.primary);
+  c.fillStyle=hg;c.fillRect(0,tableY,W,CH);
+  c.font=`bold ${fs(17)} ${F}`;
+  sCols.forEach((col,i)=>{
+    c.fillStyle='#e8f0ff';c.textAlign=col.align;
+    const tx=col.align==='right'?xp[i]+col.w-12:col.align==='center'?xp[i]+col.w/2:xp[i]+12;
+    c.fillText(col.label,tx,tableY+CH/2+6);
+  });c.textAlign='left';
+
+  // Table rows
+  rows.forEach((row,ri)=>{
+    const ry=tableY+CH+ri*RH;
+    c.fillStyle=ri%2===0?'#ffffff':colors.rowAlt;c.fillRect(0,ry,W,RH);
+    c.fillStyle=ri%2===0?colors.rowAccent1:colors.rowAccent2;c.fillRect(0,ry,5,RH);
+    c.strokeStyle=colors.rowBorder;c.lineWidth=0.7;
+    c.beginPath();c.moveTo(0,ry+RH);c.lineTo(W,ry+RH);c.stroke();
+    const tyR=ry+RH/2+Math.round(7*FS);
+    sCols.forEach((col,ci)=>{
+      const v=row[col.key];
+      c.textAlign=col.align;
+      const tx=col.align==='right'?xp[ci]+col.w-12:col.align==='center'?xp[ci]+col.w/2:xp[ci]+12;
+      switch(col.key){
+        case 'code':
+          c.font=`bold ${fs(19)} ${F}`;c.fillStyle=colors.primary;c.fillText(v??'—',tx,tyR);break;
+        case 'name':case 'etf_name':
+          c.font=`${fs(18)} ${F}`;c.fillStyle='#111827';c.fillText(_fit(c,v??'—',col.w-16),tx,tyR);break;
+        case 'code_c':
+          c.font=`bold ${fs(17)} ${F}`;c.fillStyle=v?'#6d1fc8':'#9ca3af';c.fillText(v??'—',tx,tyR);break;
+        case 'fee_rate':
+          c.font=`bold ${fs(18)} ${F}`;c.fillStyle=v>1?'#c2410c':'#1e3a5f';
+          c.fillText(v!=null?`${v}%`:'—',tx,tyR);break;
+        case 'scale':
+          c.font=`bold ${fs(18)} ${F}`;c.fillStyle='#1e3a5f';c.fillText(v??'—',tx,tyR);break;
+        case 'rolling_1y':{
+          const n=v!=null?parseFloat(v):null;
+          c.font=`bold ${fs(19)} ${F}`;
+          c.fillStyle=n!=null?(n>0?'#15803d':'#b91c1c'):'#9ca3af';
+          c.fillText(n!=null?`${n>0?'+':''}${n.toFixed(1)}%`:'—',tx,tyR);break;}
+        case 'day_change':
+          c.font=`bold ${fs(18)} ${F}`;
+          c.fillStyle=v>0?'#15803d':v<0?'#b91c1c':'#475569';
+          c.fillText(v!=null?`${v>0?'+':''}${v}%`:'—',tx,tyR);break;
+        case 'daily_limit':
+          c.font=`${fs(17)} ${F}`;c.fillStyle='#334155';
+          c.fillText(_fit(c,v??'—',col.w-14),tx,tyR);break;
+        case 'buy_status':{
+          const isOpen=v==='open';
+          const pW=Math.round(72*FS),pH=Math.round(36*FS);
+          const px2=xp[ci]+(col.w-pW)/2,py2=ry+(RH-pH)/2;
+          _rr(c,px2,py2,pW,pH,pH/2);c.fillStyle=isOpen?'#dcfce7':'#f1f5f9';c.fill();
+          c.strokeStyle=isOpen?'#16a34a':'#d1d5db';c.lineWidth=1.5;_rr(c,px2,py2,pW,pH,pH/2);c.stroke();
+          c.font=`bold ${fs(15)} ${F}`;c.fillStyle=isOpen?'#15803d':'#6b7280';
+          c.textAlign='center';c.fillText(isOpen?'✓ 可申购':'暂停',px2+pW/2,py2+Math.round(23*FS));
+          c.textAlign='left';break;}
+        case 'tracking_index':
+          c.font=`${fs(15)} ${F}`;c.fillStyle='#475569';
+          c.fillText(_fit(c,v??'—',col.w-14),tx,tyR);break;
+        case 'premium':{
+          const pv=v!=null?parseFloat(v):null;
+          c.font=`bold ${fs(18)} ${F}`;
+          c.fillStyle=pv==null?'#9ca3af':pv>3?'#b91c1c':pv>1.5?'#c2410c':pv>0?'#475569':'#15803d';
+          c.fillText(pv!=null?`${pv}%`:'—',tx,tyR);break;}
+        case 'track_error':
+          c.font=`${fs(17)} ${F}`;c.fillStyle=v>2?'#c2410c':v>1?'#b45309':'#475569';
+          c.fillText(v!=null?`${v}%`:'—',tx,tyR);break;
+        case 'volume':
+          c.font=`bold ${fs(17)} ${F}`;c.fillStyle='#1e3a5f';c.fillText(v??'—',tx,tyR);break;
+        default:
+          c.font=`${fs(16)} ${F}`;c.fillStyle='#374151';
+          c.fillText(v!=null?String(v):'—',tx,tyR);
+      }
+      c.textAlign='left';
+    });
+  });
+
+  // Footer — fill to exact H
+  const fy=tableY+CH+rows.length*RH;
+  const footerH=H-fy;
+  const fg2=c.createLinearGradient(0,0,W,0);
+  colors.footerBar.forEach(([stop,col])=>fg2.addColorStop(stop,col));
+  c.fillStyle=fg2;c.fillRect(0,fy,W,footerH);
+
+  const midY = fy + footerH/2;  // vertical center of footer
+  if(logoImg){
+    // use raw pixel sizes for arithmetic
+    const t1=Math.round(28*FS), t2=Math.round(17*FS), t3=Math.round(22*FS);
+    const logoH=Math.round(footerH*0.32);
+    const logoW=Math.round(logoImg.naturalWidth/logoImg.naturalHeight*logoH);
+    const blockH = t1 + 6 + logoH + 6 + t2;
+    const blockTop = midY - blockH/2;
+    // Center column: @WiseInvest + logo + 以上平台同名 + disclaimer
+    const t4=Math.round(13*FS);
+    const blockH2=t1+6+logoH+6+t2+6+t4;
+    const blockTop2=midY-blockH2/2;
+    c.textAlign='center';
+    c.font=`bold ${t1}px ${F}`;c.fillStyle='#ffffff';
+    c.fillText('@WiseInvest',W/2,blockTop2+t1);
+    c.drawImage(logoImg,(W-logoW)/2,blockTop2+t1+6,logoW,logoH);
+    c.font=`bold ${t2}px ${F}`;c.fillStyle='rgba(255,255,255,0.85)';
+    const subTextY=blockTop2+t1+6+logoH+t2+2;
+    c.fillText('以上平台同名',W/2,subTextY);
+    c.font=`${t4}px ${F}`;c.fillStyle='rgba(255,255,255,0.55)';
+    c.fillText('数据仅供参考，不构成投资建议',W/2,subTextY+6+t4);
+    // Left: wise-etf.com — vertically centered
+    c.font=`bold ${t3}px ${F}`;c.fillStyle='#ffffff';
+    c.textAlign='left';c.fillText('wise-etf.com',PX,midY+t3*0.35);
+    // Right: date — vertically centered
+    c.textAlign='right';c.fillText(dd,W-PX,midY+t3*0.35);
+  }else{
+    const t5=Math.round(20*FS), t6=Math.round(14*FS);
+    c.textAlign='center';
+    c.font=`bold ${t5}px ${F}`;c.fillStyle='#ffffff';
+    c.fillText(`wise-etf.com  ·  @WiseInvest 整理  ·  ${dd}`,W/2,midY);
+    c.font=`${t6}px ${F}`;c.fillStyle='rgba(255,255,255,0.6)';
+    c.fillText('数据仅供参考，不构成投资建议',W/2,midY+24);
+  }
+  c.textAlign='left';
+  return cvs;
+}
+
+function drawNasdaqExportCanvas(rows,logoImg=null){
+  return _drawFundExportCanvas(rows,{
+    titleParts:[{text:'场外 ',color:'#111827'},{text:'纳斯达克100',color:'#d44f00'},{text:' 被动型基金',color:'#111827'}],
+    colors:{
+      topBar:[[0,'#1533cc'],[0.5,'#7c22d4'],[1,'#d44f00']],
+      primary:'#1533cc',secondary:'#7c22d4',accent:'#d44f00',headerDark:'#0f2499',
+      rowAlt:'#dde8ff',rowAccent1:'#c5d8ff',rowAccent2:'#a8c4f8',rowBorder:'#b8c8f0',
+      footerBar:[[0,'#1533cc'],[1,'#7c22d4']],
+    },
+    cols:[
+      {key:'code',      label:'代码',     w:80,  align:'left'},
+      {key:'name',      label:'基金名称', w:310, align:'left'},
+      {key:'code_c',    label:'C类代码',  w:86,  align:'center'},
+      {key:'fee_rate',  label:'运作费率', w:96,  align:'right'},
+      {key:'scale',     label:'规模(亿)', w:90,  align:'right'},
+      {key:'rolling_1y',label:'近1年涨幅',w:114, align:'right'},
+      {key:'day_change',label:'昨日涨跌', w:100, align:'right'},
+      {key:'daily_limit',label:'申购上限',w:110, align:'right'},
+      {key:'buy_status',label:'申购状态', w:96,  align:'center'},
+    ],
+  },logoImg);
+}
+
+function drawSp500ExportCanvas(rows,logoImg=null){
+  return _drawFundExportCanvas(rows,{
+    titleParts:[{text:'场外 ',color:'#111827'},{text:'标普500',color:'#dc2626'},{text:' 被动型基金',color:'#111827'}],
+    colors:{
+      topBar:[[0,'#0c4a6e'],[0.5,'#0284c7'],[1,'#dc2626']],
+      primary:'#0369a1',secondary:'#0ea5e9',accent:'#dc2626',headerDark:'#082f49',
+      rowAlt:'#dbeafe',rowAccent1:'#bfdbfe',rowAccent2:'#93c5fd',rowBorder:'#bfdbfe',
+      footerBar:[[0,'#0369a1'],[1,'#0284c7']],
+    },
+    cols:[
+      {key:'code',      label:'代码',     w:80,  align:'left'},
+      {key:'name',      label:'基金名称', w:310, align:'left'},
+      {key:'code_c',    label:'C类代码',  w:86,  align:'center'},
+      {key:'fee_rate',  label:'运作费率', w:96,  align:'right'},
+      {key:'scale',     label:'规模(亿)', w:90,  align:'right'},
+      {key:'rolling_1y',label:'近1年涨幅',w:114, align:'right'},
+      {key:'day_change',label:'昨日涨跌', w:100, align:'right'},
+      {key:'daily_limit',label:'申购上限',w:110, align:'right'},
+      {key:'buy_status',label:'申购状态', w:96,  align:'center'},
+    ],
+  },logoImg);
+}
+
+function drawEtfExportCanvas(rows,logoImg=null){
+  return _drawFundExportCanvas(rows,{
+    titleParts:[{text:'场内 ',color:'#111827'},{text:'纳指/标普',color:'#b45309'},{text:' ETF 对比',color:'#111827'}],
+    colors:{
+      topBar:[[0,'#b45309'],[0.5,'#d97706'],[1,'#0369a1']],
+      primary:'#b45309',secondary:'#d97706',accent:'#0369a1',headerDark:'#78350f',
+      rowAlt:'#fef3c7',rowAccent1:'#fde68a',rowAccent2:'#fcd34d',rowBorder:'#fde68a',
+      footerBar:[[0,'#b45309'],[1,'#d97706']],
+    },
+    cols:[
+      {key:'code',          label:'代码',     w:80,  align:'left'},
+      {key:'name',          label:'ETF名称',  w:280, align:'left'},
+      {key:'tracking_index',label:'跟踪指数', w:180, align:'left'},
+      {key:'scale',         label:'规模(亿)', w:90,  align:'right'},
+      {key:'rolling_1y',    label:'近1年涨幅',w:114, align:'right'},
+      {key:'day_change',    label:'昨日涨跌', w:100, align:'right'},
+      {key:'fee_rate',      label:'费率',     w:72,  align:'right'},
+      {key:'track_error',   label:'跟踪误差', w:90,  align:'right'},
+      {key:'premium',       label:'溢价率',   w:86,  align:'right'},
+    ],
+  },logoImg);
+}
+
+function drawActiveExportCanvas(rows,logoImg=null){
+  return _drawFundExportCanvas(rows,{
+    titleParts:[{text:'场外 ',color:'#111827'},{text:'美股主动型',color:'#7c3aed'},{text:' 基金对比',color:'#111827'}],
+    colors:{
+      topBar:[[0,'#581c87'],[0.5,'#7c3aed'],[1,'#b45309']],
+      primary:'#6d28d9',secondary:'#8b5cf6',accent:'#b45309',headerDark:'#3b0764',
+      rowAlt:'#ede9fe',rowAccent1:'#ddd6fe',rowAccent2:'#c4b5fd',rowBorder:'#ddd6fe',
+      footerBar:[[0,'#6d28d9'],[1,'#7c3aed']],
+    },
+    cols:[
+      {key:'code',       label:'代码',     w:80,  align:'left'},
+      {key:'name',       label:'基金名称', w:340, align:'left'},
+      {key:'fee_rate',   label:'运作费率', w:96,  align:'right'},
+      {key:'scale',      label:'规模(亿)', w:90,  align:'right'},
+      {key:'rolling_1y', label:'近1年涨幅',w:120, align:'right'},
+      {key:'day_change', label:'昨日涨跌', w:100, align:'right'},
+      {key:'daily_limit',label:'每日限额', w:120, align:'right'},
+      {key:'buy_status', label:'申购状态', w:96,  align:'center'},
+    ],
+  },logoImg);
 }
 
 function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
@@ -3382,7 +3653,7 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   c.fillStyle=L.headBg;c.fillRect(0,fy,W,FOOTER_H);
   c.strokeStyle=L.border;c.lineWidth=1;c.beginPath();c.moveTo(0,fy);c.lineTo(W,fy);c.stroke();
   c.font=`12px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
-  c.fillText('Wise-etf.org  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
+  c.fillText('wise-etf.com  ·  数据仅供参考，不构成投资建议',W/2,fy+FOOTER_H/2+5);
   c.textAlign='left';
   return cvs;
 }
@@ -3424,82 +3695,35 @@ function ReportPage() {
 
   const handleGenerate=()=>{
     setGenerating(true);
-    const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-    const ds=today.replace(/\//g,'-');
-    try{
-      const imgs=[];
-      // Image 1: 市场温度与估值
-      const c1=drawOverviewCanvas1({sentiment,peHistory});
-      imgs.push({title:'市场温度与估值',url:c1.toDataURL('image/png'),filename:`wise-etf-market-temp-${ds}.png`});
-      // 合并 liveData（昨日涨幅 / 申购状态 / 申购上限）
-      const nasdaqMerged=mergeLive(FALLBACK.nasdaq_passive);
-      const sp500Merged=mergeLive(FALLBACK.sp500_passive);
-      const activeMerged=mergeLive(FALLBACK.us_active);
-      // Image 2: 基金快照
-      const c2=drawOverviewCanvas({nasdaq:nasdaqMerged,sp500:sp500Merged,active:activeMerged,etfs,usdcny:sentiment?.ndx_price?null:null,sentiment});
-      imgs.push({title:'基金数据快照',url:c2.toDataURL('image/png'),filename:`wise-etf-overview-${ds}.png`});
-      // Image 3: 纳指表格
-      const nasdaqCols=[
-        {label:'A类代码',key:'code',w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
-        {label:'基金名称',key:'name',w:262,render:v=>({text:v,color:'#0f172a'})},
-        {label:'C类代码',key:'code_c',w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
-        {label:'总费率',key:'fee_rate',w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.8?'#e85d04':'#374151'})},
-        {label:'规模(亿)',key:'scale',w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
-        {label:'25年涨幅',key:'ytd_return',w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
-        {label:'昨日涨幅',key:'day_change',w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
-        {label:'跟踪误差',key:'track_error',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
-        {label:'每日申购上限',key:'daily_limit',w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
-        {label:'申购状态',key:'buy_status',w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
-      ];
-      const c3=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'纳斯达克',color:'#e85d04'},{text:'（被动型）基金对比',color:'#0f172a'}],date:today,cols:nasdaqCols,rows:byLimit(nasdaqMerged)});
-      imgs.push({title:'纳指基金表格',url:c3.toDataURL('image/png'),filename:`wise-etf-nasdaq-${ds}.png`});
-      // Image 4: 标普+ETF
-      const sp500Cols=[
-        {label:'A类代码',key:'code',w:72,render:v=>({text:v,color:'#1a56db',bold:true})},
-        {label:'基金名称',key:'name',w:260,render:v=>({text:v,color:'#0f172a'})},
-        {label:'C类代码',key:'code_c',w:72,render:v=>({text:v||'—',color:'#7c3aed',bold:!!v})},
-        {label:'总费率',key:'fee_rate',w:66,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>0.9?'#e85d04':'#374151'})},
-        {label:'规模(亿)',key:'scale',w:72,right:true,render:v=>({text:v??'—',color:'#374151'})},
-        {label:'25年涨幅',key:'ytd_return',w:88,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
-        {label:'昨日涨幅',key:'day_change',w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
-        {label:'跟踪误差',key:'track_error',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>2.5?'#e85d04':'#374151'})},
-        {label:'每日申购上限',key:'daily_limit',w:104,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
-        {label:'申购状态',key:'buy_status',w:90,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
-      ];
-      const etfCols=[
-        {label:'代码',key:'code',w:76,render:v=>({text:v,color:'#1a56db',bold:true})},
-        {label:'ETF名称',key:'name',w:238,render:v=>({text:v,color:'#0f172a'})},
-        {label:'跟踪指数',key:'tracking_index',w:150,render:v=>({text:v||'—',color:'#6b7280'})},
-        {label:'总费率',key:'fee_rate',w:70,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>=1.0?'#e85d04':'#374151'})},
-        {label:'规模(亿)',key:'scale',w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
-        {label:'近1年涨幅',key:'ytd_return',w:96,right:true,render:v=>({text:v!=null?`+${v}%`:'—',color:'#16a34a',bold:true})},
-        {label:'溢价率',key:'premium',w:80,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.5?'#e85d04':v>0?'#374151':'#9ca3af'})},
-        {label:'日均成交(亿)',key:'volume',w:96,right:true,render:v=>({text:v??'—',color:'#374151'})},
-        {label:'交易方式',key:'buy_status',w:86,render:()=>({text:'场内交易',pill:true,pillBg:'#dbeafe',color:'#1a56db'})},
-      ];
-      const c4a=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'标普500',color:'#dc2626'},{text:'基金对比',color:'#0f172a'}],date:today,cols:sp500Cols,rows:byLimit(sp500Merged)});
-      const c4b=drawTableCanvas({titleParts:[{text:'场内',color:'#0f172a'},{text:'ETF',color:'#1a56db'},{text:'（纳指 / 标普）',color:'#0f172a'}],date:today,cols:etfCols,rows:etfs});
-      const c4=document.createElement('canvas');
-      c4.width=c4a.width;c4.height=c4a.height+32+c4b.height;
-      const ctx4=c4.getContext('2d');ctx4.fillStyle='#fff';ctx4.fillRect(0,0,c4.width,c4.height);
-      ctx4.drawImage(c4a,0,0);ctx4.drawImage(c4b,0,c4a.height+32);
-      imgs.push({title:'标普500 + ETF表格',url:c4.toDataURL('image/png'),filename:`wise-etf-sp500-etf-${ds}.png`});
-      // Image 5: 主动基金
-      const activeCols=[
-        {label:'基金代码',key:'code',w:80,render:v=>({text:v,color:'#7c3aed',bold:true})},
-        {label:'基金名称',key:'name',w:280,render:v=>({text:v,color:'#0f172a'})},
-        {label:'运作费率',key:'fee_rate',w:78,right:true,render:v=>({text:v!=null?`${v}%`:'—',color:v>1.4?'#e85d04':'#374151'})},
-        {label:'规模(亿)',key:'scale',w:76,right:true,render:v=>({text:v??'—',color:'#374151'})},
-        {label:'25年涨幅',key:'ytd_return',w:96,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151',bold:true})},
-        {label:'昨日涨幅',key:'day_change',w:82,right:true,render:v=>({text:v!=null?`${v>0?'+':''}${v}%`:'—',color:v>0?'#16a34a':v<0?'#dc2626':'#374151'})},
-        {label:'每日申购上限',key:'daily_limit',w:110,right:true,render:(v,row)=>({text:v||'—',color:row.buy_status==='suspended'?'#9ca3af':'#374151'})},
-        {label:'申购状态',key:'buy_status',w:102,render:v=>v==='open'?{text:'可申购',pill:true,pillBg:'#dcfce7',color:'#16a34a'}:{text:'暂停',pill:true,pillBg:'#f3f4f6',color:'#9ca3af'}},
-      ];
-      const c5=drawTableCanvas({titleParts:[{text:'场外',color:'#0f172a'},{text:'美股',color:'#dc2626'},{text:'（主动型）基金对比',color:'#0f172a'}],date:today,cols:activeCols,rows:activeMerged});
-      imgs.push({title:'主动基金表格',url:c5.toDataURL('image/png'),filename:`wise-etf-active-${ds}.png`});
-      setImages(imgs);
-    }finally{setGenerating(false);}
+    const proceed=(logoImg)=>{
+      const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+      const ds=today.replace(/\//g,'-');
+      try{
+        const nasdaqMerged=mergeLive(FALLBACK.nasdaq_passive);
+        const sp500Merged=mergeLive(FALLBACK.sp500_passive);
+        const activeMerged=mergeLive(FALLBACK.us_active);
+        const etfsSorted=[...etfs].sort((a,b)=>(b.scale||0)-(a.scale||0));
+        const imgs=[
+          {title:'场外纳指被动基金',   url:drawNasdaqExportCanvas(byLimit(nasdaqMerged),logoImg).toDataURL('image/png'), filename:`wise-etf-nasdaq-${ds}.png`},
+          {title:'场外标普500被动基金', url:drawSp500ExportCanvas(byLimit(sp500Merged),logoImg).toDataURL('image/png'),  filename:`wise-etf-sp500-${ds}.png`},
+          {title:'场内ETF对比',         url:drawEtfExportCanvas(etfsSorted,logoImg).toDataURL('image/png'),               filename:`wise-etf-etf-${ds}.png`},
+          {title:'美股主动型基金',      url:drawActiveExportCanvas(byLimit(activeMerged),logoImg).toDataURL('image/png'), filename:`wise-etf-active-${ds}.png`},
+        ];
+        setImages(imgs);
+      }finally{setGenerating(false);}
+    };
+    const img=new Image();
+    img.onload=()=>proceed(img);
+    img.onerror=()=>proceed(null);
+    img.src=encodeURI('/@Wise 投资有术 (2).png');
   };
+
+  /* ── 旧版生成逻辑（已暂停，后续优化时恢复） ──────────────────────────────
+  const handleGenerateLegacy=()=>{
+    // drawOverviewCanvas1、drawOverviewCanvas、drawTableCanvas 生成 5 张旧版图
+    // 详见 git 历史或 bdc8392a 对话记录
+  };
+  ─────────────────────────────────────────────────────────────────────────── */
 
   const handleDownload=(url,filename)=>{
     const a=document.createElement('a');a.href=url;a.download=filename;a.click();
@@ -3604,7 +3828,7 @@ function ReportPage() {
           <div style={{textAlign:'center',padding:'60px 0',color:'#94a3b8'}}>
             <div style={{fontSize:48,marginBottom:16}}>📊</div>
             <div style={{fontSize:16,fontWeight:600,color:'#64748b',marginBottom:8}}>点击上方按钮生成报告</div>
-            <div style={{fontSize:13}}>将生成 5 张图片：市场温度、基金快照、纳指表格、标普+ETF、主动基金</div>
+            <div style={{fontSize:13}}>将生成 4 张图片：纳指被动、标普500、场内ETF、美股主动</div>
           </div>
         )}
       </div>
@@ -3842,6 +4066,7 @@ export default function App() {
       return [...prev,{...row,_cat:cat}];
     });
   };
+
 
   const avg=(arr,k)=>arr.length?(arr.reduce((s,f)=>s+(f[k]||0),0)/arr.length).toFixed(1):"0";
   const totalFunds = nasdaq.length+sp500.length+active.length+etfs.length;
