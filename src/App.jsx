@@ -3690,7 +3690,9 @@ function ReportPage() {
   const [sentiment, setSentiment] = useState(null);
   const [peHistory, setPeHistory] = useState({sp500:[],nasdaq100:[]});
   const [etfs, setEtfs] = useState(FALLBACK.etfs);
-  const [liveData, setLiveData] = useState({});
+  const [liveData, setLiveData] = useState(()=>{
+    try{ const c=localStorage.getItem("wise_etf_live"); return c?JSON.parse(c).data||{}:{}; }catch{return {};}
+  });
   const [images, setImages] = useState([]); // [{title, url, filename}]
   const [generating, setGenerating] = useState(false);
   const [toast, setToast] = useState(null); // {msg, ok}
@@ -3700,7 +3702,6 @@ function ReportPage() {
     apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
     apiFetch("/pe-history").then(d=>{ if(d?.data) setPeHistory(d.data); });
     apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
-    apiFetch("/live_data").then(d=>{ if(d?.data) setLiveData(d.data); });
   },[]);
 
 
@@ -3746,7 +3747,7 @@ function ReportPage() {
     img.src=encodeURI('/@Wise 投资有术 (2).png');
   };
 
-  // 页面加载后自动生成
+  // liveData 已从 localStorage 同步读取，直接生成
   useEffect(()=>{ handleGenerate(); },[]);
 
   /* ── 旧版生成逻辑（已暂停，后续优化时恢复） ──────────────────────────────
