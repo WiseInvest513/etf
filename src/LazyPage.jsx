@@ -1698,6 +1698,12 @@ export default function LazyPage() {
   const [selectedPortfolio, setSelectedPortfolio] = useState(null);
   const [capturing, setCapturing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  useEffect(() => {
+    const h = () => setShowBackToTop(window.scrollY > 400);
+    window.addEventListener("scroll", h, { passive: true });
+    return () => window.removeEventListener("scroll", h);
+  }, []);
   const exportRef = useRef(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
@@ -1892,6 +1898,14 @@ export default function LazyPage() {
 
       {previewUrl && <PreviewModal dataUrl={previewUrl} onClose={() => setPreviewUrl(null)} />}
       {typeof window !== "undefined" && window.location.search.includes("export=1") && <BatchExporter />}
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        style={{ position:"fixed", bottom:32, right:32, width:40, height:40, borderRadius:"50%",
+          border:"none", background:"#007aff", color:"#fff", fontSize:18, cursor:"pointer",
+          boxShadow:"0 4px 16px rgba(0,122,255,0.35)", zIndex:200,
+          opacity:showBackToTop?1:0, pointerEvents:showBackToTop?"auto":"none",
+          transition:"opacity 0.25s ease", display:"flex", alignItems:"center", justifyContent:"center" }}>
+        ↑
+      </button>
     </div>
   );
 }

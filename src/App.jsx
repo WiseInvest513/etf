@@ -993,7 +993,7 @@ function MarketTemperature({sentiment, isMobile}) {
 function MiniBar({value, max, color}) {
   const pct = Math.min(Math.abs(value)/max*100,100);
   return (
-    <div style={{display:"flex",alignItems:"center",gap:8,justifyContent:"flex-end"}}>
+    <div style={{display:"flex",alignItems:"center",gap:5,justifyContent:"flex-end"}}>
       <div style={{width:48,height:4,borderRadius:2,background:C.borderLight,overflow:"hidden",flexShrink:0}}>
         <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:2,transition:"width 0.6s ease"}}/>
       </div>
@@ -1027,7 +1027,7 @@ function PremiumBadge({value}) {
 }
 
 // ─── Section Header ───────────────────────────────────────────────────────────
-function SectionHeader({title,subtitle,count,color=C.accent,timestamp}) {
+function SectionHeader({title,subtitle,count,color=C.accent,timestamp,sortable}) {
   return (
     <div style={{marginBottom:24}}>
       <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",minWidth:0}}>
@@ -1036,26 +1036,41 @@ function SectionHeader({title,subtitle,count,color=C.accent,timestamp}) {
         {count!=null&&<span style={{background:color+"18",color,padding:"2px 10px",borderRadius:20,fontSize:12,fontWeight:700,flexShrink:0}}>{count}只</span>}
         {timestamp&&<span style={{fontSize:11,color:C.textDim,flexShrink:0}}>行情更新：{timestamp}</span>}
       </div>
-      {subtitle&&<p style={{fontSize:13,color:C.textDim,margin:"7px 0 0 15px"}}>{subtitle}</p>}
+      {(subtitle||sortable)&&(
+        <p style={{fontSize:13,color:C.textDim,margin:"7px 0 0 15px",display:"flex",alignItems:"center",gap:8}}>
+          {subtitle}
+          {sortable&&<span style={{color:C.textDim}}>· 如何排序：点击列标题，再次点击切换升序／降序</span>}
+        </p>
+      )}
     </div>
   );
 }
 
 // ─── ColTip ───────────────────────────────────────────────────────────────────
-function ColTip({tip}) {
-  const [show,setShow] = useState(false);
+function ColTip({tip,label}) {
+  const [pos,setPos] = useState(null);
   const ref = useRef(null);
   useEffect(()=>{
-    if(!show) return;
-    const handler=(e)=>{ if(ref.current&&!ref.current.contains(e.target)) setShow(false); };
+    if(!pos) return;
+    const handler=(e)=>{ if(ref.current&&!ref.current.contains(e.target)) setPos(null); };
     document.addEventListener("mousedown",handler);
     return()=>document.removeEventListener("mousedown",handler);
-  },[show]);
+  },[pos]);
+  const show = !!pos;
+  const toggle = e => {
+    e.stopPropagation();
+    if(pos){setPos(null);return;}
+    const r = ref.current.getBoundingClientRect();
+    setPos({top: r.bottom+6, left: r.left});
+  };
   return (
     <span ref={ref} style={{position:"relative",display:"inline-flex"}}
-      onClick={e=>{e.stopPropagation();setShow(s=>!s);}}>
-      <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",background:show?C.accent:C.borderLight,color:show?"#fff":C.textDim,fontSize:9,fontWeight:700,cursor:"pointer",flexShrink:0,transition:"background 0.15s"}}>?</span>
-      {show&&<div style={{position:"absolute",top:"calc(100% + 6px)",left:"50%",transform:"translateX(-50%)",background:"#1a1a2e",color:"#e8e8f0",fontSize:12,lineHeight:1.6,padding:"8px 12px",borderRadius:8,whiteSpace:"normal",width:200,zIndex:999,boxShadow:"0 4px 20px rgba(0,0,0,0.25)",pointerEvents:"none"}}>
+      onClick={toggle}>
+      {label
+        ? <span style={{fontSize:10,color:show?C.accent:C.textDim,fontWeight:600,cursor:"pointer",letterSpacing:0.3,transition:"color 0.15s",textTransform:"none",borderBottom:`1px dashed ${show?C.accent:C.textDim}`}}>{label}</span>
+        : <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",background:show?C.accent:C.borderLight,color:show?"#fff":C.textDim,fontSize:9,fontWeight:700,cursor:"pointer",flexShrink:0,transition:"background 0.15s"}}>?</span>
+      }
+      {pos&&<div style={{position:"fixed",top:pos.top,left:pos.left,background:"#1a1a2e",color:"#e8e8f0",fontSize:12,lineHeight:1.6,padding:"8px 12px",borderRadius:8,whiteSpace:"normal",width:200,zIndex:9999,boxShadow:"0 4px 20px rgba(0,0,0,0.25)",pointerEvents:"none"}}>
         {tip}
       </div>}
     </span>
@@ -1069,13 +1084,13 @@ function DataTable({columns,data,sortKey,sortDir,onSort}) {
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead>
           <tr>
-            {columns.map(col=>(
+            {columns.map((col)=>(
               <th key={col.key} onClick={()=>col.sortable!==false&&onSort?.(col.key)}
-                style={{padding:"13px 16px",textAlign:col.align||"left",color:sortKey===col.key?C.accent:C.textDim,fontWeight:600,fontSize:11,letterSpacing:0.6,textTransform:"uppercase",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,background:"#fafafa",cursor:col.sortable!==false?"pointer":"default",userSelect:"none",position:"sticky",top:0,zIndex:1,transition:"color 0.15s"}}>
+                style={{padding:"10px 10px",textAlign:col.align||"left",color:sortKey===col.key?C.accent:C.textDim,fontWeight:600,fontSize:11,letterSpacing:0.6,textTransform:"uppercase",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,background:"#fafafa",cursor:col.sortable!==false?"pointer":"default",userSelect:"none",position:"sticky",top:0,zIndex:1,transition:"color 0.15s"}}>
                 <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
                   {col.label}
                   {col.tip&&<ColTip tip={col.tip}/>}
-                  {sortKey===col.key&&<span style={{marginLeft:2}}>{sortDir==="asc"?"↑":"↓"}</span>}
+                  {col.sortable!==false&&(sortKey===col.key?<span style={{marginLeft:2}}>{sortDir==="asc"?"↑":"↓"}</span>:<span style={{marginLeft:2,opacity:0.25}}>↕</span>)}
                 </span>
               </th>
             ))}
@@ -1100,7 +1115,7 @@ function TableRow({row,columns,i}) {
       borderLeft:h?`3px solid ${C.accent}`:"3px solid transparent",
     }}>
       {columns.map(col=>(
-        <td key={col.key} style={{padding:"12px 16px",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}30`,textAlign:col.align||"left",color:C.text}}>
+        <td key={col.key} style={{padding:"10px 10px",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}30`,textAlign:col.align||"left",color:C.text}}>
           {col.render?col.render(row[col.key],row):row[col.key]}
         </td>
       ))}
@@ -1310,7 +1325,7 @@ function SkeletonTable({rows=7,cols=7}) {
         ))}
       </div>
       {Array.from({length:rows}).map((_,i)=>(
-        <div key={i} style={{display:"flex",alignItems:"center",gap:16,padding:"13px 16px",borderBottom:i<rows-1?"1px solid #e0e0e530":"",background:i%2?"#fafafa":"#fff"}}>
+        <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 10px",borderBottom:i<rows-1?"1px solid #e0e0e530":"",background:i%2?"#fafafa":"#fff"}}>
           {Array.from({length:cols}).map((_,j)=>(
             <div key={j} style={{height:12,borderRadius:4,background:"#f0f0f5",flex:widths[j]||1,animation:"skeletonPulse 1.4s ease infinite",animationDelay:`${i*0.04+j*0.06}s`}}/>
           ))}
@@ -1336,7 +1351,18 @@ function StatusFilterBar({value, onChange, color}) {
 }
 
 // ─── Back To Top Button ───────────────────────────────────────────────────────
-
+function BackToTop({visible, offset=32}) {
+  return (
+    <button onClick={()=>window.scrollTo({top:0,behavior:"smooth"})}
+      style={{position:"fixed",bottom:offset,right:32,width:40,height:40,borderRadius:"50%",
+        border:"none",background:C.accent,color:"#fff",fontSize:18,cursor:"pointer",
+        boxShadow:"0 4px 16px rgba(0,122,255,0.35)",zIndex:200,
+        opacity:visible?1:0,pointerEvents:visible?"auto":"none",
+        transition:"opacity 0.25s ease",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      ↑
+    </button>
+  );
+}
 
 // ─── FX Analysis Card ────────────────────────────────────────────────────────
 // ─── 负收益年原因 ──────────────────────────────────────────────────────────────
@@ -2575,6 +2601,7 @@ const TABS=[
   {id:"active",    label:"美股主动"},
   {id:"watchlist", label:"自选"},
   {id:"lazy",      label:"懒人组合", href:"/lazy"},
+  {id:"export",    label:"导出数据", href:"/export"},
 ];
 
 // ─── Canvas Export Utilities ──────────────────────────────────────────────────
@@ -3676,6 +3703,7 @@ function ReportPage() {
     apiFetch("/live_data").then(d=>{ if(d?.data) setLiveData(d.data); });
   },[]);
 
+
   const mergeLive=(arr)=>arr.map(f=>{
     const live=liveData[f.code];
     if(!live) return f;
@@ -3717,6 +3745,9 @@ function ReportPage() {
     img.onerror=()=>proceed(null);
     img.src=encodeURI('/@Wise 投资有术 (2).png');
   };
+
+  // 页面加载后自动生成
+  useEffect(()=>{ handleGenerate(); },[]);
 
   /* ── 旧版生成逻辑（已暂停，后续优化时恢复） ──────────────────────────────
   const handleGenerateLegacy=()=>{
@@ -3760,25 +3791,18 @@ function ReportPage() {
       {/* Header */}
       <div style={{background:'linear-gradient(135deg,#1a56db,#7c3aed)',padding:'20px 24px',color:'#fff'}}>
         <div style={{maxWidth:1100,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-          <div>
+          <a href="/" style={{color:'rgba(255,255,255,0.85)',fontSize:13,textDecoration:'none',border:'1px solid rgba(255,255,255,0.4)',padding:'6px 16px',borderRadius:20}}>← 返回首页</a>
+          <div style={{textAlign:'right'}}>
             <div style={{fontSize:20,fontWeight:800,letterSpacing:-0.5}}>Wise ETF · 导出报告</div>
             <div style={{fontSize:13,opacity:0.8,marginTop:4}}>一键生成全部图片，分享或存档</div>
           </div>
-          <a href="/" style={{color:'rgba(255,255,255,0.85)',fontSize:13,textDecoration:'none',border:'1px solid rgba(255,255,255,0.4)',padding:'6px 16px',borderRadius:20}}>← 返回首页</a>
         </div>
       </div>
 
       <div style={{maxWidth:1100,margin:'0 auto',padding:'28px 16px'}}>
         {/* Action bar */}
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:32,flexWrap:'wrap'}}>
-          <button onClick={handleGenerate} disabled={generating}
-            style={{display:'flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:14,border:'none',background:generating?'#94a3b8':'linear-gradient(135deg,#007aff,#5856d6)',color:'#fff',fontSize:14,fontWeight:700,cursor:generating?'not-allowed':'pointer',boxShadow:'0 4px 16px rgba(0,122,255,0.3)'}}>
-            {generating?(
-              <><span style={{display:'inline-block',width:14,height:14,border:'2px solid #fff3',borderTop:'2px solid #fff',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/> 生成中…</>
-            ):(
-              <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg> 生成全部图片</>
-            )}
-          </button>
+          {generating&&<span style={{fontSize:13,color:'#94a3b8'}}>图片生成中…</span>}
           {images.length>0&&!isMobile&&(
             <button onClick={handleDownloadAll}
               style={{display:'flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:14,border:'none',background:'linear-gradient(135deg,#16a34a,#059669)',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 16px rgba(22,163,74,0.3)'}}>
@@ -3786,13 +3810,12 @@ function ReportPage() {
               下载全部 ({images.length}张)
             </button>
           )}
-          {!sentiment&&<span style={{fontSize:13,color:'#94a3b8'}}>市场数据加载中…</span>}
           {images.length>0&&<span style={{fontSize:13,color:'#16a34a',fontWeight:600}}>✓ 已生成 {images.length} 张</span>}
         </div>
 
         {/* Image gallery */}
         {images.length>0&&(
-          <div style={{display:'flex',flexDirection:'column',gap:28}}>
+          <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:24}}>
             {images.map((img,i)=>(
               <div key={i} style={{background:'#fff',borderRadius:16,overflow:'hidden',boxShadow:'0 2px 12px rgba(0,0,0,0.08)',border:'1px solid #e2e8f0'}}>
                 <div style={{padding:'14px 20px',borderBottom:'1px solid #f1f5f9',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
@@ -3824,11 +3847,9 @@ function ReportPage() {
           </div>
         )}
 
-        {images.length===0&&!generating&&(
+        {images.length===0&&generating&&(
           <div style={{textAlign:'center',padding:'60px 0',color:'#94a3b8'}}>
-            <div style={{fontSize:48,marginBottom:16}}>📊</div>
-            <div style={{fontSize:16,fontWeight:600,color:'#64748b',marginBottom:8}}>点击上方按钮生成报告</div>
-            <div style={{fontSize:13}}>将生成 4 张图片：纳指被动、标普500、场内ETF、美股主动</div>
+            <div style={{fontSize:16,fontWeight:600,color:'#64748b'}}>图片生成中，请稍候…</div>
           </div>
         )}
       </div>
@@ -3858,6 +3879,7 @@ export default function App() {
   const [statusFilter,setStatusFilter]=useState("all");
   const [selETF,setSelETF]=useState("513100");
   const [scrolled,setScrolled]=useState(false);
+  const [showBackToTop,setShowBackToTop]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
   const [showDisclaimer,setShowDisclaimer]=useState(()=>{
     if(typeof window!=="undefined"&&window.innerWidth<=768){
@@ -3917,7 +3939,7 @@ export default function App() {
   });
 
   useEffect(()=>{
-    const h=()=>{setScrolled(window.scrollY>8);};
+    const h=()=>{setScrolled(window.scrollY>8);setShowBackToTop(window.scrollY>400);};
     window.addEventListener("scroll",h,{passive:true});
     return()=>window.removeEventListener("scroll",h);
   },[]);
@@ -4170,7 +4192,7 @@ export default function App() {
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
     {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价。>1%注意；>2%偏高；>3%极高",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
-    {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好",align:"right"},
+    {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好",align:"center"},
   ];
 
   // 移动端隐藏次要列，保留核心信息
@@ -4214,75 +4236,76 @@ export default function App() {
       )}
 
       {/* ── Header ── */}
-      <header style={{
-        background:"rgba(255,255,255,0.88)",
-        backdropFilter:"saturate(180%) blur(24px)",
-        WebkitBackdropFilter:"saturate(180%) blur(24px)",
-        borderBottom:`1px solid ${scrolled?C.border:"transparent"}`,
-        boxShadow:scrolled?"0 1px 24px rgba(0,0,0,0.08)":"none",
-        position:"sticky",top:0,zIndex:100,
-        transition:"box-shadow 0.35s ease, border-color 0.35s ease",
-      }}>
-        <div style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"0 16px":"0 40px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <a href="/" onClick={e=>{e.preventDefault();switchTab("overview");}} style={{textDecoration:"none",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
-            <svg width="32" height="32" viewBox="0 0 28 28" fill="none">
-              <rect width="28" height="28" rx="7" fill="url(#logobg)"/>
+      <header style={{position:"sticky",top:0,zIndex:100,padding:isMobile?"8px 12px":"10px 24px",pointerEvents:"none"}}>
+        <div style={{
+          maxWidth:1440,margin:"0 auto",
+          background:"rgba(255,255,255,0.92)",
+          backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",
+          borderRadius:16,
+          border:"1px solid rgba(0,0,0,0.07)",
+          boxShadow:"0 4px 24px rgba(0,0,0,0.09), 0 1px 4px rgba(0,0,0,0.05)",
+          height:52,
+          display:"flex",alignItems:"center",
+          padding:isMobile?"0 12px":"0 20px",
+          gap:0,
+          pointerEvents:"auto",
+        }}>
+          {/* Logo */}
+          <a href="/" onClick={e=>{e.preventDefault();switchTab("overview");}} style={{textDecoration:"none",display:"flex",alignItems:"center",gap:8,flexShrink:0,marginRight:8}}>
+            <svg width="30" height="30" viewBox="0 0 28 28" fill="none">
+              <rect width="28" height="28" rx="8" fill="url(#logobg)"/>
               <polyline points="4,20 9,13 14,16 19,8 24,11" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
               <circle cx="24" cy="11" r="2" fill="white"/>
               <defs><linearGradient id="logobg" x1="0" y1="0" x2="28" y2="28"><stop stopColor="#007aff"/><stop offset="1" stopColor="#5856d6"/></linearGradient></defs>
             </svg>
-            <span style={{fontSize:17,fontWeight:800,letterSpacing:-0.5,color:C.text}}>Wise <span style={{color:C.accent}}>ETF</span></span>
+            <span style={{fontSize:15,fontWeight:800,letterSpacing:-0.3,color:C.text}}>Wise <span style={{color:C.accent}}>ETF</span></span>
           </a>
 
-          {/* Sliding tab nav */}
-          <nav ref={navRef} style={{display:"flex",alignItems:"center",height:"100%",position:"relative"}}>
-            {/* Sliding indicator */}
-            <div style={{position:"absolute",bottom:0,left:indicator.left,width:indicator.width,height:2,background:`linear-gradient(90deg,${C.accent},${C.accent}80)`,borderRadius:"2px 2px 0 0",transition:"left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1)",opacity:indicator.opacity}}/>
-            {TABS.map(tab=>(
-              tab.href
-                ? <a key={tab.id} href={tab.href}
-                    style={{height:"100%",padding:"0 20px",border:"none",background:"none",color:C.textMuted,fontWeight:500,fontSize:14,cursor:"pointer",borderBottom:"2px solid transparent",transition:"color 0.2s",whiteSpace:"nowrap",display:"flex",alignItems:"center",textDecoration:"none"}}>
+          {/* Nav tabs — left aligned */}
+          <nav ref={navRef} style={{display:"flex",alignItems:"center",height:"100%",position:"relative",flexShrink:0}}>
+            <div style={{position:"absolute",bottom:0,left:indicator.left,width:indicator.width,height:2,background:`linear-gradient(90deg,${C.accent},#5856d6)`,borderRadius:"2px 2px 0 0",transition:"left 0.3s cubic-bezier(0.4,0,0.2,1),width 0.3s cubic-bezier(0.4,0,0.2,1)",opacity:indicator.opacity}}/>
+            {TABS.map(tab=>{
+              const isActive=activeTab===tab.id;
+              const commonStyle={height:"100%",padding:"0 15px",border:"none",background:"none",fontSize:15,cursor:"pointer",whiteSpace:"nowrap",fontWeight:700,color:isActive?C.accent:C.text,transition:"color 0.18s"};
+              return tab.href
+                ? <a key={tab.id} href={tab.href} style={{...commonStyle,display:"flex",alignItems:"center",textDecoration:"none"}}
+                    onMouseEnter={e=>{if(!isActive)e.currentTarget.style.color=C.accent;}}
+                    onMouseLeave={e=>{if(!isActive)e.currentTarget.style.color=C.text;}}>
                     {tab.label}
                   </a>
-                : <button key={tab.id} data-tab={tab.id} onClick={()=>switchTab(tab.id)}
-                    style={{height:"100%",padding:"0 20px",border:"none",background:"none",color:activeTab===tab.id?C.accent:C.textMuted,fontWeight:activeTab===tab.id?700:500,fontSize:14,cursor:"pointer",borderBottom:"2px solid transparent",transition:"color 0.2s",whiteSpace:"nowrap"}}>
+                : <button key={tab.id} data-tab={tab.id} onClick={()=>switchTab(tab.id)} style={commonStyle}
+                    onMouseEnter={e=>{if(!isActive)e.currentTarget.style.color=C.accent;}}
+                    onMouseLeave={e=>{if(!isActive)e.currentTarget.style.color=C.text;}}>
                     {tab.label}
-                  </button>
-            ))}
+                  </button>;
+            })}
           </nav>
 
-          <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:12}}>
+          {/* Spacer */}
+          <div style={{flex:1}}/>
+
+          {/* Right actions */}
+          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
             {!isMobile&&<button onClick={()=>setShowBriefing(true)}
-              title="加入群聊"
-              style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
+              style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
               onMouseEnter={e=>{e.currentTarget.style.background="#07c16014";e.currentTarget.style.color="#07c160";e.currentTarget.style.borderColor="#07c16044";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
               <span style={{fontSize:13}}>💬</span> 加入群聊
             </button>}
-            {/* Twitter / X */}
             {!isMobile&&<a href="https://x.com/WiseInvest513" target="_blank" rel="noopener noreferrer"
-              title="关注博主 Twitter"
-              style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,textDecoration:"none",transition:"all 0.18s",flexShrink:0}}
+              style={{display:"flex",alignItems:"center",justifyContent:"center",width:28,height:28,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,textDecoration:"none",transition:"all 0.18s",flexShrink:0}}
               onMouseEnter={e=>{e.currentTarget.style.background="#000";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#000";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-              </svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
             </a>}
-            {/* WeChat 公众号 */}
             {!isMobile&&<button onClick={()=>setShowWechat(true)}
-              title="微信公众号"
-              style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,cursor:"pointer",transition:"all 0.18s",flexShrink:0}}
+              style={{display:"flex",alignItems:"center",justifyContent:"center",width:28,height:28,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,cursor:"pointer",transition:"all 0.18s",flexShrink:0}}
               onMouseEnter={e=>{e.currentTarget.style.background="#07c160";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#07c160";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-7.062-6.122zm-3.74 2.632c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983zm5.08 0c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983z"/>
-              </svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-7.062-6.122zm-3.74 2.632c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983zm5.08 0c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983z"/></svg>
             </button>}
-            {!isMobile&&lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap"}}>更新于 {lastUpdate}</span>}
-            {/* Hamburger (mobile only) */}
-            <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn"
-              aria-label="菜单"
+            {!isMobile&&lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap",borderLeft:`1px solid ${C.borderLight}`,paddingLeft:8,marginLeft:2}}>更新于 {lastUpdate}</span>}
+            <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn" aria-label="菜单"
               style={{display:"none",flexDirection:"column",gap:5,background:"none",border:"none",cursor:"pointer",padding:6}}>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(45deg) translateY(7px)":"none"}}/>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",opacity:mobileMenuOpen?0:1}}/>
@@ -4309,7 +4332,7 @@ export default function App() {
       </header>
 
       {/* ── Content ── */}
-      <main style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"16px 12px 80px":"36px 40px 100px"}}>
+      <main style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"16px 12px 80px":"36px 20px 100px"}}>
         <div key={activeTab} className="tab-content">
 
         {/* ════ WATCHLIST ════ */}
@@ -4514,7 +4537,7 @@ export default function App() {
         {/* ════ NASDAQ ════ */}
         {activeTab==="nasdaq"&&(
           <Reveal>
-            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="数据来源：天天基金网" count={filterData(nasdaqM).length} color={C.accent} timestamp={liveTs}/>
+            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="数据来源：天天基金网" count={filterData(nasdaqM).length} color={C.accent} timestamp={liveTs} sortable/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
@@ -4528,7 +4551,7 @@ export default function App() {
         {/* ════ SP500 ════ */}
         {activeTab==="sp500"&&(
           <Reveal>
-            <SectionHeader title="场外标普500基金对比" subtitle="数据来源：天天基金网" count={filterData(sp500M).length} color={C.cyan} timestamp={liveTs}/>
+            <SectionHeader title="场外标普500基金对比" subtitle="数据来源：天天基金网" count={filterData(sp500M).length} color={C.cyan} timestamp={liveTs} sortable/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
@@ -4542,7 +4565,7 @@ export default function App() {
         {/* ════ ACTIVE ════ */}
         {activeTab==="active"&&(
           <Reveal>
-            <SectionHeader title="场外美股（主动型）基金对比" subtitle="数据来源：天天基金网" count={filterData(activeM).length} color={C.purple} timestamp={liveTs}/>
+            <SectionHeader title="场外美股（主动型）基金对比" subtitle="数据来源：天天基金网" count={filterData(activeM).length} color={C.purple} timestamp={liveTs} sortable/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
@@ -4561,7 +4584,7 @@ export default function App() {
         {/* ════ ETF ════ */}
         {activeTab==="etf"&&(
           <Reveal>
-            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="可在A股账户直接交易，关注溢价风险" count={filterData(etfsM).length} color={C.orange} timestamp={liveTs}/>
+            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="可在A股账户直接交易，关注溢价风险" count={filterData(etfsM).length} color={C.orange} timestamp={liveTs} sortable/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
             </div>
@@ -4623,6 +4646,10 @@ export default function App() {
         <CompareModal list={compareList} onClose={()=>setShowCompare(false)}/>
       )}
 
+      {["overview","guide","lazy"].includes(activeTab)&&(
+        <BackToTop visible={showBackToTop} offset={compareList.length>0?84:32}/>
+      )}
+
       {/* ── Footer ── */}
       <footer style={{background:"#fff",borderTop:`1px solid ${C.border}`}}>
         <div style={{maxWidth:1440,margin:"0 auto",padding:isMobile?"32px 16px 24px":"56px 40px 48px",display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr auto auto",gap:isMobile?"32px":"60px 80px"}}>
@@ -4637,9 +4664,9 @@ export default function App() {
             <p style={{fontSize:12,color:C.textDim}}>wise-etf.com</p>
           </div>
 
-          <div style={{minWidth:120}}>
+          <div style={{minWidth:180}}>
             <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>快速导航</div>
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px 24px"}}>
               {TABS.slice(1).filter(tab=>tab.id!=="watchlist").map(tab=>(
                 <button key={tab.id} onClick={()=>{switchTab(tab.id);}}
                   className="footer-link"
