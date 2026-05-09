@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -k -n \"API,WEB\" -c \"blue.bold,green.bold\" \"python3 -m uvicorn api.index:app --reload --port 8000\" \"vite\"",
     "dev:web": "vite",
