@@ -166,6 +166,10 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"000043","name":"嘉实美国成长股票(QDII)","fee_rate":1.40,"scale":50.1,"ytd_return":20.01,"daily_limit":"100元","buy_status":"open"},
         {"code":"012920","name":"易方达全球成长精选混合(QDII)A","fee_rate":1.40,"scale":28.3,"ytd_return":107.95,"daily_limit":"50元","buy_status":"open"},
         {"code":"539002","name":"建信新兴市场优选混合(QDII)A","fee_rate":1.40,"scale":4.6,"ytd_return":92.11,"daily_limit":"暂停申购","buy_status":"suspended"},
+        {"code":"001668","name":"汇添富全球移动互联混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":43.29,"daily_limit":"5000元","buy_status":"open"},
+        {"code":"016664","name":"天弘全球高端制造混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":168.72,"daily_limit":"100元","buy_status":"open"},
+        {"code":"002891","name":"华夏移动互联灵活配置混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":120.50,"daily_limit":"5000元","buy_status":"open"},
+        {"code":"457001","name":"国富亚洲机会股票(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":143.79,"daily_limit":"200元","buy_status":"open"},
     ],
 }
 
@@ -290,7 +294,7 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
     perf = fetch_fund_performance(code)
     ytd_return = 0.0
     for p in (perf if isinstance(perf, list) else []):
-        if p.get("title") == "近1年":
+        if p.get("title") in ("近1年", "1N"):
             try:
                 ytd_return = float(p.get("syl", 0))
             except Exception:

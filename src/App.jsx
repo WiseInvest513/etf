@@ -57,6 +57,10 @@ const FALLBACK = {
     { code:"000043",name:"嘉实美国成长股票(QDII)",fee_rate:1.40,scale:50.1,ytd_return:20.01,daily_limit:"100元",buy_status:"open"},
     { code:"012920",name:"易方达全球成长精选混合(QDII)A",fee_rate:1.40,scale:28.3,ytd_return:107.95,daily_limit:"50元",buy_status:"open"},
     { code:"539002",name:"建信新兴市场优选混合(QDII)A",fee_rate:1.40,scale:4.6,ytd_return:92.11,daily_limit:"50元",buy_status:"open"},
+    { code:"001668",name:"汇添富全球移动互联混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
+    { code:"016664",name:"天弘全球高端制造混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
+    { code:"002891",name:"华夏移动互联灵活配置混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
+    { code:"457001",name:"国富亚洲机会股票(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
   ],
   // 场内ETF — 名称经 fundgz 实测验证，premium 为实际市场水平
   etfs: [
@@ -3970,6 +3974,10 @@ export default function App() {
     apiFetch("/overview").then(ov=>{ if(ov?.last_update) setLastUpdate(ov.last_update); });
     // 拉取场内ETF实时行情（含溢价率），以 FALLBACK 为兜底
     apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
+    // 拉取基金动态数据（ytd_return / buy_status / daily_limit），以 FALLBACK 为兜底
+    apiFetch("/funds/nasdaq_passive").then(d=>{ if(d?.data?.length) setNasdaq(d.data); });
+    apiFetch("/funds/sp500_passive").then(d=>{ if(d?.data?.length) setSp500(d.data); });
+    apiFetch("/funds/us_active").then(d=>{ if(d?.data?.length) setActive(d.data); });
     // 拉取市场情绪指标
     apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
     // 拉取标普500 + 纳指100 历史月度 PE
