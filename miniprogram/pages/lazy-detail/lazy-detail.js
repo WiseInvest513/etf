@@ -43,14 +43,14 @@ Page({
       };
     });
 
-    this.setData({ p: p, allocsLabeled: allocsLabeled, yearReturns: yearReturns });
+    const self = this;
+    this.setData({ p: p, allocsLabeled: allocsLabeled, yearReturns: yearReturns }, function() {
+      // setData 渲染完成后再画饼图，确保 canvas 节点已在 DOM 中
+      wx.nextTick(function() { self._drawPie(); });
+    });
   },
 
-  onReady() {
-    // canvas 在 setData 完成后再画
-    const self = this;
-    wx.nextTick(function() { self._drawPie(); });
-  },
+  onReady() {},
 
   _drawPie() {
     const p = this.data.p;
