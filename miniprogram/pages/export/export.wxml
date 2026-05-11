@@ -1,24 +1,34 @@
 <!-- pages/export/export.wxml -->
 <view class="page">
 
-  <!-- ── 说明 ── -->
-  <view class="intro-card card">
-    <view class="intro-title">📊 一键导出数据图</view>
-    <view class="intro-desc">生成4张数据图片（纳指/标普/ETF/主动），保存到相册后可分享。</view>
+  <!-- ── Hero ── -->
+  <view class="hero">
+    <view class="hero-icon">📊</view>
+    <view class="hero-title">数据图导出</view>
+    <view class="hero-desc">生成4张高清数据图，涵盖纳指/标普/ETF/主动基金，一键保存到相册分享。</view>
+  </view>
+
+  <!-- ── 四张图预览卡 ── -->
+  <view class="cards-row">
+    <view wx:for="{{categories}}" wx:key="id" class="cat-card">
+      <view class="cat-dot" style="background:{{item.color}}"/>
+      <text class="cat-name">{{item.name}}</text>
+    </view>
   </view>
 
   <!-- ── 生成按钮 ── -->
-  <view class="btn-wrap">
+  <view class="btn-area">
     <view
       class="gen-btn {{generating?'gen-btn-loading':''}}"
       bindtap="{{generating?'':'generateAll'}}"
     >
-      <text wx:if="{{generating}}">正在生成…</text>
-      <text wx:else>生成数据图</text>
+      <text wx:if="{{generating}}" class="btn-text">⏳  正在生成...</text>
+      <text wx:else class="btn-text">✦  一键生成数据图</text>
     </view>
+    <view wx:if="{{generating}}" class="progress-tip">请稍候，正在绘制图表</view>
   </view>
 
-  <!-- ── 隐藏 Canvas（用于绘制）── -->
+  <!-- ── 隐藏 Canvas ── -->
   <view class="canvas-hidden">
     <canvas type="2d" id="canvas-nasdaq" class="offscreen-canvas"/>
     <canvas type="2d" id="canvas-sp500"  class="offscreen-canvas"/>
@@ -26,22 +36,31 @@
     <canvas type="2d" id="canvas-active" class="offscreen-canvas"/>
   </view>
 
-  <!-- ── 预览 & 保存 ── -->
-  <view wx:if="{{images.length>0}}" class="preview-section">
-    <view class="preview-header">
-      <text class="preview-title">预览（点图片保存到相册）</text>
-      <view class="save-all-btn" bindtap="saveAll">全部保存</view>
+  <!-- ── 生成结果 ── -->
+  <view wx:if="{{images.length>0}}" class="result-section">
+
+    <view class="result-header">
+      <text class="result-title">生成完成 · {{images.length}}张</text>
+      <view class="save-all-btn" bindtap="saveAll">
+        <text>⬇ 全部保存</text>
+      </view>
     </view>
-    <view wx:for="{{images}}" wx:key="title" class="preview-item">
-      <view class="preview-label">{{item.title}}</view>
+
+    <view wx:for="{{images}}" wx:key="title" class="result-card">
+      <view class="result-card-header">
+        <view class="result-dot" style="background:{{item.color}}"/>
+        <text class="result-label">{{item.title}}</text>
+        <view class="save-one-btn" bindtap="saveImage" data-path="{{item.tempFilePath}}">保存</view>
+      </view>
       <image
-        class="preview-img"
+        class="result-img"
         src="{{item.tempFilePath}}"
         mode="widthFix"
         bindtap="saveImage"
         data-path="{{item.tempFilePath}}"
       />
     </view>
+
   </view>
 
   <!-- ── Toast ── -->

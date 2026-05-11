@@ -203,11 +203,24 @@ function buildEtfConfig(rows, date) {
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
+const CAT_COLORS = {
+  'canvas-nasdaq': '#3d82ff',
+  'canvas-sp500':  '#26c258',
+  'canvas-etf':    '#ff9a00',
+  'canvas-active': '#a855f7',
+};
+
 Page({
   data: {
     generating: false,
-    images:     [],   // [{title, tempFilePath}]
-    toast:      null, // {msg, ok}
+    images:     [],
+    toast:      null,
+    categories: [
+      { id: 'canvas-nasdaq', name: '纳指被动', color: '#3d82ff' },
+      { id: 'canvas-sp500',  name: '标普500',  color: '#26c258' },
+      { id: 'canvas-etf',    name: '场内ETF',  color: '#ff9a00' },
+      { id: 'canvas-active', name: '美股主动', color: '#a855f7' },
+    ],
   },
 
   onLoad() {
@@ -268,7 +281,7 @@ Page({
     for (const task of tasks) {
       try {
         const tempFilePath = await this._drawAndExport(task.id, task.cfg);
-        images.push({ title: task.title, tempFilePath });
+        images.push({ title: task.title, tempFilePath, color: CAT_COLORS[task.id] });
       } catch (e) {
         console.error(`[export] ${task.title} failed:`, e);
       }

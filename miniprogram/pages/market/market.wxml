@@ -103,12 +103,12 @@
 <!-- ── 筛选底部弹层（根级别，避免层级问题）── -->
 <view wx:if="{{sheetOpen}}" class="sheet-mask" bindtap="closeSheet"/>
 
-<view wx:if="{{sheetOpen}}" class="sheet">
-  <view catchtap="stopProp">
+<view wx:if="{{sheetOpen}}" class="sheet" catchtap="stopProp">
 
     <view class="sheet-header">
+      <view class="sheet-reset-top" bindtap="resetFilters">重置</view>
       <text class="sheet-title">筛选</text>
-      <view class="sheet-close" bindtap="closeSheet">✕</view>
+      <view class="sheet-apply-top" bindtap="applyFilters">应用</view>
     </view>
 
     <scroll-view scroll-y class="sheet-body">
@@ -159,11 +159,11 @@
           <view class="filter-opt {{draftFilters.scale==='all'?'filter-opt-on':''}}"
             bindtap="setDraftFilter" data-key="scale" data-val="all">全部</view>
           <view class="filter-opt {{draftFilters.scale==='large'?'filter-opt-on':''}}"
-            bindtap="setDraftFilter" data-key="scale" data-val="large">大型 &gt;50亿</view>
+            bindtap="setDraftFilter" data-key="scale" data-val="large">大型 >50亿</view>
           <view class="filter-opt {{draftFilters.scale==='mid'?'filter-opt-on':''}}"
             bindtap="setDraftFilter" data-key="scale" data-val="mid">中型 10–50亿</view>
           <view class="filter-opt {{draftFilters.scale==='small'?'filter-opt-on':''}}"
-            bindtap="setDraftFilter" data-key="scale" data-val="small">小型 &lt;10亿</view>
+            bindtap="setDraftFilter" data-key="scale" data-val="small">小型 ＜10亿</view>
         </view>
       </view>
 
@@ -174,11 +174,11 @@
           <view class="filter-opt {{draftFilters.premium==='all'?'filter-opt-on':''}}"
             bindtap="setDraftFilter" data-key="premium" data-val="all">全部</view>
           <view class="filter-opt {{draftFilters.premium==='safe'?'filter-opt-on':''}}"
-            bindtap="setDraftFilter" data-key="premium" data-val="safe">安全 &lt;1.5%</view>
+            bindtap="setDraftFilter" data-key="premium" data-val="safe">安全 ＜1.5%</view>
           <view class="filter-opt {{draftFilters.premium==='warn'?'filter-opt-on':''}}"
             bindtap="setDraftFilter" data-key="premium" data-val="warn">注意 1.5–3%</view>
           <view class="filter-opt {{draftFilters.premium==='danger'?'filter-opt-on':''}}"
-            bindtap="setDraftFilter" data-key="premium" data-val="danger">危险 &gt;3%</view>
+            bindtap="setDraftFilter" data-key="premium" data-val="danger">危险 >3%</view>
         </view>
       </view>
 
@@ -199,10 +199,4 @@
 
     </scroll-view>
 
-    <view class="sheet-footer">
-      <view class="sheet-reset" bindtap="resetFilters">重置</view>
-      <view class="sheet-apply" bindtap="applyFilters">应用筛选</view>
-    </view>
-
-  </view>
 </view>

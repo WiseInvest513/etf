@@ -11,13 +11,15 @@ const TABS = [
 
 // 排序选项（key_dir 格式）
 const SORT_OPTS_FUND = [
-  { val: 'ytd_return_desc', label: '近一年收益 高→低' },
-  { val: 'ytd_return_asc',  label: '近一年收益 低→高' },
-  { val: 'fee_rate_asc',    label: '费率 低→高'        },
-  { val: 'fee_rate_desc',   label: '费率 高→低'        },
-  { val: 'scale_desc',      label: '规模 大→小'        },
-  { val: 'scale_asc',       label: '规模 小→大'        },
-  { val: 'track_error_asc', label: '跟踪误差 低→高'    },
+  { val: 'ytd_return_desc',   label: '近一年收益 高→低' },
+  { val: 'ytd_return_asc',    label: '近一年收益 低→高' },
+  { val: 'fee_rate_asc',      label: '费率 低→高'        },
+  { val: 'fee_rate_desc',     label: '费率 高→低'        },
+  { val: 'scale_desc',        label: '规模 大→小'        },
+  { val: 'scale_asc',         label: '规模 小→大'        },
+  { val: 'track_error_asc',   label: '跟踪误差 低→高'    },
+  { val: 'daily_limit_asc',   label: '每日限额 低→高'    },
+  { val: 'daily_limit_desc',  label: '每日限额 高→低'    },
 ];
 const SORT_OPTS_ETF = [
   { val: 'ytd_return_desc', label: '近一年收益 高→低' },
@@ -173,11 +175,16 @@ Page({
       return sortDir === 'desc' ? bv - av : av - bv;
     });
 
-    // 附加展示字段
+    // 附加展示字段（含 daily_limit_num 供排序）
     result = result.map(f => {
       const ytd = f.ytd_return, prem = f.premium;
+      // 解析限额字符串 "10元"→10，"暂停申购"→99999
+      const limitStr = f.daily_limit || '';
+      const limitNum = limitStr === '暂停申购' ? 99999
+        : (parseFloat(limitStr) || 99999);
       return {
         ...f,
+        daily_limit_num: limitNum,
         category:     activeTab,
         isFavorite:   favSet.has(f.code),
         ytd_display:  ytd  != null ? (ytd  >= 0 ? '+' : '') + ytd.toFixed(2)  + '%' : '--',
@@ -187,6 +194,15 @@ Page({
         prem_danger:  prem != null && prem >= 5,
       };
     });
+
+    // daily_limit 排序需要在 map 之后重排（字段刚计算出来）
+    if (sortKey === 'daily_limit') {
+      result.sort((a, b) => {
+        return sortDir === 'desc'
+          ? b.daily_limit_num - a.daily_limit_num
+          : a.daily_limit_num - b.daily_limit_num;
+      });
+    }
 
     // 计算活跃筛选数量
     const activeFilterCount = Object.keys(filters)

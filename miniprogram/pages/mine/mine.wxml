@@ -2,39 +2,47 @@
 
   <!-- ── 用户信息卡片 ── -->
   <view class="user-card">
-    <view class="avatar">
-      <text class="avatar-icon">{{isLoggedIn ? '👤' : '👤'}}</text>
-    </view>
+
+    <!-- 头像（点击可更换） -->
+    <button class="avatar-btn" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
+      <image wx:if="{{avatarUrl}}" class="avatar-img" src="{{avatarUrl}}" mode="aspectFill"/>
+      <view wx:else class="avatar-placeholder">
+        <text class="avatar-icon">👤</text>
+      </view>
+      <view class="avatar-edit-badge">换</view>
+    </button>
+
     <view class="user-info">
+      <!-- 昵称 -->
+      <input
+        class="nickname-input"
+        type="nickname"
+        placeholder="点击设置昵称"
+        placeholder-style="color:#c0c0c5;font-size:28rpx"
+        value="{{nickName}}"
+        bindinput="onNickNameInput"
+      />
 
       <!-- 已登录 -->
       <block wx:if="{{isLoggedIn}}">
-        <view class="user-status">已登录</view>
         <view class="user-id">ID: {{openid}}</view>
-        <view class="user-sync">✓ 自选数据云端同步</view>
+        <view class="user-sync">✓ 自选数据已云端同步</view>
       </block>
 
       <!-- 登录中 -->
       <block wx:elif="{{loginState === 'loading'}}">
-        <view class="user-status user-status-gray">登录中...</view>
-        <view class="user-sub">正在连接微信账户</view>
+        <view class="user-sub">正在连接微信账户...</view>
       </block>
 
-      <!-- 登录失败 -->
-      <block wx:elif="{{loginState === 'fail'}}">
-        <view class="user-status user-status-gray">未登录</view>
-        <view class="user-sub">登录失败，自选仅本地保存</view>
-        <view class="retry-btn" bindtap="retryLogin">重新登录</view>
-      </block>
-
-      <!-- 初始状态 -->
+      <!-- 失败/未登录 -->
       <block wx:else>
-        <view class="user-status user-status-gray">未登录</view>
         <view class="user-sub">登录后可跨设备同步自选</view>
-        <view class="retry-btn" bindtap="retryLogin">微信一键登录</view>
+        <view class="retry-btn" bindtap="retryLogin">
+          {{loginState==='fail' ? '重新登录' : '微信一键登录'}}
+        </view>
       </block>
-
     </view>
+
   </view>
 
   <!-- ── 功能入口 ── -->
