@@ -178,10 +178,11 @@ Page({
     // 附加展示字段（含 daily_limit_num 供排序）
     result = result.map(f => {
       const ytd = f.ytd_return, prem = f.premium;
-      // 解析限额字符串 "10元"→10，"暂停申购"→99999
+      // 解析限额字符串："暂停申购"→-1（始终排末尾），"不限额"→999999，否则取数值
       const limitStr = f.daily_limit || '';
-      const limitNum = limitStr === '暂停申购' ? 99999
-        : (parseFloat(limitStr) || 99999);
+      const limitNum = limitStr === '暂停申购' ? -1
+        : limitStr === '不限额' ? 999999
+        : (parseFloat(limitStr) || 0);
       return {
         ...f,
         daily_limit_num: limitNum,
@@ -196,11 +197,14 @@ Page({
     });
 
     // daily_limit 排序需要在 map 之后重排（字段刚计算出来）
+    // 暂停申购（-1）始终排最后，不受升降序影响
     if (sortKey === 'daily_limit') {
       result.sort((a, b) => {
-        return sortDir === 'desc'
-          ? b.daily_limit_num - a.daily_limit_num
-          : a.daily_limit_num - b.daily_limit_num;
+        const av = a.daily_limit_num, bv = b.daily_limit_num;
+        if (av === -1 && bv === -1) return 0;
+        if (av === -1) return 1;   // a 是暂停申购，排后
+        if (bv === -1) return -1;  // b 是暂停申购，排后
+        return sortDir === 'desc' ? bv - av : av - bv;
       });
     }
 
