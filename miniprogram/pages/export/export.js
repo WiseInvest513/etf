@@ -255,25 +255,33 @@ Page({
 
   // 按限额排序（模仿 web byLimit）
   _byLimit(arr) {
+    if (!arr || !arr.length) return [];
     const parse = s => {
       if (!s || s === '暂停申购') return 0;
       if (s === '不限额') return 9999999;
       return parseFloat(s) || 0;
     };
-    return [...arr].sort((a, b) => parse(b.daily_limit) - parse(a.daily_limit));
+    return arr.slice().sort((a, b) => parse(b.daily_limit) - parse(a.daily_limit));
   },
 
   async generateAll() {
+    if (!this._fundData || !this._fundData.nasdaq) {
+      this._showToast('数据加载中，请稍后再试', false);
+      return;
+    }
     this.setData({ generating: true, images: [] });
     const date = new Date().toLocaleDateString('zh-CN', {
       year: 'numeric', month: '2-digit', day: '2-digit',
     }).replace(/\//g, '-');
 
-    const { nasdaq, sp500, active, etfs } = this._fundData;
+    const nasdaq = this._fundData.nasdaq || [];
+    const sp500  = this._fundData.sp500  || [];
+    const active = this._fundData.active || [];
+    const etfs   = this._fundData.etfs   || [];
     const tasks = [
       { title: '纳指被动基金',   cfg: buildNasdaqConfig(this._byLimit(nasdaq), date), id: 'canvas-nasdaq' },
       { title: '标普500基金',    cfg: buildSp500Config(this._byLimit(sp500), date),   id: 'canvas-sp500'  },
-      { title: '场内ETF对比',    cfg: buildEtfConfig([...etfs].sort((a,b)=>(b.scale||0)-(a.scale||0)), date), id: 'canvas-etf' },
+      { title: '场内ETF对比',    cfg: buildEtfConfig(etfs.slice().sort((a,b)=>(b.scale||0)-(a.scale||0)), date), id: 'canvas-etf' },
       { title: '美股主动型基金', cfg: buildActiveConfig(this._byLimit(active), date), id: 'canvas-active' },
     ];
 

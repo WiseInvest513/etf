@@ -16,26 +16,32 @@ const FB_MAP = {};
 });
 (FALLBACK.etfs || []).forEach(function(f) { FB_MAP[f.code] = f; });
 
-// 补全缺失字段：fallback 作为底层，收藏数据中已有的字段优先
+// 展示字段：这些字段不从收藏数据取，始终由原始数值重新计算
+var SKIP_DISPLAY = { ytd_display:1, ytd_positive:1, prem_display:1, prem_warn:1, prem_danger:1, daily_limit_num:1, isFavorite:1 };
+
+// 补全缺失字段：fallback 作为底层，收藏数据中的有效值优先
 function enrichFund(f) {
   var fb  = FB_MAP[f.code] || {};
   var out = {};
   // 先铺 fallback
   var fbKeys = Object.keys(fb);
   for (var i = 0; i < fbKeys.length; i++) { out[fbKeys[i]] = fb[fbKeys[i]]; }
-  // 再用收藏数据覆盖（只覆盖非 null/undefined 的值）
+  // 再用收藏数据覆盖（跳过展示字段、null、空字符串、占位符 '--'）
   var fKeys = Object.keys(f);
   for (var j = 0; j < fKeys.length; j++) {
-    if (f[fKeys[j]] != null) out[fKeys[j]] = f[fKeys[j]];
+    var k = fKeys[j], v = f[k];
+    if (SKIP_DISPLAY[k]) continue;
+    if (v === null || v === undefined || v === '' || v === '--') continue;
+    out[k] = v;
   }
-  // 补全展示字段
+  // 始终从原始数值重新计算展示字段
   var ytd  = out.ytd_return;
   var prem = out.premium;
-  if (!out.ytd_display)  out.ytd_display  = ytd  != null ? (ytd  >= 0 ? '+' : '') + ytd.toFixed(2)  + '%' : '--';
-  if (out.ytd_positive == null) out.ytd_positive = (ytd || 0) >= 0;
-  if (!out.prem_display) out.prem_display = prem != null ? prem.toFixed(2) + '%' : '--';
-  if (out.prem_warn  == null) out.prem_warn  = prem != null && prem >= 3;
-  if (out.prem_danger == null) out.prem_danger = prem != null && prem >= 5;
+  out.ytd_display  = ytd  != null ? (ytd  >= 0 ? '+' : '') + ytd.toFixed(2)  + '%' : '--';
+  out.ytd_positive = (ytd || 0) >= 0;
+  out.prem_display = prem != null ? prem.toFixed(2) + '%' : '--';
+  out.prem_warn    = prem != null && prem >= 3;
+  out.prem_danger  = prem != null && prem >= 5;
   return out;
 }
 
