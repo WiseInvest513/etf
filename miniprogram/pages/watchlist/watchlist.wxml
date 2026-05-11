@@ -2,7 +2,7 @@
 <view class="page">
 
   <!-- 空状态 -->
-  <view wx:if="{{favorites.length===0}}" class="empty-wrap">
+  <view wx:if="{{!loading && favorites.length===0}}" class="empty-wrap">
     <view class="empty-state">
       <text class="empty-icon">⭐</text>
       <text class="empty-title">还没有自选基金</text>
@@ -11,8 +11,13 @@
     </view>
   </view>
 
+  <!-- 加载中 -->
+  <view wx:elif="{{loading}}" class="loading-wrap">
+    <text class="loading-text">加载中...</text>
+  </view>
+
   <!-- 自选列表 -->
-  <view wx:else class="content">
+  <view wx:elif="{{grouped.length>0}}" class="content">
     <view class="total-line">
       <text class="total-text">共 {{favorites.length}} 只自选</text>
     </view>

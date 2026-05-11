@@ -87,6 +87,10 @@
 .badge-suspended { background: #fdecea; color: #d93025; }
 .badge-orange    { background: #fff3e0; color: #e65100; }
 
+/* ── Loading ── */
+.loading-wrap { display: flex; align-items: center; justify-content: center; height: 40vh; }
+.loading-text { font-size: 26rpx; color: #86868b; }
+
 /* ── Empty state ── */
 .empty-wrap {
   display: flex; align-items: center; justify-content: center;
