@@ -14,29 +14,85 @@
   <!-- 自选列表 -->
   <view wx:else class="content">
     <view class="total-line">
-      <text class="total-text">共 {{favorites.length}} 只</text>
-      <text class="hint-text">左滑可移除</text>
+      <text class="total-text">共 {{favorites.length}} 只自选</text>
     </view>
 
-    <!-- 按类别分组展示 -->
     <block wx:for="{{grouped}}" wx:key="catId">
       <view class="group-header">{{item.catLabel}}</view>
+
       <view
-        class="fav-card card"
+        class="fav-card"
         wx:for="{{item.items}}" wx:key="code"
         wx:for-item="fund"
-        wx:for-index="fi"
       >
-        <view class="fav-row">
-          <view class="fav-info">
-            <view class="fav-name">{{fund.name}}</view>
-            <view class="fav-code">{{fund.code}}</view>
+        <!-- 顶部：名称 + 年化收益 -->
+        <view class="card-top">
+          <view class="card-name-area">
+            <text class="fav-name">{{fund.name}}</text>
+            <view class="card-meta">
+              <text class="fav-code">{{fund.code}}</text>
+              <!-- 非ETF：显示申购状态 -->
+              <view wx:if="{{fund.category!=='etf'}}"
+                class="badge {{fund.buy_status==='open'?'badge-open':'badge-suspended'}}">
+                {{fund.buy_status==='open'?'可申购':'暂停'}}
+              </view>
+              <!-- ETF：显示溢价 -->
+              <view wx:else
+                class="badge {{fund.prem_danger?'badge-suspended':fund.prem_warn?'badge-orange':'badge-open'}}">
+                溢价 {{fund.prem_display}}
+              </view>
+            </view>
           </view>
+          <view class="card-ytd-area">
+            <text class="fav-ytd {{fund.ytd_positive?'text-green':'text-red'}}">{{fund.ytd_display}}</text>
+            <text class="ytd-label">近一年</text>
+          </view>
+        </view>
+
+        <!-- 分割线 -->
+        <view class="card-divider"/>
+
+        <!-- 底部：关键指标 + 删除 -->
+        <view class="card-stats">
+          <view class="stat-item">
+            <text class="stat-val">{{fund.fee_rate!=null?fund.fee_rate+'%':'—'}}</text>
+            <text class="stat-label">管理费</text>
+          </view>
+          <view class="stat-sep"/>
+          <view class="stat-item">
+            <text class="stat-val">{{fund.scale!=null?fund.scale+'亿':'—'}}</text>
+            <text class="stat-label">规模</text>
+          </view>
+          <view class="stat-sep"/>
+
+          <!-- 非ETF：跟踪差 + 限额 -->
+          <block wx:if="{{fund.category!=='etf'}}">
+            <view class="stat-item">
+              <text class="stat-val">{{fund.track_error!=null?fund.track_error+'%':'—'}}</text>
+              <text class="stat-label">跟踪差</text>
+            </view>
+            <view class="stat-sep"/>
+            <view class="stat-item stat-limit">
+              <text class="stat-val stat-val-sm" style="color:#ff9a00">{{fund.daily_limit||'—'}}</text>
+              <text class="stat-label">每日限额</text>
+            </view>
+          </block>
+
+          <!-- ETF：跟踪指数 -->
+          <block wx:else>
+            <view class="stat-item stat-index">
+              <text class="stat-val stat-val-sm">{{fund.tracking_index||'—'}}</text>
+              <text class="stat-label">跟踪指数</text>
+            </view>
+          </block>
+
+          <!-- 移除按钮 -->
           <view class="remove-btn" bindtap="removeFavorite" data-fund="{{fund}}">
             <text class="remove-icon">✕</text>
           </view>
         </view>
       </view>
+
     </block>
   </view>
 
