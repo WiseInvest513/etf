@@ -1,0 +1,208 @@
+<view class="page">
+
+  <!-- ── Sub-tabs ── -->
+  <view class="sub-tabs-bar">
+    <view class="sub-tabs-inner">
+      <view
+        wx:for="{{tabs}}" wx:key="id"
+        class="sub-tab {{activeTab===item.id?'active':''}}"
+        bindtap="switchTab" data-tab="{{item.id}}"
+      >{{item.label}}</view>
+    </view>
+  </view>
+
+  <!-- ── 搜索 + 工具栏 ── -->
+  <view class="toolbar-wrap">
+    <view class="search-row">
+      <view class="search-box">
+        <text class="s-icon">🔍</text>
+        <input class="s-input" placeholder="搜索名称或代码"
+          placeholder-style="color:#b0b0b5;font-size:26rpx"
+          value="{{searchQuery}}" bindinput="onSearch" confirm-type="search"/>
+        <view wx:if="{{searchQuery}}" class="s-clear" bindtap="clearSearch">✕</view>
+      </view>
+      <view class="filter-btn {{activeFilterCount>0?'filter-btn-on':''}}" bindtap="openSheet">
+        <text class="filter-icon">⚙</text>
+        <text class="filter-label">筛选</text>
+        <view wx:if="{{activeFilterCount>0}}" class="filter-badge">{{activeFilterCount}}</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- ── 列表区域 ── -->
+  <view class="list-wrap">
+
+    <block wx:if="{{loading}}">
+      <view class="skeleton-item" wx:for="{{[1,2,3,4,5,6,7,8]}}" wx:key="*this">
+        <view class="sk-left">
+          <view class="skeleton-row" style="width:68%;margin-bottom:12rpx"/>
+          <view class="skeleton-row" style="width:44%"/>
+        </view>
+        <view class="skeleton-row" style="width:90rpx;height:32rpx"/>
+      </view>
+    </block>
+
+    <block wx:else>
+      <view wx:if="{{displayData.length===0}}" class="empty-wrap">
+        <view class="empty-state">
+          <text class="empty-icon">🔍</text>
+          <text class="empty-title">没有匹配的结果</text>
+        </view>
+      </view>
+
+      <block wx:elif="{{activeTab!=='etf'}}">
+        <view class="fund-row" wx:for="{{displayData}}" wx:key="code"
+          bindtap="goDetail" data-fund="{{item}}">
+          <view class="row-left">
+            <text class="row-name">{{item.name}}</text>
+            <view class="row-sub">
+              <text class="row-code">{{item.code}}</text>
+              <view class="badge {{item.buy_status==='open'?'badge-open':'badge-suspended'}}">
+                {{item.buy_status==='open'?'可申购':'暂停'}}
+              </view>
+              <text class="row-limit">{{item.daily_limit}}</text>
+            </view>
+          </view>
+          <view class="row-right">
+            <text class="row-ytd {{item.ytd_positive?'text-green':'text-red'}}">{{item.ytd_display}}</text>
+            <view class="fav-btn" catchtap="toggleFavorite" data-fund="{{item}}">
+              <text class="fav-icon {{item.isFavorite?'fav-on':''}}">{{item.isFavorite?'★':'☆'}}</text>
+            </view>
+          </view>
+        </view>
+      </block>
+
+      <block wx:else>
+        <view class="fund-row" wx:for="{{displayData}}" wx:key="code"
+          bindtap="goDetail" data-fund="{{item}}">
+          <view class="row-left">
+            <text class="row-name">{{item.name}}</text>
+            <view class="row-sub">
+              <text class="row-code">{{item.code}}</text>
+              <view class="badge {{item.prem_danger?'badge-suspended':item.prem_warn?'badge-orange':'badge-open'}}">
+                溢价 {{item.prem_display}}
+              </view>
+              <text class="row-limit">{{item.tracking_index}}</text>
+            </view>
+          </view>
+          <view class="row-right">
+            <text class="row-ytd {{item.ytd_positive?'text-green':'text-red'}}">{{item.ytd_display}}</text>
+            <view class="fav-btn" catchtap="toggleFavorite" data-fund="{{item}}">
+              <text class="fav-icon {{item.isFavorite?'fav-on':''}}">{{item.isFavorite?'★':'☆'}}</text>
+            </view>
+          </view>
+        </view>
+      </block>
+    </block>
+
+  </view>
+
+  <view style="height:120rpx"/>
+</view>
+
+<!-- ── 筛选底部弹层（根级别，避免层级问题）── -->
+<view wx:if="{{sheetOpen}}" class="sheet-mask" bindtap="closeSheet"/>
+
+<view wx:if="{{sheetOpen}}" class="sheet">
+  <view catchtap="stopProp">
+
+    <view class="sheet-header">
+      <text class="sheet-title">筛选</text>
+      <view class="sheet-close" bindtap="closeSheet">✕</view>
+    </view>
+
+    <scroll-view scroll-y class="sheet-body">
+
+      <!-- 排序 -->
+      <view class="filter-section">
+        <text class="filter-sec-title">排序方式</text>
+        <view class="filter-opts-wrap">
+          <view wx:for="{{sortOpts}}" wx:key="val"
+            class="filter-opt {{draftFilters.sort===item.val?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="sort" data-val="{{item.val}}"
+          >{{item.label}}</view>
+        </view>
+      </view>
+
+      <!-- 申购状态（非ETF） -->
+      <view wx:if="{{activeTab!=='etf'}}" class="filter-section">
+        <text class="filter-sec-title">申购状态</text>
+        <view class="filter-opts-wrap">
+          <view class="filter-opt {{draftFilters.status==='all'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="status" data-val="all">全部</view>
+          <view class="filter-opt {{draftFilters.status==='open'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="status" data-val="open">可申购</view>
+          <view class="filter-opt {{draftFilters.status==='suspended'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="status" data-val="suspended">暂停申购</view>
+        </view>
+      </view>
+
+      <!-- 费率 -->
+      <view class="filter-section">
+        <text class="filter-sec-title">管理费率</text>
+        <view class="filter-opts-wrap">
+          <view class="filter-opt {{draftFilters.feeRate==='all'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="feeRate" data-val="all">全部</view>
+          <view class="filter-opt {{draftFilters.feeRate==='low'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="feeRate" data-val="low">低 ≤0.65%</view>
+          <view class="filter-opt {{draftFilters.feeRate==='mid'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="feeRate" data-val="mid">中 0.66–0.99%</view>
+          <view class="filter-opt {{draftFilters.feeRate==='high'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="feeRate" data-val="high">高 ≥1%</view>
+        </view>
+      </view>
+
+      <!-- 规模 -->
+      <view class="filter-section">
+        <text class="filter-sec-title">基金规模</text>
+        <view class="filter-opts-wrap">
+          <view class="filter-opt {{draftFilters.scale==='all'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="scale" data-val="all">全部</view>
+          <view class="filter-opt {{draftFilters.scale==='large'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="scale" data-val="large">大型 &gt;50亿</view>
+          <view class="filter-opt {{draftFilters.scale==='mid'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="scale" data-val="mid">中型 10–50亿</view>
+          <view class="filter-opt {{draftFilters.scale==='small'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="scale" data-val="small">小型 &lt;10亿</view>
+        </view>
+      </view>
+
+      <!-- ETF溢价率 -->
+      <view wx:if="{{activeTab==='etf'}}" class="filter-section">
+        <text class="filter-sec-title">溢价率</text>
+        <view class="filter-opts-wrap">
+          <view class="filter-opt {{draftFilters.premium==='all'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="premium" data-val="all">全部</view>
+          <view class="filter-opt {{draftFilters.premium==='safe'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="premium" data-val="safe">安全 &lt;1.5%</view>
+          <view class="filter-opt {{draftFilters.premium==='warn'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="premium" data-val="warn">注意 1.5–3%</view>
+          <view class="filter-opt {{draftFilters.premium==='danger'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="premium" data-val="danger">危险 &gt;3%</view>
+        </view>
+      </view>
+
+      <!-- ETF跟踪指数 -->
+      <view wx:if="{{activeTab==='etf'}}" class="filter-section">
+        <text class="filter-sec-title">跟踪指数</text>
+        <view class="filter-opts-wrap">
+          <view class="filter-opt {{draftFilters.trackIndex==='all'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="trackIndex" data-val="all">全部</view>
+          <view class="filter-opt {{draftFilters.trackIndex==='nasdaq100'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="trackIndex" data-val="nasdaq100">纳斯达克100</view>
+          <view class="filter-opt {{draftFilters.trackIndex==='sp500'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="trackIndex" data-val="sp500">标普500</view>
+          <view class="filter-opt {{draftFilters.trackIndex==='tech'?'filter-opt-on':''}}"
+            bindtap="setDraftFilter" data-key="trackIndex" data-val="tech">科技</view>
+        </view>
+      </view>
+
+    </scroll-view>
+
+    <view class="sheet-footer">
+      <view class="sheet-reset" bindtap="resetFilters">重置</view>
+      <view class="sheet-apply" bindtap="applyFilters">应用筛选</view>
+    </view>
+
+  </view>
+</view>

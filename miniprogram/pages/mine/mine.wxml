@@ -1,0 +1,71 @@
+<view class="page">
+
+  <!-- ── 用户信息卡片 ── -->
+  <view class="user-card">
+    <view class="avatar">
+      <text class="avatar-icon">{{isLoggedIn ? '👤' : '👤'}}</text>
+    </view>
+    <view class="user-info">
+
+      <!-- 已登录 -->
+      <block wx:if="{{isLoggedIn}}">
+        <view class="user-status">已登录</view>
+        <view class="user-id">ID: {{openid}}</view>
+        <view class="user-sync">✓ 自选数据云端同步</view>
+      </block>
+
+      <!-- 登录中 -->
+      <block wx:elif="{{loginState === 'loading'}}">
+        <view class="user-status user-status-gray">登录中...</view>
+        <view class="user-sub">正在连接微信账户</view>
+      </block>
+
+      <!-- 登录失败 -->
+      <block wx:elif="{{loginState === 'fail'}}">
+        <view class="user-status user-status-gray">未登录</view>
+        <view class="user-sub">登录失败，自选仅本地保存</view>
+        <view class="retry-btn" bindtap="retryLogin">重新登录</view>
+      </block>
+
+      <!-- 初始状态 -->
+      <block wx:else>
+        <view class="user-status user-status-gray">未登录</view>
+        <view class="user-sub">登录后可跨设备同步自选</view>
+        <view class="retry-btn" bindtap="retryLogin">微信一键登录</view>
+      </block>
+
+    </view>
+  </view>
+
+  <!-- ── 功能入口 ── -->
+  <view class="menu-section">
+    <view class="menu-item" bindtap="goWatchlist">
+      <view class="menu-left">
+        <text class="menu-icon">⭐</text>
+        <text class="menu-label">我的自选</text>
+      </view>
+      <view class="menu-right">
+        <text class="menu-count" wx:if="{{favCount>0}}">{{favCount}}只</text>
+        <text class="menu-arrow">›</text>
+      </view>
+    </view>
+
+    <view class="menu-item" bindtap="goExport">
+      <view class="menu-left">
+        <text class="menu-icon">📊</text>
+        <text class="menu-label">导出数据图</text>
+      </view>
+      <view class="menu-right">
+        <text class="menu-sub">生成4张数据图</text>
+        <text class="menu-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- ── 免责声明 ── -->
+  <view class="disclaimer">
+    <text class="disclaimer-text">本应用数据仅供参考，不构成任何投资建议。投资有风险，入市须谨慎。</text>
+  </view>
+
+  <view style="height:120rpx"/>
+</view>

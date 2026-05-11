@@ -1,0 +1,95 @@
+<!-- pages/lazy-detail/lazy-detail.wxml -->
+<view class="page" wx:if="{{p}}">
+
+  <!-- ── 顶部色条 Header ── -->
+  <view class="hero" style="border-top: 8rpx solid {{p.color}}">
+    <view class="hero-name">{{p.name}}</view>
+    <view class="hero-en">{{p.nameEn}} · by {{p.author}}</view>
+    <view class="hero-desc">{{p.desc}}</view>
+  </view>
+
+  <!-- ── 关键指标卡片 ── -->
+  <view class="section-card card">
+    <view class="section-title">关键指标（2017–2025）</view>
+    <view class="metrics-grid">
+      <view class="metric-item">
+        <text class="mval {{p.cagr>=0?'text-green':'text-red'}}">{{p.cagr>=0?'+':''}}{{p.cagr}}%</text>
+        <text class="mlabel">年化收益 CAGR</text>
+      </view>
+      <view class="metric-item">
+        <text class="mval text-red">{{p.maxDrawdown}}%</text>
+        <text class="mlabel">最大回撤</text>
+      </view>
+      <view class="metric-item">
+        <text class="mval">{{p.sharpe}}</text>
+        <text class="mlabel">夏普比率</text>
+      </view>
+      <view class="metric-item">
+        <text class="mval">{{p.sortino}}</text>
+        <text class="mlabel">索提诺比率</text>
+      </view>
+      <view class="metric-item">
+        <text class="mval">{{p.volatility}}%</text>
+        <text class="mlabel">年化波动率</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- ── 资产配置（环形图 + 图例） ── -->
+  <view class="section-card card">
+    <view class="section-title">资产配置</view>
+
+    <!-- 环形图 -->
+    <view class="pie-wrap">
+      <canvas type="2d" id="allocPie" class="pie-canvas"/>
+    </view>
+
+    <!-- 图例 -->
+    <view class="legend-wrap">
+      <view wx:for="{{allocsLabeled}}" wx:key="ticker" class="legend-item">
+        <view class="legend-dot" style="background:{{item.color}}"/>
+        <text class="legend-ticker">{{item.ticker}}</text>
+        <text class="legend-label">{{item.labelShort}}</text>
+        <text class="legend-pct">{{item.pct}}%</text>
+      </view>
+    </view>
+
+    <!-- 条形列表 -->
+    <view class="alloc-divider"/>
+    <view wx:for="{{allocsLabeled}}" wx:key="ticker" class="alloc-row">
+      <view class="alloc-left">
+        <text class="alloc-ticker" style="color:{{item.color}}">{{item.ticker}}</text>
+        <text class="alloc-label">{{item.labelShort}}</text>
+      </view>
+      <view class="alloc-right">
+        <view class="alloc-bar-track">
+          <view class="alloc-bar-fill" style="width:{{item.pct}}%;background:{{item.color}}"/>
+        </view>
+        <text class="alloc-pct">{{item.pct}}%</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- ── 逐年收益 ── -->
+  <view class="section-card card">
+    <view class="section-title">逐年收益</view>
+    <view wx:for="{{yearReturns}}" wx:key="year" class="year-row">
+      <text class="year-label">{{item.year}}</text>
+      <view class="bar-wrap">
+        <view
+          class="bar-fill"
+          style="width:{{item.barW}}rpx;background:{{item.positive?'#1a9e4a':'#d93025'}}"
+        />
+      </view>
+      <text class="year-ret {{item.positive?'text-green':'text-red'}}">{{item.display}}</text>
+    </view>
+  </view>
+
+  <!-- ── 详细介绍 ── -->
+  <view class="section-card card">
+    <view class="section-title">组合解析</view>
+    <view wx:for="{{p.longDesc}}" wx:key="*this" class="long-desc-para">{{item}}</view>
+  </view>
+
+  <view style="height:60rpx"/>
+</view>

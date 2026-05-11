@@ -1792,3 +1792,90 @@ def get_market_ai_insight(response: Response):
     _cache_header(response, 86400)
     return {"data": result, "source": "live" if insights else "empty"}
 
+
+# ─── 微信小程序：登录 & 用户收藏 ──────────────────────────────────────────────
+
+from pydantic import BaseModel
+
+class WxLoginBody(BaseModel):
+    code: str
+
+class FavoritesBody(BaseModel):
+    openid: str
+    favorites: list
+
+@app.post("/api/wx/login")
+def wx_login(body: WxLoginBody):
+    """微信 code 换 openid（服务端保存 session_key，前端只拿 openid）"""
+    appid  = os.environ.get("WX_APPID")
+    secret = os.environ.get("WX_SECRET")
+    if not appid or not secret:
+        return {"error": "wx credentials not configured"}, 500
+
+    resp = _get(
+        "https://api.weixin.qq.com/sns/jscode2session",
+        params={
+            "appid":      appid,
+            "secret":     secret,
+            "js_code":    body.code,
+            "grant_type": "authorization_code",
+        },
+        timeout=(3, 5),
+    )
+    if not resp or not resp.ok:
+        return {"error": "weixin api failed"}
+
+    data = resp.json()
+    if "errcode" in data and data["errcode"] != 0:
+        logger.warning(f"[wx_login] errcode={data['errcode']} errmsg={data.get('errmsg')}")
+        return {"error": data.get("errmsg", "wx login failed")}
+
+    openid      = data.get("openid")
+    session_key = data.get("session_key", "")
+
+    # 将 session_key 存入 Redis（TTL 2小时），openid 返回给前端
+    if openid:
+        r = _get_redis()
+        if r:
+            try:
+                r.set(f"wx:session:{openid}", session_key, ex=7200)
+            except Exception as e:
+                logger.warning(f"[wx_login] redis set session: {e}")
+
+    return {"openid": openid}
+
+
+@app.get("/api/user/favorites")
+def get_favorites(openid: str, response: Response):
+    """获取用户收藏列表"""
+    if not openid:
+        return {"favorites": []}
+    r = _get_redis()
+    if not r:
+        return {"favorites": []}
+    try:
+        raw = r.get(f"user:favorites:{openid}")
+        if raw:
+            return {"favorites": json.loads(raw) if isinstance(raw, str) else raw}
+    except Exception as e:
+        logger.warning(f"[favorites:get] {e}")
+    return {"favorites": []}
+
+
+@app.post("/api/user/favorites")
+def save_favorites(body: FavoritesBody, response: Response):
+    """保存用户收藏列表"""
+    r = _get_redis()
+    if not r:
+        return {"ok": False, "reason": "redis unavailable"}
+    try:
+        r.set(
+            f"user:favorites:{body.openid}",
+            json.dumps(body.favorites, ensure_ascii=False),
+            ex=90 * 24 * 3600,   # 90天 TTL
+        )
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"[favorites:save] {e}")
+        return {"ok": False, "reason": str(e)}
+

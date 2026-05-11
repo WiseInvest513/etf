@@ -1,0 +1,55 @@
+/* pages/watchlist/watchlist.wxss */
+.page { min-height: 100vh; background: #f5f5f7; }
+
+.content { padding: 20rpx 24rpx 0; }
+
+.total-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8rpx 4rpx 12rpx;
+}
+.total-text { font-size: 24rpx; color: #86868b; }
+.hint-text  { font-size: 22rpx; color: #b0b0b5; }
+
+.group-header {
+  font-size: 24rpx;
+  font-weight: 700;
+  color: #0071e3;
+  padding: 16rpx 4rpx 10rpx;
+  letter-spacing: 0.5rpx;
+}
+
+.fav-card {
+  padding: 24rpx 28rpx;
+  margin-bottom: 14rpx;
+  border: 1rpx solid #f0f0f5;
+}
+.fav-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+.fav-info  { flex: 1; }
+.fav-name  {
+  font-size: 27rpx;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin-bottom: 6rpx;
+  line-height: 1.35;
+}
+.fav-code  { font-size: 22rpx; color: #86868b; font-family: monospace; }
+
+.remove-btn  { padding: 10rpx 8rpx; }
+.remove-icon { font-size: 28rpx; color: #c8c8d0; }
+
+/* Go to market btn */
+.go-btn {
+  margin-top: 24rpx;
+  background: #0071e3;
+  color: #fff;
+  padding: 22rpx 64rpx;
+  border-radius: 100rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+}

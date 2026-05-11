@@ -1,0 +1,33 @@
+{
+  "pages": [
+    "pages/market/market",
+    "pages/watchlist/watchlist",
+    "pages/lazy/lazy",
+    "pages/lazy-detail/lazy-detail",
+    "pages/mine/mine",
+    "pages/fund-detail/fund-detail",
+    "pages/export/export"
+  ],
+  "tabBar": {
+    "custom": true,
+    "color": "#86868b",
+    "selectedColor": "#0071e3",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/market/market",      "text": "行情"    },
+      { "pagePath": "pages/watchlist/watchlist", "text": "自选"    },
+      { "pagePath": "pages/lazy/lazy",           "text": "懒人组合" },
+      { "pagePath": "pages/mine/mine",           "text": "我的"    }
+    ]
+  },
+  "window": {
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "WiseETF",
+    "backgroundColor": "#f5f5f7",
+    "backgroundTextStyle": "light"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

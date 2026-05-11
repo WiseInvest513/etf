@@ -1,0 +1,75 @@
+/* ── Global Styles ─────────────────────────────────────────────────────────── */
+page {
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  box-sizing: border-box;
+}
+
+/* ── Card ──────────────────────────────────────────────────────────────────── */
+.card {
+  background: #ffffff;
+  border-radius: 16rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.06);
+}
+
+/* ── Color Utilities ───────────────────────────────────────────────────────── */
+.text-green  { color: #1a9e4a; }
+.text-red    { color: #d93025; }
+.text-orange { color: #c4570a; }
+.text-muted  { color: #86868b; }
+.text-accent { color: #0071e3; }
+
+/* ── Badge ─────────────────────────────────────────────────────────────────── */
+.badge {
+  border-radius: 8rpx;
+  padding: 4rpx 12rpx;
+  font-size: 20rpx;
+  font-weight: 600;
+}
+.badge-open {
+  background: rgba(26, 158, 74, 0.1);
+  color: #1a9e4a;
+}
+.badge-suspended {
+  background: rgba(217, 48, 37, 0.08);
+  color: #d93025;
+}
+.badge-orange {
+  background: rgba(196, 87, 10, 0.1);
+  color: #c4570a;
+}
+.badge-blue {
+  background: rgba(0, 113, 227, 0.1);
+  color: #0071e3;
+}
+
+/* ── Skeleton Loading ──────────────────────────────────────────────────────── */
+.skeleton-row {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 8rpx;
+  height: 28rpx;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Empty State ───────────────────────────────────────────────────────────── */
+.empty-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 55vh;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16rpx;
+}
+.empty-icon  { font-size: 80rpx; }
+.empty-title { font-size: 32rpx; font-weight: 600; color: #1d1d1f; }
+.empty-sub   { font-size: 26rpx; color: #86868b; text-align: center; }

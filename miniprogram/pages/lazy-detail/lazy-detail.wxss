@@ -1,0 +1,129 @@
+/* pages/lazy-detail/lazy-detail.wxss */
+.page { background: #f5f5f7; min-height: 100vh; }
+
+/* ── Hero ── */
+.hero {
+  background: #fff;
+  padding: 28rpx 28rpx 24rpx;
+  margin-bottom: 16rpx;
+}
+.hero-name { font-size: 36rpx; font-weight: 800; color: #1d1d1f; margin-bottom: 6rpx; }
+.hero-en   { font-size: 24rpx; color: #86868b; margin-bottom: 16rpx; }
+.hero-desc { font-size: 27rpx; color: #3d3d42; line-height: 1.6; }
+
+/* ── Section card ── */
+.section-card {
+  margin: 0 24rpx 16rpx;
+  padding: 24rpx 28rpx;
+  border: 1rpx solid #f0f0f5;
+}
+.section-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #1d1d1f;
+  margin-bottom: 20rpx;
+}
+
+/* ── Metrics grid ── */
+.metrics-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20rpx;
+}
+.metric-item {
+  flex: 1;
+  min-width: 120rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #f8f8fa;
+  border-radius: 12rpx;
+  padding: 16rpx 8rpx;
+  gap: 6rpx;
+}
+.mval   { font-size: 28rpx; font-weight: 700; color: #1d1d1f; }
+.mlabel { font-size: 20rpx; color: #86868b; text-align: center; }
+
+/* ── Pie chart ── */
+.pie-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20rpx;
+}
+.pie-canvas {
+  width: 280rpx;
+  height: 280rpx;
+}
+
+/* ── Legend ── */
+.legend-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx 24rpx;
+  margin-bottom: 24rpx;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+.legend-dot {
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.legend-ticker { font-size: 22rpx; font-weight: 700; color: #1d1d1f; }
+.legend-label  { font-size: 20rpx; color: #86868b; }
+.legend-pct    { font-size: 22rpx; font-weight: 600; color: #1d1d1f; margin-left: 4rpx; }
+
+.alloc-divider { height: 1rpx; background: #f0f0f5; margin-bottom: 12rpx; }
+
+/* ── Alloc rows ── */
+.alloc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12rpx 0;
+  border-bottom: 1rpx solid #f5f5f7;
+}
+.alloc-left  { display: flex; align-items: center; gap: 12rpx; flex: 0 0 auto; }
+.alloc-ticker{ font-size: 24rpx; font-weight: 700; min-width: 70rpx; }
+.alloc-label { font-size: 22rpx; color: #86868b; }
+.alloc-right {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex: 1;
+  justify-content: flex-end;
+}
+.alloc-bar-track {
+  width: 160rpx;
+  height: 10rpx;
+  background: #f0f0f5;
+  border-radius: 5rpx;
+  overflow: hidden;
+}
+.alloc-bar-fill { height: 100%; border-radius: 5rpx; }
+.alloc-pct { font-size: 24rpx; font-weight: 600; color: #1d1d1f; min-width: 60rpx; text-align: right; }
+
+/* ── Year returns ── */
+.year-row {
+  display: flex;
+  align-items: center;
+  padding: 10rpx 0;
+  gap: 12rpx;
+  border-bottom: 1rpx solid #f5f5f7;
+}
+.year-label { font-size: 24rpx; color: #86868b; min-width: 80rpx; }
+.bar-wrap   { flex: 1; display: flex; align-items: center; }
+.bar-fill   { height: 14rpx; border-radius: 7rpx; min-width: 4rpx; }
+.year-ret   { font-size: 24rpx; font-weight: 600; min-width: 90rpx; text-align: right; }
+
+/* ── Long desc ── */
+.long-desc-para {
+  font-size: 26rpx;
+  color: #3d3d42;
+  line-height: 1.75;
+  margin-bottom: 18rpx;
+}

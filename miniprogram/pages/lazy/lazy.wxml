@@ -1,0 +1,69 @@
+<!-- pages/lazy/lazy.wxml -->
+<view class="page">
+  <view class="header-tip">共 {{portfolios.length}} 个经典懒人组合 · 点击查看详情</view>
+
+  <view class="list">
+    <view
+      class="portfolio-card card"
+      wx:for="{{portfolios}}" wx:key="id"
+      bindtap="goDetail"
+      data-id="{{item.id}}"
+    >
+      <!-- 左侧色条 -->
+      <view class="color-bar" style="background:{{item.color}}"/>
+
+      <view class="card-body">
+        <!-- 名称行 -->
+        <view class="name-row">
+          <view class="port-name">{{item.name}}</view>
+          <view class="port-name-en">{{item.nameEn}}</view>
+        </view>
+        <view class="author-text">by {{item.author}}</view>
+
+        <!-- 关键指标 -->
+        <view class="metrics-row">
+          <view class="metric">
+            <text class="metric-val {{item.cagr>=0?'text-green':'text-red'}}">{{item.cagr>=0?'+':''}}{{item.cagr}}%</text>
+            <text class="metric-label">年化收益</text>
+          </view>
+          <view class="metric-divider"/>
+          <view class="metric">
+            <text class="metric-val text-red">{{item.maxDrawdown}}%</text>
+            <text class="metric-label">最大回撤</text>
+          </view>
+          <view class="metric-divider"/>
+          <view class="metric">
+            <text class="metric-val" style="color:#1d1d1f">{{item.sharpe}}</text>
+            <text class="metric-label">夏普比率</text>
+          </view>
+          <view class="metric-divider"/>
+          <view class="metric">
+            <text class="metric-val" style="color:#1d1d1f">{{item.volatility}}%</text>
+            <text class="metric-label">年波动率</text>
+          </view>
+        </view>
+
+        <!-- 简介 -->
+        <view class="port-desc">{{item.desc}}</view>
+
+        <!-- 持仓 pills -->
+        <view class="alloc-row">
+          <view
+            class="alloc-pill"
+            wx:for="{{item.allocs}}" wx:key="*this"
+            wx:for-item="a"
+            style="background:{{item.color}}18;border-color:{{item.color}}40"
+          >
+            <text class="alloc-ticker" style="color:{{item.color}}">{{a[0]}}</text>
+            <text class="alloc-pct">{{a[1]}}%</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 箭头 -->
+      <view class="arrow">›</view>
+    </view>
+  </view>
+
+  <view style="height:120rpx"/>
+</view>

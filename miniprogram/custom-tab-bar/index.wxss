@@ -1,0 +1,62 @@
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  background: #fff;
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 100;
+}
+
+.tabbar-border {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1rpx;
+  background: #e8e8ed;
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 14rpx 0 10rpx;
+  position: relative;
+}
+
+/* 顶部选中指示条 */
+.tab-indicator {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 4rpx;
+  background: #0071e3;
+  border-radius: 0 0 4rpx 4rpx;
+  transition: width 0.2s ease;
+}
+.indicator-on {
+  width: 40rpx;
+}
+
+.tab-icon {
+  font-size: 40rpx;
+  line-height: 1;
+  margin-bottom: 6rpx;
+  color: #86868b;
+  transition: all 0.2s;
+}
+
+.tab-label {
+  font-size: 22rpx;
+  color: #86868b;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+/* 选中态 */
+.tab-active .tab-icon  { color: #0071e3; }
+.tab-active .tab-label { color: #0071e3; font-weight: 700; }

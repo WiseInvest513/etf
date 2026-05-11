@@ -1,0 +1,44 @@
+<!-- pages/watchlist/watchlist.wxml -->
+<view class="page">
+
+  <!-- 空状态 -->
+  <view wx:if="{{favorites.length===0}}" class="empty-wrap">
+    <view class="empty-state">
+      <text class="empty-icon">⭐</text>
+      <text class="empty-title">还没有自选基金</text>
+      <text class="empty-sub">在行情页点 ☆ 添加关注</text>
+      <view class="go-btn" bindtap="goToMarket">去行情页</view>
+    </view>
+  </view>
+
+  <!-- 自选列表 -->
+  <view wx:else class="content">
+    <view class="total-line">
+      <text class="total-text">共 {{favorites.length}} 只</text>
+      <text class="hint-text">左滑可移除</text>
+    </view>
+
+    <!-- 按类别分组展示 -->
+    <block wx:for="{{grouped}}" wx:key="catId">
+      <view class="group-header">{{item.catLabel}}</view>
+      <view
+        class="fav-card card"
+        wx:for="{{item.items}}" wx:key="code"
+        wx:for-item="fund"
+        wx:for-index="fi"
+      >
+        <view class="fav-row">
+          <view class="fav-info">
+            <view class="fav-name">{{fund.name}}</view>
+            <view class="fav-code">{{fund.code}}</view>
+          </view>
+          <view class="remove-btn" bindtap="removeFavorite" data-fund="{{fund}}">
+            <text class="remove-icon">✕</text>
+          </view>
+        </view>
+      </view>
+    </block>
+  </view>
+
+  <view style="height:120rpx"/>
+</view>

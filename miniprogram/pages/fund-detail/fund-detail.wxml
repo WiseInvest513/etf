@@ -1,0 +1,92 @@
+<view class="page" wx:if="{{fund}}">
+
+  <!-- ── 顶部：名称 + 收益 ── -->
+  <view class="hero">
+    <view class="hero-main">
+      <view class="hero-name">{{fund.name}}</view>
+      <view class="hero-code">{{fund.code}}</view>
+    </view>
+    <view class="hero-right">
+      <view class="hero-ytd {{fund.ytd_positive?'text-green':'text-red'}}">{{fund.ytd_display}}</view>
+      <view class="hero-ytd-label">近一年收益</view>
+    </view>
+  </view>
+
+  <!-- ── 关键数据 ── -->
+  <view class="section card">
+    <view class="section-title">基金信息</view>
+
+    <!-- 场外基金 -->
+    <block wx:if="{{!isEtf}}">
+      <view class="info-row">
+        <text class="info-key">管理费率</text>
+        <text class="info-val">{{fund.fee_rate}}% / 年</text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">基金规模</text>
+        <text class="info-val">{{fund.scale}} 亿元</text>
+      </view>
+      <view class="info-row" wx:if="{{fund.track_error}}">
+        <text class="info-key">跟踪误差</text>
+        <text class="info-val">{{fund.track_error}}%</text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">每日限额</text>
+        <text class="info-val text-orange">{{fund.daily_limit}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">申购状态</text>
+        <view class="badge {{fund.buy_status==='open'?'badge-open':'badge-suspended'}}">
+          {{fund.buy_status==='open'?'可申购':'暂停申购'}}
+        </view>
+      </view>
+    </block>
+
+    <!-- 场内ETF -->
+    <block wx:else>
+      <view class="info-row">
+        <text class="info-key">跟踪指数</text>
+        <text class="info-val">{{fund.tracking_index}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">管理费率</text>
+        <text class="info-val">{{fund.fee_rate}}% / 年</text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">基金规模</text>
+        <text class="info-val">{{fund.scale}} 亿元</text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">实时溢价率</text>
+        <text class="info-val {{fund.prem_danger?'text-red':fund.prem_warn?'text-orange':'text-green'}}">
+          {{fund.prem_display}}
+        </text>
+      </view>
+      <view class="info-row">
+        <text class="info-key">今日成交额</text>
+        <text class="info-val">{{fund.volume}} 亿元</text>
+      </view>
+      <view class="info-row" wx:if="{{fund.track_error}}">
+        <text class="info-key">跟踪误差</text>
+        <text class="info-val">{{fund.track_error}}%</text>
+      </view>
+    </block>
+  </view>
+
+  <!-- ── 溢价说明（ETF专属）── -->
+  <view wx:if="{{isEtf}}" class="tip-card">
+    <text class="tip-title">溢价率说明</text>
+    <text class="tip-text">溢价 &lt; 1%：正常，可正常买入</text>
+    <text class="tip-text">溢价 1~2%：偏高，考虑买场外联接</text>
+    <text class="tip-text">溢价 &gt; 3%：极高，强烈建议等待收窄</text>
+  </view>
+
+  <!-- ── 收藏按钮 ── -->
+  <view class="fav-section" bindtap="toggleFavorite">
+    <view class="fav-big-btn {{fund.isFavorite?'fav-on':''}}">
+      <text class="fav-big-icon">{{fund.isFavorite?'★':'☆'}}</text>
+      <text class="fav-big-text">{{fund.isFavorite?'已加自选':'加入自选'}}</text>
+    </view>
+  </view>
+
+</view>
