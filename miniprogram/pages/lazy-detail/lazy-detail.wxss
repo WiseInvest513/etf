@@ -64,6 +64,7 @@
 .pie-canvas {
   width: 260rpx;
   height: 260rpx;
+  border: none;
 }
 
 /* ── Alloc rows（合并：色点 + ticker + 标签 + bar + 百分比）── */
