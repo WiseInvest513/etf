@@ -1,21 +1,31 @@
 /* pages/lazy-detail/lazy-detail.wxss */
-.page { background: #f5f5f7; min-height: 100vh; }
+.page { background: #f0f2f5; min-height: 100vh; }
 
 /* ── Hero ── */
 .hero {
-  background: #fff;
-  padding: 28rpx 28rpx 24rpx;
-  margin-bottom: 16rpx;
+  padding: 48rpx 32rpx 40rpx;
+  margin-bottom: 0;
 }
-.hero-name { font-size: 36rpx; font-weight: 800; color: #1d1d1f; margin-bottom: 6rpx; }
-.hero-en   { font-size: 24rpx; color: #86868b; margin-bottom: 16rpx; }
-.hero-desc { font-size: 27rpx; color: #3d3d42; line-height: 1.6; }
+.hero-tag {
+  display: inline-flex;
+  align-items: center;
+  border: 1rpx solid;
+  border-radius: 100rpx;
+  padding: 6rpx 20rpx;
+  margin-bottom: 18rpx;
+}
+.hero-tag-text { font-size: 22rpx; font-weight: 600; letter-spacing: 0.5rpx; }
+.hero-name   { font-size: 40rpx; font-weight: 800; color: #fff; margin-bottom: 8rpx; }
+.hero-author { font-size: 23rpx; color: rgba(255,255,255,0.5); margin-bottom: 20rpx; }
+.hero-desc   { font-size: 27rpx; color: rgba(255,255,255,0.75); line-height: 1.65; }
 
 /* ── Section card ── */
 .section-card {
-  margin: 0 24rpx 16rpx;
-  padding: 24rpx 28rpx;
-  border: 1rpx solid #f0f0f5;
+  margin: 16rpx 20rpx 0;
+  padding: 28rpx 24rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.05);
 }
 .section-title {
   font-size: 28rpx;
@@ -23,22 +33,23 @@
   color: #1d1d1f;
   margin-bottom: 20rpx;
 }
+.section-sub { font-size: 22rpx; font-weight: 400; color: #86868b; margin-left: 8rpx; }
 
 /* ── Metrics grid ── */
 .metrics-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 20rpx;
+  gap: 14rpx;
 }
 .metric-item {
   flex: 1;
-  min-width: 120rpx;
+  min-width: 100rpx;
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #f8f8fa;
-  border-radius: 12rpx;
-  padding: 16rpx 8rpx;
+  background: #f5f5f7;
+  border-radius: 14rpx;
+  padding: 18rpx 8rpx 14rpx;
   gap: 6rpx;
 }
 .mval   { font-size: 28rpx; font-weight: 700; color: #1d1d1f; }
@@ -48,64 +59,60 @@
 .pie-wrap {
   display: flex;
   justify-content: center;
-  margin-bottom: 20rpx;
-}
-.pie-canvas {
-  width: 280rpx;
-  height: 280rpx;
-}
-
-/* ── Legend ── */
-.legend-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx 24rpx;
   margin-bottom: 24rpx;
 }
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 8rpx;
+.pie-canvas {
+  width: 260rpx;
+  height: 260rpx;
 }
-.legend-dot {
-  width: 18rpx;
-  height: 18rpx;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.legend-ticker { font-size: 22rpx; font-weight: 700; color: #1d1d1f; }
-.legend-label  { font-size: 20rpx; color: #86868b; }
-.legend-pct    { font-size: 22rpx; font-weight: 600; color: #1d1d1f; margin-left: 4rpx; }
 
-.alloc-divider { height: 1rpx; background: #f0f0f5; margin-bottom: 12rpx; }
-
-/* ── Alloc rows ── */
+/* ── Alloc rows（合并：色点 + ticker + 标签 + bar + 百分比）── */
 .alloc-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12rpx 0;
+  padding: 14rpx 0;
   border-bottom: 1rpx solid #f5f5f7;
+  gap: 10rpx;
 }
-.alloc-left  { display: flex; align-items: center; gap: 12rpx; flex: 0 0 auto; }
-.alloc-ticker{ font-size: 24rpx; font-weight: 700; min-width: 70rpx; }
-.alloc-label { font-size: 22rpx; color: #86868b; }
-.alloc-right {
-  display: flex;
-  align-items: center;
-  gap: 12rpx;
+.alloc-row:last-child { border-bottom: none; }
+
+.alloc-dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.alloc-ticker {
+  font-size: 23rpx;
+  font-weight: 700;
+  min-width: 60rpx;
+  flex-shrink: 0;
+}
+.alloc-label {
+  font-size: 21rpx;
+  color: #86868b;
   flex: 1;
-  justify-content: flex-end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .alloc-bar-track {
-  width: 160rpx;
-  height: 10rpx;
+  width: 120rpx;
+  height: 8rpx;
   background: #f0f0f5;
-  border-radius: 5rpx;
+  border-radius: 4rpx;
   overflow: hidden;
+  flex-shrink: 0;
 }
-.alloc-bar-fill { height: 100%; border-radius: 5rpx; }
-.alloc-pct { font-size: 24rpx; font-weight: 600; color: #1d1d1f; min-width: 60rpx; text-align: right; }
+.alloc-bar-fill { height: 100%; border-radius: 4rpx; }
+.alloc-pct {
+  font-size: 23rpx;
+  font-weight: 600;
+  color: #1d1d1f;
+  min-width: 52rpx;
+  text-align: right;
+  flex-shrink: 0;
+}
 
 /* ── Year returns ── */
 .year-row {
@@ -115,6 +122,7 @@
   gap: 12rpx;
   border-bottom: 1rpx solid #f5f5f7;
 }
+.year-row:last-child { border-bottom: none; }
 .year-label { font-size: 24rpx; color: #86868b; min-width: 80rpx; }
 .bar-wrap   { flex: 1; display: flex; align-items: center; }
 .bar-fill   { height: 14rpx; border-radius: 7rpx; min-width: 4rpx; }
@@ -127,3 +135,8 @@
   line-height: 1.75;
   margin-bottom: 18rpx;
 }
+.long-desc-para:last-child { margin-bottom: 0; }
+
+/* ── Colors ── */
+.text-green { color: #1a9e4a; }
+.text-red   { color: #d93025; }
