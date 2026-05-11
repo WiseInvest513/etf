@@ -3,61 +3,39 @@ const app = getApp();
 
 Page({
   data: {
-    isLoggedIn: false,
-    loginState: 'idle',
-    openid:     '',
-    favCount:   0,
-    avatarUrl:  '',
-    nickName:   '',
+    avatarUrl: '',
+    nickName:  '',
+    favCount:  0,
   },
 
-  onLoad()  { this._refresh(); },
-  onShow()  {
+  onLoad() { this._refresh(); },
+  onShow() {
     this._refresh();
     if (typeof this.getTabBar === 'function' && this.getTabBar()) {
       this.getTabBar().setData({ selected: 3 });
     }
   },
 
-  onFavoritesChange() { this._refresh(); },
-
   _refresh() {
-    const { isLoggedIn, openid, favorites, loginState } = app.globalData;
-    const avatarUrl = wx.getStorageSync('wise_avatar') || '';
-    const nickName  = wx.getStorageSync('wise_nickname') || '';
     this.setData({
-      isLoggedIn, loginState,
-      openid:   openid ? openid.slice(0, 6) + '****' : '',
-      favCount: favorites.length,
-      avatarUrl, nickName,
+      avatarUrl: wx.getStorageSync('wise_avatar')   || '',
+      nickName:  wx.getStorageSync('wise_nickname') || '',
+      favCount:  app.globalData.favorites.length,
     });
   },
 
-  // 微信头像选择（需用户主动点击按钮）
+  // 微信头像（用户点击后系统自动提供）
   onChooseAvatar(e) {
-    const avatarUrl = e.detail.avatarUrl;
-    wx.setStorageSync('wise_avatar', avatarUrl);
-    this.setData({ avatarUrl });
+    const url = e.detail.avatarUrl;
+    wx.setStorageSync('wise_avatar', url);
+    this.setData({ avatarUrl: url });
   },
 
-  // 修改昵称
+  // 微信昵称（type="nickname" 输入框会自动填充）
   onNickNameInput(e) {
-    const nickName = e.detail.value;
-    wx.setStorageSync('wise_nickname', nickName);
-    this.setData({ nickName });
-  },
-
-  retryLogin() {
-    app.doLogin();
-    const self = this;
-    var count = 0;
-    var timer = setInterval(function() {
-      self._refresh();
-      count++;
-      if (app.globalData.loginState !== 'loading' || count > 10) {
-        clearInterval(timer);
-      }
-    }, 600);
+    const name = e.detail.value;
+    wx.setStorageSync('wise_nickname', name);
+    this.setData({ nickName: name });
   },
 
   goWatchlist() { wx.switchTab({ url: '/pages/watchlist/watchlist' }); },

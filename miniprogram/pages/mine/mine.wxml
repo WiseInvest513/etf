@@ -1,51 +1,26 @@
+<!-- pages/mine/mine.wxml -->
 <view class="page">
 
-  <!-- ── 用户信息卡片 ── -->
-  <view class="user-card">
-
-    <!-- 头像（点击可更换） -->
+  <!-- ── 个人信息 Banner ── -->
+  <view class="profile-banner">
     <button class="avatar-btn" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
       <image wx:if="{{avatarUrl}}" class="avatar-img" src="{{avatarUrl}}" mode="aspectFill"/>
-      <view wx:else class="avatar-placeholder">
-        <text class="avatar-icon">👤</text>
+      <view wx:else class="avatar-empty">
+        <text class="avatar-empty-icon">👤</text>
+        <text class="avatar-hint">点击头像</text>
       </view>
-      <view class="avatar-edit-badge">换</view>
     </button>
-
-    <view class="user-info">
-      <!-- 昵称 -->
-      <input
-        class="nickname-input"
-        type="nickname"
-        placeholder="点击设置昵称"
-        placeholder-style="color:#c0c0c5;font-size:28rpx"
-        value="{{nickName}}"
-        bindinput="onNickNameInput"
-      />
-
-      <!-- 已登录 -->
-      <block wx:if="{{isLoggedIn}}">
-        <view class="user-id">ID: {{openid}}</view>
-        <view class="user-sync">✓ 自选数据已云端同步</view>
-      </block>
-
-      <!-- 登录中 -->
-      <block wx:elif="{{loginState === 'loading'}}">
-        <view class="user-sub">正在连接微信账户...</view>
-      </block>
-
-      <!-- 失败/未登录 -->
-      <block wx:else>
-        <view class="user-sub">登录后可跨设备同步自选</view>
-        <view class="retry-btn" bindtap="retryLogin">
-          {{loginState==='fail' ? '重新登录' : '微信一键登录'}}
-        </view>
-      </block>
-    </view>
-
+    <input
+      class="nickname-input"
+      type="nickname"
+      placeholder="点击设置昵称"
+      placeholder-style="color:rgba(255,255,255,0.4);font-size:30rpx;font-weight:600"
+      value="{{nickName}}"
+      bindinput="onNickNameInput"
+    />
   </view>
 
-  <!-- ── 功能入口 ── -->
+  <!-- ── 功能菜单 ── -->
   <view class="menu-section">
     <view class="menu-item" bindtap="goWatchlist">
       <view class="menu-left">
@@ -57,7 +32,6 @@
         <text class="menu-arrow">›</text>
       </view>
     </view>
-
     <view class="menu-item" bindtap="goExport">
       <view class="menu-left">
         <text class="menu-icon">📊</text>

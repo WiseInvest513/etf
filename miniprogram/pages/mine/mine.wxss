@@ -1,76 +1,69 @@
-.page { background: #f5f5f7; min-height: 100vh; }
+/* pages/mine/mine.wxss */
+.page { background: #f0f2f5; min-height: 100vh; }
 
-/* ── User card ── */
-.user-card {
-  background: #fff;
-  display: flex; align-items: center; gap: 24rpx;
-  padding: 36rpx 28rpx;
-  margin-bottom: 20rpx;
+/* ── Profile Banner ── */
+.profile-banner {
+  background: linear-gradient(135deg, #0a1628 0%, #1a2d4a 100%);
+  padding: 52rpx 40rpx 48rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20rpx;
 }
 
 /* 头像按钮 */
 .avatar-btn {
-  position: relative;
-  width: 112rpx; height: 112rpx;
+  width: 140rpx; height: 140rpx;
   border-radius: 50%;
   padding: 0; margin: 0;
   background: transparent;
-  flex-shrink: 0;
   line-height: 1;
 }
 .avatar-btn::after { border: none; }
+
 .avatar-img {
-  width: 112rpx; height: 112rpx;
+  width: 140rpx; height: 140rpx;
   border-radius: 50%;
   display: block;
+  border: 4rpx solid rgba(255,255,255,0.25);
 }
-.avatar-placeholder {
-  width: 112rpx; height: 112rpx; border-radius: 50%;
-  background: #f0f0f5;
-  display: flex; align-items: center; justify-content: center;
+.avatar-empty {
+  width: 140rpx; height: 140rpx;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  border: 2rpx dashed rgba(255,255,255,0.3);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4rpx;
 }
-.avatar-icon { font-size: 54rpx; }
-.avatar-edit-badge {
-  position: absolute; bottom: 0; right: 0;
-  background: #0071e3; color: #fff;
-  font-size: 18rpx; font-weight: 700;
-  width: 36rpx; height: 36rpx; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  border: 3rpx solid #fff;
-}
+.avatar-empty-icon { font-size: 48rpx; }
+.avatar-hint { font-size: 18rpx; color: rgba(255,255,255,0.5); }
 
-/* 用户信息 */
-.user-info { flex: 1; min-width: 0; }
+/* 昵称 */
 .nickname-input {
-  font-size: 30rpx; font-weight: 700; color: #1d1d1f;
-  margin-bottom: 8rpx; display: block;
-  width: 100%;
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  width: 400rpx;
 }
-.user-id   { font-size: 22rpx; color: #86868b; font-family: monospace; margin-bottom: 4rpx; }
-.user-sync { font-size: 22rpx; color: #34c759; }
-.user-sub  { font-size: 24rpx; color: #86868b; margin-bottom: 12rpx; }
-.retry-btn {
-  display: inline-block;
-  padding: 10rpx 24rpx;
-  background: #0071e3; color: #fff;
-  font-size: 24rpx; font-weight: 600;
-  border-radius: 100rpx;
-}
-.retry-btn:active { opacity: 0.8; }
 
 /* ── Menu ── */
 .menu-section {
-  background: #fff; border-radius: 16rpx;
-  margin: 0 24rpx 20rpx; overflow: hidden;
+  background: #fff;
+  border-radius: 20rpx;
+  margin: 20rpx 20rpx 16rpx;
+  overflow: hidden;
+  box-shadow: 0 2rpx 12rpx rgba(0,0,0,0.05);
 }
 .menu-item {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 28rpx 24rpx;
+  padding: 30rpx 28rpx;
   border-bottom: 1rpx solid #f5f5f7;
 }
 .menu-item:last-child { border-bottom: none; }
 .menu-item:active { background: #f8f8fa; }
-.menu-left  { display: flex; align-items: center; gap: 16rpx; }
+.menu-left  { display: flex; align-items: center; gap: 18rpx; }
 .menu-icon  { font-size: 36rpx; }
 .menu-label { font-size: 29rpx; font-weight: 600; color: #1d1d1f; }
 .menu-right { display: flex; align-items: center; gap: 8rpx; }
@@ -79,5 +72,10 @@
 .menu-arrow { font-size: 36rpx; color: #c8c8d0; }
 
 /* ── Disclaimer ── */
-.disclaimer { margin: 0 24rpx; padding: 20rpx; background: rgba(0,0,0,0.03); border-radius: 12rpx; }
+.disclaimer {
+  margin: 0 20rpx;
+  padding: 20rpx;
+  background: rgba(0,0,0,0.03);
+  border-radius: 12rpx;
+}
 .disclaimer-text { font-size: 22rpx; color: #b0b0b5; line-height: 1.6; }
