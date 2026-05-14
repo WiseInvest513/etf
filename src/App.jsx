@@ -4390,8 +4390,8 @@ export default function App() {
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[
-                {label:"纳指均涨幅",value:`+${avg(nasdaq,"ytd_return")}%`,sub:"近一年",color:C.accent},
-                {label:"标普均涨幅",value:`+${avg(sp500,"ytd_return")}%`,sub:"近一年",color:C.cyan},
+                {label:"纳指涨幅",value:sentiment?.ndx_price?.returns?.yr1!=null?`+${sentiment.ndx_price.returns.yr1}%`:`+${avg(nasdaq,"ytd_return")}%`,sub:"近一年",color:C.accent},
+                {label:"标普涨幅",value:sentiment?.spx_price?.returns?.yr1!=null?`+${sentiment.spx_price.returns.yr1}%`:`+${avg(sp500,"ytd_return")}%`,sub:"近一年",color:C.cyan},
                 {label:"主动均涨幅",value:`+${avg(active,"ytd_return")}%`,sub:"近一年",color:C.purple},
                 {label:"ETF均溢价",value:`${avg(etfs,"premium")}%`,sub:"当前",color:C.orange},
                 {label:"监控总数",value:String(totalFunds),sub:`${openFunds}只可申购`,color:C.green},
