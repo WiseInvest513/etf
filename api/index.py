@@ -1917,7 +1917,23 @@ QDII_CODES = [f["code"] for f in STATIC_FUNDS["us_active"]]
 
 # ─── SQLite ───────────────────────────────────────────────────────────────────
 
-_DB_PATH = _Path(__file__).parent.parent / "wise_etf.db"
+_SEED_DB_PATH = _Path(__file__).parent.parent / "wise_etf.db"
+
+def _get_db_path() -> _Path:
+    """Vercel 部署目录只读，写操作走 /tmp；本地开发直接用项目根目录。"""
+    if os.environ.get("VERCEL"):
+        tmp = _Path("/tmp/wise_etf.db")
+        if not tmp.exists() and _SEED_DB_PATH.exists():
+            import shutil
+            try:
+                shutil.copy2(str(_SEED_DB_PATH), str(tmp))
+                logger.info("[db] copied seed db to /tmp/wise_etf.db")
+            except Exception as e:
+                logger.warning(f"[db] seed copy failed: {e}")
+        return tmp
+    return _SEED_DB_PATH
+
+_DB_PATH = _get_db_path()
 
 @_ctx
 def _db():
@@ -1972,7 +1988,10 @@ def _init_qdii_tables():
         );
         """)
 
-_init_qdii_tables()
+try:
+    _init_qdii_tables()
+except Exception as _e:
+    logger.warning(f"[db] init tables failed (non-fatal): {_e}")
 
 
 def _db_save_holdings(fund_code: str, holdings: list, report_date: str = ""):
