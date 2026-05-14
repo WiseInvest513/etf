@@ -1298,6 +1298,93 @@ function GroupChatModal({onClose}) {
   );
 }
 
+function GalaxyCard({isMobile}) {
+  const C = useColors();
+  const [showWx, setShowWx] = React.useState(false);
+  const fees = [
+    {label:"ETF / LOF",  value:"万0.5，1毛起",  highlight:true,  note:"免五"},
+    {label:"股票",        value:"万0.86，5元起",  highlight:false, note:"50万↑万0.8"},
+    {label:"可转债",      value:"万0.5",          highlight:false, note:"沪0.1元/深0.2元起"},
+    {label:"北交所",      value:"万2",            highlight:false, note:""},
+    {label:"港股通",      value:"万0.8",          highlight:false, note:"不免五"},
+    {label:"国债逆回购",  value:"1折",            highlight:false, note:"500万以上0.1折"},
+    {label:"LOF申购/赎回",value:"1折 / 5折",      highlight:false, note:""},
+  ];
+  return (
+    <>
+    <Card style={{padding:"22px 24px",border:`1.5px solid #e8400020`,position:"relative",overflow:"hidden"}}>
+      {/* 编辑推荐 badge */}
+      <div style={{position:"absolute",top:0,right:0,background:"linear-gradient(135deg,#e84000,#ff6a00)",color:"#fff",fontSize:10,fontWeight:700,padding:"4px 12px",borderBottomLeftRadius:10,letterSpacing:0.5}}>
+        编辑推荐
+      </div>
+
+      {/* 头部 */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <div style={{width:36,height:36,borderRadius:10,background:"#e8400015",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏦</div>
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF · A股账户</div>
+          <div style={{fontSize:11,color:C.textDim}}>人民币买入 · 无需外汇额度 · 银河证券</div>
+        </div>
+      </div>
+
+      {/* 永久免五 横幅 */}
+      <div style={{background:"linear-gradient(135deg,#e8400012,#ff6a0008)",border:"1.5px solid #e8400030",borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:900,color:"#e84000",letterSpacing:-0.5}}>永久免五</div>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>入金 1.5 万放 2 个月，ETF 永久免五</div>
+        </div>
+        <button onClick={()=>setShowWx(true)}
+          style={{flexShrink:0,padding:"9px 18px",borderRadius:20,border:"none",background:"linear-gradient(135deg,#e84000,#ff6a00)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",boxShadow:"0 4px 12px #e8400040"}}>
+          立即领取 →
+        </button>
+      </div>
+
+      {/* 费率表 */}
+      <div style={{display:"flex",flexDirection:"column",gap:0,marginBottom:14,borderRadius:10,overflow:"hidden",border:`1px solid ${C.border}`}}>
+        {fees.map((f,i)=>(
+          <div key={f.label} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 12px",background:f.highlight?"#e8400008":i%2===0?C.bg:C.bgAlt,borderBottom:i<fees.length-1?`1px solid ${C.border}30`:"none"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              {f.highlight&&<span style={{fontSize:9,fontWeight:700,color:"#e84000",background:"#e8400015",padding:"1px 5px",borderRadius:4}}>免五</span>}
+              <span style={{fontSize:12,color:f.highlight?C.text:C.textMuted,fontWeight:f.highlight?700:400}}>{f.label}</span>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <span style={{fontSize:12,fontWeight:700,color:f.highlight?"#e84000":C.text}}>{f.value}</span>
+              {f.note&&<span style={{fontSize:10,color:C.textDim,marginLeft:4}}>({f.note})</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{padding:"9px 12px",borderRadius:10,background:C.accent+"10",border:`1px solid ${C.accent}25`,fontSize:11,color:C.textDim}}>
+        ⚠️ 建议关注溢价率，本站「场内ETF」标签页实时监控
+      </div>
+    </Card>
+
+    {/* 微信弹窗 */}
+    {showWx&&(
+      <div onClick={()=>setShowWx(false)}
+        style={{position:"fixed",inset:0,zIndex:2000,background:"rgba(0,0,0,0.55)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div onClick={e=>e.stopPropagation()}
+          style={{background:"#fff",borderRadius:20,padding:"28px 28px 20px",maxWidth:340,width:"100%",boxShadow:"0 24px 80px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",alignItems:"center",gap:4,animation:"fadeInUp 0.25s ease both"}}>
+          <button onClick={()=>setShowWx(false)}
+            style={{position:"absolute",marginLeft:"auto",alignSelf:"flex-end",background:"none",border:"none",fontSize:20,color:"#999",cursor:"pointer",lineHeight:1}}>✕</button>
+          <div style={{fontSize:16,fontWeight:800,color:"#1d1d1f",marginBottom:2,textAlign:"center"}}>添加微信，获取专属开户支持</div>
+          <div style={{fontSize:12,color:"#6e6e73",textAlign:"center",marginBottom:12,lineHeight:1.6}}>
+            扫码添加好友，发送「银河证券」<br/>即可获取专属开户费率协助
+          </div>
+          <div style={{borderRadius:16,overflow:"hidden",border:"1px solid #e5e5ea",width:"100%"}}>
+            <img src="/wx_personal.png" alt="微信二维码"
+              style={{width:"100%",height:"auto",display:"block"}}
+              onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
+          </div>
+          <div style={{fontSize:12,color:"#6e6e73",marginTop:8,textAlign:"center"}}>长按或扫码识别二维码</div>
+        </div>
+      </div>
+    )}
+    </>
+  );
+}
+
 function DisclaimerModal({onClose}) {
   return (
     <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -2566,28 +2653,7 @@ function GuideTab({isMobile}) {
             <span style={{fontSize:12,fontWeight:700,color:C.green,whiteSpace:"nowrap",marginLeft:12}}>查看教程 →</span>
           </a>
         </Card>
-        <Card style={{padding:"22px 24px",border:`1px solid ${C.accent}30`}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-            <div style={{width:36,height:36,borderRadius:10,background:C.accent+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏦</div>
-            <div>
-              <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF · A股账户</div>
-              <div style={{fontSize:11,color:C.textDim}}>人民币买入 · 无需外汇额度</div>
-            </div>
-          </div>
-          <div style={{fontSize:12,color:C.textMuted,lineHeight:1.7,marginBottom:14}}>
-            在国内券商开通股票账户后，即可直接以人民币买入 513100（纳指）、513500（标普）等场内ETF。注意关注溢价率，避免在高溢价时追入。
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
-            {["华泰证券：交易费率低，App流畅","东方财富：天天基金同体系，操作简便","广发证券：场内ETF研究报告丰富"].map((t,i)=>(
-              <div key={i} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.textMuted}}>
-                <span style={{color:C.accent,fontWeight:700}}>·</span>{t}
-              </div>
-            ))}
-          </div>
-          <div style={{padding:"10px 14px",borderRadius:10,background:C.accent+"10",border:`1px solid ${C.accent}25`,fontSize:11,color:C.textDim}}>
-            ⚠️ 建议关注溢价率，本站「场内ETF」标签页实时监控
-          </div>
-        </Card>
+        <GalaxyCard isMobile={isMobile}/>
       </div>
 
       <div style={{padding:"14px 18px",borderRadius:12,background:C.bgAlt,border:`1px solid ${C.border}`,fontSize:11,color:C.textDim,lineHeight:1.7,marginBottom:8}}>
