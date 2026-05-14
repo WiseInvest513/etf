@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line, LineChart, PieChart, Pie, Cell } from "recharts";
 import { Analytics } from "@vercel/analytics/react";
 import LazyPage from "./LazyPage.jsx";
+import QDIIPage from "./QDIIPage.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 async function apiFetch(path) {
@@ -2605,6 +2606,7 @@ const TABS=[
   {id:"active",    label:"美股主动"},
   {id:"watchlist", label:"自选"},
   {id:"lazy",      label:"懒人组合", href:"/lazy"},
+  {id:"qdii",      label:"估值",     href:"/qdii"},
   {id:"export",    label:"导出数据", href:"/export"},
 ];
 
@@ -3871,6 +3873,7 @@ export default function App() {
   if(window.location.pathname==="/admin") return <AdminPage/>;
   if(window.location.pathname==="/export") return <ReportPage/>;
   if(window.location.pathname==="/lazy") return <LazyPage/>;
+  if(window.location.pathname==="/qdii") return <QDIIPage/>;
 
   const getInitialTab = () => {
     const path = window.location.pathname.replace(/^\//, "");
@@ -4324,7 +4327,7 @@ export default function App() {
         </div>
         {/* Mobile dropdown menu */}
         {mobileMenuOpen&&(
-          <div className="mobile-menu" style={{borderTop:`1px solid ${C.border}`,background:C.card,backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)"}}>
+          <div className="mobile-menu" style={{borderTop:`1px solid ${C.border}`,background:C.card,backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",pointerEvents:"auto"}}>
             {TABS.map(tab=>(
               tab.href
                 ? <a key={tab.id} href={tab.href}

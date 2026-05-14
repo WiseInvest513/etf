@@ -91,6 +91,16 @@ def _cache_set(key: str, data: any, ttl: int):
     except Exception as e:
         logger.warning(f"[redis:set] {key}: {e}")
 
+def _cache_delete(key: str):
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        r.delete(key)
+        logger.info(f"[redis] del {key}")
+    except Exception as e:
+        logger.warning(f"[redis:del] {key}: {e}")
+
 def _mem_get(key: str, kind: str) -> Optional[any]:
     return _cache_get(key)
 
@@ -158,7 +168,6 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"270023","name":"广发全球精选股票(QDII)A","fee_rate":1.40,"scale":104.5,"ytd_return":32.39,"daily_limit":"5000元","buy_status":"open"},
         {"code":"008253","name":"华宝致远混合(QDII)A","fee_rate":1.40,"scale":1.7,"ytd_return":47.82,"daily_limit":"3000元","buy_status":"open"},
         {"code":"017436","name":"华宝纳斯达克精选股票(QDII)A","fee_rate":1.40,"scale":46.2,"ytd_return":26.08,"daily_limit":"3000元","buy_status":"open"},
-        {"code":"501312","name":"华宝海外科技股票(QDII-FOF-LOF)A","fee_rate":1.20,"scale":8.1,"ytd_return":31.04,"daily_limit":"2000元","buy_status":"open"},
         {"code":"501226","name":"长城全球新能源汽车股票(QDII-LOF)A","fee_rate":1.40,"scale":4.7,"ytd_return":48.21,"daily_limit":"不限额","buy_status":"open"},
         {"code":"006555","name":"浦银安盛全球智能科技股票(QDII)A","fee_rate":1.40,"scale":8.7,"ytd_return":43.81,"daily_limit":"3000元","buy_status":"open"},
         {"code":"017730","name":"嘉实全球产业升级股票(QDII)A","fee_rate":1.40,"scale":7.2,"ytd_return":75.36,"daily_limit":"100元","buy_status":"open"},
@@ -167,9 +176,22 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"012920","name":"易方达全球成长精选混合(QDII)A","fee_rate":1.40,"scale":28.3,"ytd_return":107.95,"daily_limit":"50元","buy_status":"open"},
         {"code":"539002","name":"建信新兴市场优选混合(QDII)A","fee_rate":1.40,"scale":4.6,"ytd_return":92.11,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"001668","name":"汇添富全球移动互联混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":43.29,"daily_limit":"5000元","buy_status":"open"},
-        {"code":"016664","name":"天弘全球高端制造混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":168.72,"daily_limit":"100元","buy_status":"open"},
         {"code":"002891","name":"华夏移动互联灵活配置混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":120.50,"daily_limit":"5000元","buy_status":"open"},
         {"code":"457001","name":"国富亚洲机会股票(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":143.79,"daily_limit":"200元","buy_status":"open"},
+        # ── 新增主题型主动 QDII ──
+        {"code":"004877","name":"汇添富全球医疗混合(QDII)人民币","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"006308","name":"汇添富全球消费混合(QDII)人民币A","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"006309","name":"汇添富全球消费混合(QDII)人民币C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"018155","name":"创金合信全球医药生物股票发起式(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"018156","name":"创金合信全球医药生物股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        # ── C 类份额补全 ──
+        {"code":"017437","name":"华宝纳斯达克精选股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"017731","name":"嘉实全球产业升级股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"022184","name":"富国全球科技互联网股票(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"016702","name":"银华海外数字经济量化选股混合(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"016823","name":"天弘全球新能源汽车股票(QDII-LOF)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"018036","name":"长城全球新能源车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"017145","name":"华宝海外新能源汽车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
     ],
 }
 
@@ -1879,3 +1901,882 @@ def save_favorites(body: FavoritesBody, response: Response):
         logger.warning(f"[favorites:save] {e}")
         return {"ok": False, "reason": str(e)}
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# QDII 估值模块
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import html as _html_mod
+import random as _random
+import sqlite3 as _sqlite3
+from pathlib import Path as _Path
+from contextlib import contextmanager as _ctx
+
+# 所有主动 QDII 基金代码（与前端 QDII_FUNDS 同步）
+QDII_CODES = [f["code"] for f in STATIC_FUNDS["us_active"]]
+
+# ─── SQLite ───────────────────────────────────────────────────────────────────
+
+_DB_PATH = _Path(__file__).parent.parent / "wise_etf.db"
+
+@_ctx
+def _db():
+    conn = _sqlite3.connect(str(_DB_PATH))
+    conn.row_factory = _sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+def _init_qdii_tables():
+    with _db() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS qdii_holdings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_code   TEXT NOT NULL,
+            report_date TEXT,
+            symbol      TEXT NOT NULL,
+            name        TEXT,
+            weight      REAL,
+            updated_at  TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uix_qdii_holdings
+            ON qdii_holdings(fund_code, symbol, report_date);
+
+        CREATE TABLE IF NOT EXISTS qdii_stock_prices (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol      TEXT NOT NULL,
+            date        TEXT NOT NULL,
+            change_pct  REAL,
+            updated_at  TEXT,
+            UNIQUE(symbol, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS qdii_valuations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_code   TEXT NOT NULL,
+            date        TEXT NOT NULL,
+            valuation   REAL,
+            coverage    REAL,
+            fx_change   REAL,
+            created_at  TEXT,
+            UNIQUE(fund_code, date)
+        );
+        """)
+
+_init_qdii_tables()
+
+
+def _db_save_holdings(fund_code: str, holdings: list, report_date: str = ""):
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _db() as conn:
+        for h in holdings:
+            conn.execute("""
+                INSERT INTO qdii_holdings(fund_code, report_date, symbol, name, weight, updated_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(fund_code, symbol, report_date) DO UPDATE SET
+                    name=excluded.name, weight=excluded.weight, updated_at=excluded.updated_at
+            """, (fund_code, report_date, h["symbol"], h["name"], h["weight"], now))
+
+
+def _db_save_stock_prices(stock_cache: dict, date: str):
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _db() as conn:
+        for sym, pct in stock_cache.items():
+            if pct is not None:
+                conn.execute("""
+                    INSERT INTO qdii_stock_prices(symbol, date, change_pct, updated_at)
+                    VALUES(?,?,?,?)
+                    ON CONFLICT(symbol, date) DO UPDATE SET
+                        change_pct=excluded.change_pct, updated_at=excluded.updated_at
+                """, (sym, date, pct, now))
+
+
+def _db_save_valuations(results: list, date: str):
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _db() as conn:
+        for r in results:
+            if r["valuation"] is not None:
+                conn.execute("""
+                    INSERT INTO qdii_valuations(fund_code, date, valuation, coverage, fx_change, created_at)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(fund_code, date) DO UPDATE SET
+                        valuation=excluded.valuation, coverage=excluded.coverage,
+                        fx_change=excluded.fx_change, created_at=excluded.created_at
+                """, (r["code"], date, r["valuation"], r["coverage"], r["fx_change"], now))
+
+# 缓存 TTL
+_HOLDINGS_TTL   = 24 * 3600   # 季报持仓，每天刷一次
+_STOCK_CHG_TTL  = 20 * 3600   # 个股涨跌幅，盘后固定
+
+def _current_session() -> str:
+    """返回当前市场时段：'cn' A股/港股, 'us' 美股, 'closed' 盘后/周末"""
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    if now.weekday() >= 5:
+        return "closed"
+    h = now.hour + now.minute / 60.0
+    if 1.5 <= h < 7.0:    return "cn"   # 北京 09:30-15:00
+    if 13.5 <= h < 21.0:  return "us"   # 美东 09:30-17:00
+    return "closed"
+
+def _valuation_ttl() -> int:
+    """开盘时段 15min，盘后 6h，周末 24h。"""
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    if now.weekday() >= 5:
+        return 24 * 3600
+    h = now.hour + now.minute / 60
+    if (1.5 <= h < 7.0) or (13.5 <= h < 21.0):
+        return 15 * 60
+    return 6 * 3600
+
+_VALUATION_TTL  = 20 * 3600   # 持仓数据写 DB 时用，实际缓存由 _valuation_ttl() 决定
+
+
+# ─── 持仓抓取（多层次策略）─────────────────────────────────────────────────────
+
+def _strip_tags(s: str) -> str:
+    return re.sub(r'<[^>]+>', '', s).strip()
+
+
+# 东方财富 unify/r/{id}.{code} 中的数字市场 ID → Yahoo Finance 后缀
+# 实测：0=深交所 1=上交所 105=NASDAQ 106=NYSE 116=港交所
+_EM_ID_TO_YF: dict[str, str] = {
+    "0":   "SZ",   # 深交所（主板/创业板/科创板）
+    "1":   "SS",   # 上交所
+    "116": "HK",   # 港交所
+    # 200-299 范围通常为其他境外交易所，遇到再补充
+}
+# 美股市场 ID（直接用代码，不加后缀）
+_EM_US_IDS = {"105", "106", "107", "74"}
+
+def _map_em_id_to_yahoo(market_id: str, code: str) -> str:
+    """根据东方财富数字市场 ID 转换为 Yahoo Finance symbol"""
+    if market_id in _EM_US_IDS:
+        return code.upper()
+    if market_id in _EM_ID_TO_YF:
+        suffix = _EM_ID_TO_YF[market_id]
+        if suffix == "HK":
+            try: return f"{int(code)}.HK"
+            except ValueError: return f"{code}.HK"
+        return f"{code}.{suffix}"
+    # 未知 ID：按代码位数+首位启发式推断
+    return _normalize_symbol(code)
+
+def _normalize_symbol(raw: str) -> str:
+    """无市场 ID 时的兜底：纯数字按首位+位数推断交易所"""
+    raw = raw.strip()
+    if not raw:
+        return raw
+    if raw.isdigit():
+        n, head = len(raw), raw[0]
+        if n == 6:
+            if head == "6": return f"{raw}.SS"   # 上交所 600xxx/603xxx/688xxx
+            if head == "3": return f"{raw}.SZ"   # 创业板 300xxx/301xxx
+            return f"{raw}.KS"                   # 其余6位优先当韩股
+        if n == 4: return f"{raw}.TW"            # 台股
+        return f"{int(raw)}.HK"                  # 港股
+    return raw
+
+
+def _parse_em_holdings_table(html: str) -> list:
+    """
+    解析东方财富持仓 HTML 表格，动态检测权重列。
+    季报: 序号|代码|名称|最新价|涨跌幅|相关资讯|占净值%|持股数|持仓市值
+    年报/半年报: 序号|代码|名称|相关资讯|占净值%|持股数|持仓市值（列数不同）
+    只解析最大的那个表格（完整持仓），忽略其他小表格（历史季报 top-10）。
+    """
+    # 提取所有表格内容，取行数最多（即最完整）的那张
+    tables = re.findall(r'<table[^>]*>(.*?)</table>', html, re.DOTALL)
+    if not tables:
+        return []
+    target = max(tables, key=lambda t: len(re.findall(r'<tr[^>]*>', t)))
+
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', target, re.DOTALL)
+    holdings = []
+    for row in rows:
+        raw_cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+        cells = [_strip_tags(c) for c in raw_cells]
+        if len(cells) < 4:
+            continue
+        sym_raw  = cells[1] if len(cells) > 1 else ""
+        name_raw = cells[2] if len(cells) > 2 else ""
+        if not sym_raw:
+            continue
+        # 从代码列 HTML 中提取 unify/r/{id}.{code} 精准映射交易所
+        symbol = sym_raw  # 默认用文本内容
+        if len(raw_cells) > 1:
+            mu = re.search(r'unify/r/(\d+)\.([^\'\" <>\s]+)', raw_cells[1])
+            if mu:
+                symbol = _map_em_id_to_yahoo(mu.group(1), mu.group(2).strip())
+            else:
+                symbol = _normalize_symbol(sym_raw)
+        # 动态找权重列：找第一个 0 < val <= 25 的列（避免误识别价格/持股数）
+        weight = None
+        for i in range(3, min(len(cells), 10)):
+            try:
+                w = float(cells[i].replace('%', '').strip())
+                if 0 < w <= 25:
+                    weight = w
+                    break
+            except ValueError:
+                continue
+        if weight is None:
+            continue
+        holdings.append({
+            "name":   name_raw,
+            "symbol": symbol,
+            "weight": weight,
+            "change": None,
+        })
+    return holdings
+
+
+def _fetch_em_holdings_for_period(code: str, year: str, month: str) -> list:
+    """调用东方财富 FundArchivesDatas 接口获取指定报告期持仓"""
+    url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
+    params = {
+        "type":    "jjcc",
+        "code":    code,
+        "topline": "200",   # 年报/半年报时服务端会返回完整持仓
+        "year":    year,
+        "month":   month,
+        "rt":      str(_random.random()),
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer":    f"https://fundf10.eastmoney.com/ccmx_{code}.html",
+    }
+    try:
+        resp = _get(url, params=params, headers=headers, timeout=(6, 15))
+        if not (resp and resp.ok):
+            return []
+        m = re.search(r'content:"(.*?)"(?:,|\s*})', resp.text, re.DOTALL)
+        if not m:
+            return []
+        html = _html_mod.unescape(m.group(1))
+        return _parse_em_holdings_table(html)
+    except Exception as e:
+        logger.warning(f"[em_holdings] {code} y={year} m={month}: {e}")
+        return []
+
+
+def _fetch_holdings_from_annual_pdf(code: str) -> list:
+    """
+    通过东方财富 JJGG 接口找年报/半年报 PDF，用 pdfplumber 解析完整持仓。
+    返回 [] 若失败。
+    """
+    try:
+        import pdfplumber, io
+    except ImportError:
+        logger.warning("[pdf] pdfplumber not installed")
+        return []
+
+    try:
+        # 获取基金公告列表（type=3: 定期报告）
+        jjgg_url = "http://api.fund.eastmoney.com/f10/JJGG"
+        jjgg_params = {
+            "fundcode": code, "pageIndex": 1, "pageSize": 10,
+            "type": "3", "_": str(int(time.time() * 1000)),
+        }
+        jjgg_headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": f"https://fundf10.eastmoney.com/jjgg_{code}_3.html",
+        }
+        resp = _get(jjgg_url, params=jjgg_params, headers=jjgg_headers, timeout=(5, 12))
+        if not (resp and resp.ok):
+            logger.warning(f"[pdf] JJGG fetch failed for {code}")
+            return []
+
+        data = resp.json()
+        announcements = data.get("Data", []) or []
+
+        # 优先找年报（含"年度报告"或"年报"），其次半年报
+        pdf_url = None
+        for priority_keyword in ["年度报告", "年报", "半年度报告", "半年报"]:
+            for ann in announcements:
+                title = ann.get("TITLE", "") or ann.get("title", "")
+                ann_id = ann.get("ID", "") or ann.get("id", "")
+                if priority_keyword in title and ann_id:
+                    pdf_url = f"http://pdf.dfcfw.com/pdf/H2_{ann_id}_1.pdf"
+                    logger.info(f"[pdf] found '{title}' → {pdf_url}")
+                    break
+            if pdf_url:
+                break
+
+        if not pdf_url:
+            logger.warning(f"[pdf] no annual/semi-annual report found for {code}")
+            return []
+
+        # 下载 PDF
+        pdf_resp = _get(pdf_url, timeout=(10, 30))
+        if not (pdf_resp and pdf_resp.ok):
+            logger.warning(f"[pdf] download failed: {pdf_url}")
+            return []
+
+        # 解析 PDF
+        holdings = []
+        seen_symbols = set()
+        with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                # 定位到"所有权益投资明细"或"股票投资明细"部分
+                if not any(kw in text for kw in ["权益投资", "股票投资", "投资明细", "持仓"]):
+                    continue
+                # 逐行解析，找包含股票代码和权重的行
+                for line in text.split('\n'):
+                    line = line.strip()
+                    # 找百分比数值（占净值比例）
+                    pct_matches = re.findall(r'(\d+\.\d+)%', line)
+                    if not pct_matches:
+                        continue
+                    # 找股票代码（如 NVDA US / TSLA US / 2513 HK / 2454 TW）
+                    code_match = re.search(
+                        r'\b([A-Z]{1,5}(?:\.[A-Z])?|[0-9]{4,5})\s+(US|HK|TW|KR|JP|GB|FR|DE|NL)\b',
+                        line
+                    )
+                    if not code_match:
+                        continue
+                    raw_code, market = code_match.group(1), code_match.group(2)
+                    # 转换为 Yahoo Finance 格式
+                    if market == "HK":
+                        yf_sym = f"{int(raw_code)}.HK"
+                    elif market == "TW":
+                        yf_sym = f"{raw_code}.TW"
+                    elif market == "KR":
+                        yf_sym = f"{raw_code}.KS"
+                    else:
+                        yf_sym = raw_code  # US stocks 直接用
+                    if yf_sym in seen_symbols:
+                        continue
+                    try:
+                        weight = float(pct_matches[0])
+                        if 0 < weight <= 25:
+                            seen_symbols.add(yf_sym)
+                            holdings.append({
+                                "name": "",
+                                "symbol": yf_sym,
+                                "weight": weight,
+                                "change": None,
+                            })
+                    except ValueError:
+                        continue
+
+        logger.info(f"[pdf] {code}: extracted {len(holdings)} holdings from PDF")
+        return holdings
+    except Exception as e:
+        logger.warning(f"[pdf] {code}: {e}")
+        return []
+
+
+def fetch_qdii_holdings(code: str) -> list:
+    """
+    多层次持仓获取策略：
+    1. 最新季报（最准确的当前权重，top-10）
+    2. 找最近的年报/半年报（完整持仓，用于补充季报没有的品种）
+    3. 合并：季报权重为准，年报补充剩余空间
+    4. 若年报也失败，尝试 PDF 解析
+    策略核心：季报权重最新最准，年报只补充覆盖更多品种。
+    """
+    cache_key = f"qdii_h_{code}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    now = datetime.utcnow()
+
+    # Step 1: 最新季报（最准确的当前权重）
+    latest_q = _fetch_em_holdings_for_period(code, "", "")
+    logger.info(f"[qdii_holdings] {code} latest quarterly: {len(latest_q)} holdings")
+
+    # Step 2: 找最近的完整报告（年报/半年报，按时间倒序尝试，最远回溯到 2022）
+    complete_periods = []
+    if now.month >= 4 or now.year > 2026:
+        complete_periods.append(("2025", "12"))
+    if now.month >= 9 or now.year > 2025:
+        complete_periods.append(("2025", "6"))
+    complete_periods += [
+        ("2024", "12"), ("2024", "6"),
+        ("2023", "12"), ("2023", "6"),
+        ("2022", "12"), ("2022", "6"),
+    ]
+
+    complete_h: list = []
+    for year, month in complete_periods:
+        h = _fetch_em_holdings_for_period(code, year, month)
+        logger.info(f"[qdii_holdings] {code} y={year} m={month}: {len(h)} holdings")
+        if len(h) > 10:
+            complete_h = h
+            break
+
+    # Step 3: 合并
+    if latest_q and complete_h:
+        # 季报 symbol 集合（权重最准）
+        q_symbols = {h["symbol"] for h in latest_q}
+        q_weight_total = sum(h["weight"] for h in latest_q)
+
+        # 年报中季报没有的品种（补充）
+        supplemental = [h for h in complete_h if h["symbol"] not in q_symbols]
+        sup_weight_total = sum(h["weight"] for h in supplemental)
+
+        # 剩余空间缩放：假设季报权重占 q_weight_total%，剩余交给年报补充
+        remaining = max(0.0, 100.0 - q_weight_total)
+        if sup_weight_total > 0 and remaining > 1.0:
+            scale = remaining / sup_weight_total
+            supplemental = [{**h, "weight": round(h["weight"] * scale, 4)} for h in supplemental]
+            merged = latest_q + supplemental
+        else:
+            merged = latest_q  # 季报已接近100%，不再补充
+
+        logger.info(f"[qdii_holdings] {code}: merged={len(merged)} (q={len(latest_q)}+sup={len(supplemental)})")
+        best_holdings = merged
+
+    elif latest_q:
+        best_holdings = latest_q
+    elif complete_h:
+        best_holdings = complete_h
+    else:
+        best_holdings = []
+
+    # Step 4: 若仍为空，尝试 PDF 年报
+    if not best_holdings:
+        pdf_holdings = _fetch_holdings_from_annual_pdf(code)
+        if pdf_holdings:
+            logger.info(f"[qdii_holdings] {code}: using PDF ({len(pdf_holdings)} positions)")
+            best_holdings = pdf_holdings
+
+    if best_holdings:
+        _cache_set(cache_key, best_holdings, _HOLDINGS_TTL)
+    else:
+        logger.warning(f"[qdii_holdings] {code}: all sources failed")
+
+    return best_holdings
+
+
+# ─── 个股涨跌幅（Yahoo Finance）────────────────────────────────────────────────
+
+def fetch_stock_change(symbol: str) -> Optional[float]:
+    """获取单只美股昨晚收盘涨跌幅%，缓存 20h"""
+    cache_key = f"stock_chg_{symbol}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return float(cached)
+
+    url  = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    resp = _get(url, params={"interval": "1d", "range": "5d"},
+                headers=YF_HEADERS, timeout=(4, 10))
+    if not (resp and resp.ok):
+        return None
+    try:
+        result = resp.json()["chart"]["result"][0]
+        meta   = result["meta"]
+        price  = float(meta.get("regularMarketPrice") or 0)
+        prev   = float(
+            meta.get("regularMarketPreviousClose")
+            or meta.get("previousClose")
+            or meta.get("chartPreviousClose")
+            or 0
+        )
+        # 还拿不到 prev，从历史 closes 取倒数第二条
+        if not prev:
+            closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c]
+            if len(closes) >= 2:
+                prev = closes[-2]
+        if not price or not prev:
+            return None
+        pct = round((price - prev) / prev * 100, 2)
+        _cache_set(cache_key, pct, _STOCK_CHG_TTL)
+        return pct
+    except Exception as e:
+        logger.warning(f"[stock_chg] {symbol}: {e}")
+        return None
+
+
+def fetch_fx_data() -> dict:
+    """
+    美元/人民币数据：{change: float, price: float}
+    change = 涨跌幅%，price = 实际汇率（如 6.7856）
+    """
+    cache_key = "qdii_fx_data"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    url  = "https://query1.finance.yahoo.com/v8/finance/chart/USDCNY=X"
+    resp = _get(url, params={"interval": "1d", "range": "5d"},
+                headers=YF_HEADERS, timeout=(4, 10))
+    if not (resp and resp.ok):
+        return {"change": 0.0, "price": None}
+    try:
+        res   = resp.json()["chart"]["result"][0]
+        meta  = res["meta"]
+        price = float(meta.get("regularMarketPrice") or 0)
+        prev  = float(meta.get("regularMarketPreviousClose")
+                      or meta.get("chartPreviousClose")
+                      or meta.get("previousClose") or 0)
+        if not prev:
+            closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            valid = [c for c in closes if c is not None]
+            if len(valid) >= 2:
+                prev = valid[-2]
+        pct = round((price - prev) / prev * 100, 2) if price and prev else 0.0
+        result = {"change": pct, "price": round(price, 4) if price else None}
+        _cache_set(cache_key, result, _VALUATION_TTL)
+        return result
+    except Exception:
+        return {"change": 0.0, "price": None}
+
+def fetch_fx_change() -> float:
+    return fetch_fx_data()["change"]
+
+
+def fetch_fund_nav(code: str) -> Optional[float]:
+    """从天天基金实时接口获取最新净值（dwjz），缓存 6h"""
+    cache_key = f"qdii_nav_{code}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return float(cached)
+    try:
+        url  = f"https://fundgz.1234567.com.cn/js/{code}.js"
+        resp = _get(url, timeout=(3, 8))
+        if not (resp and resp.ok):
+            return None
+        m = re.search(r'\{.*\}', resp.text)
+        if not m:
+            return None
+        data = json.loads(m.group(0))
+        nav  = float(data.get("dwjz") or 0)
+        if nav > 0:
+            _cache_set(cache_key, nav, 6 * 3600)
+            return nav
+    except Exception as e:
+        logger.warning(f"[nav] {code}: {e}")
+    return None
+
+
+def fetch_fund_gszzl(code: str) -> dict:
+    """
+    从天天基金 fundgz 接口一次性获取：dwjz(净值) + gszzl(估值涨幅) + gsz + gztime。
+    合并原 fetch_fund_nav，避免对同一 URL 的重复请求。
+    返回: {gszzl, gsz, gztime, is_fresh, nav}
+    开盘时段 TTL=15min，其他时段 TTL=30min。
+    """
+    cache_key = f"qdii_gszzl_{code}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+    result: dict = {"gszzl": None, "gsz": None, "gztime": None, "is_fresh": False, "nav": None}
+    try:
+        from datetime import timezone, timedelta
+        url  = f"https://fundgz.1234567.com.cn/js/{code}.js"
+        resp = _get(url, timeout=(3, 8))
+        if not (resp and resp.ok):
+            return result
+        m = re.search(r'\{.*?\}', resp.text, re.DOTALL)
+        if not m:
+            return result
+        data      = json.loads(m.group(0))
+        gztime    = (data.get("gztime") or "").strip()
+        gszzl_str = (data.get("gszzl") or "").strip()
+        gsz_str   = (data.get("gsz")   or "").strip()
+        dwjz_str  = (data.get("dwjz")  or "").strip()
+        beijing_today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        gszzl: Optional[float] = None
+        if gszzl_str and gszzl_str not in ("0.00", "0", ""):
+            try: gszzl = round(float(gszzl_str), 2)
+            except ValueError: pass
+        gsz: Optional[float] = None
+        if gsz_str:
+            try: gsz = float(gsz_str)
+            except ValueError: pass
+        nav: Optional[float] = None
+        if dwjz_str:
+            try:
+                v = float(dwjz_str)
+                if v > 0: nav = round(v, 4)
+            except ValueError: pass
+        is_fresh = bool(gztime and gztime.startswith(beijing_today) and gszzl is not None)
+        result = {
+            "gszzl":    gszzl,
+            "gsz":      gsz,
+            "gztime":   gztime or None,
+            "is_fresh": is_fresh,
+            "nav":      nav,
+        }
+        ttl = 15 * 60 if _current_session() in ("cn", "us") else 30 * 60
+        _cache_set(cache_key, result, ttl)
+    except Exception as e:
+        logger.warning(f"[gszzl] {code}: {e}")
+    return result
+
+
+def fetch_fund_meta(code: str) -> dict:
+    """
+    从 eastmoney pingzhongdata 获取：
+      - scale:      最新季度净资产(亿)，来自 Data_assetAllocation["净资产"][-1]
+      - ytd_return: 2025全年收益率(%)，由 Data_netWorthTrend 计算
+    缓存 12h。
+    """
+    cache_key = f"qdii_meta_{code}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    result: dict = {"scale": None, "ytd_return": None, "nav_latest": None}
+    try:
+        url  = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
+        resp = _get(url, timeout=(5, 15))
+        if not (resp and resp.ok):
+            return result
+        text = resp.text
+
+        # ── 规模：Data_assetAllocation → 净资产 series 最新值 ──────────────────
+        m = re.search(r'Data_assetAllocation\s*=\s*(\{.*?\});', text, re.DOTALL)
+        if m:
+            try:
+                aa = json.loads(m.group(1))
+                for s in aa.get("series", []):
+                    if s.get("name") == "净资产" and s.get("data"):
+                        last = [v for v in s["data"] if v is not None]
+                        if last:
+                            result["scale"] = round(last[-1], 2)
+            except Exception:
+                pass
+
+        # ── Data_netWorthTrend：最新净值 + 2025全年收益率 ─────────────────────
+        m = re.search(r'Data_netWorthTrend\s*=\s*(\[.*?\]);', text, re.DOTALL)
+        if m:
+            try:
+                trend = json.loads(m.group(1))
+                if trend:
+                    # 最新净值：序列最后一个有效点
+                    last_nav = next((p["y"] for p in reversed(trend) if p.get("y")), None)
+                    if last_nav and last_nav > 0:
+                        result["nav_latest"] = round(float(last_nav), 4)
+                    # 2025全年收益率
+                    START_2025 = 1735689600000   # 2025-01-01 UTC
+                    END_2025   = 1767225600000   # 2025-12-31 UTC
+                    start_nav = next((p["y"] for p in trend if p["x"] >= START_2025), None)
+                    end_nav   = next((p["y"] for p in reversed(trend) if p["x"] <= END_2025), None)
+                    if start_nav and end_nav and start_nav > 0:
+                        result["ytd_return"] = round((end_nav - start_nav) / start_nav * 100, 2)
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.warning(f"[meta] {code}: {e}")
+
+    _cache_set(cache_key, result, 12 * 3600)
+    return result
+
+
+# ─── 估值计算核心 ──────────────────────────────────────────────────────────────
+
+def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float) -> dict:
+    """
+    计算单只基金估值。
+    stock_cache: {symbol -> change_pct}，由调用方批量填充，减少重复请求。
+    """
+    raw_holdings = fetch_qdii_holdings(code)
+    if not raw_holdings:
+        return {"code": code, "valuation": None, "holdings": [], "coverage": 0,
+                "fx_change": fx_change}
+
+    # 去重：同一 symbol 保留权重最大的那条
+    dedup: dict[str, dict] = {}
+    for h in raw_holdings:
+        sym = h["symbol"]
+        if sym not in dedup or h["weight"] > dedup[sym]["weight"]:
+            dedup[sym] = h
+    holdings = list(dedup.values())
+
+    # 归一化：若总权重超过110%（多期/多分类叠加），等比缩放到100%
+    total_weight = sum(h["weight"] for h in holdings)
+    if total_weight > 110.0:
+        scale = 100.0 / total_weight
+        holdings = [{**h, "weight": round(h["weight"] * scale, 4)} for h in holdings]
+        total_weight = 100.0
+
+    weighted_sum   = 0.0
+    covered_weight = 0.0
+    enriched = []
+    for h in holdings:
+        sym = h["symbol"]
+        chg = stock_cache.get(sym)
+        enriched.append({**h, "change": chg})
+        if chg is not None:
+            weighted_sum   += h["weight"] / 100.0 * chg
+            covered_weight += h["weight"]
+
+    # coverage = 已获取价格的持仓占基金净值的比例（分母是100%，而非只看已知持仓）
+    coverage   = round(covered_weight, 1)
+    valuation  = round(weighted_sum + fx_change, 2) if covered_weight > 0 else None
+
+    return {
+        "code":      code,
+        "valuation": valuation,
+        "holdings":  enriched,
+        "coverage":  coverage,
+        "fx_change": fx_change,
+    }
+
+
+# ─── API 端点 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/qdii/holdings/{code}")
+def api_qdii_holdings(code: str, response: Response):
+    """返回单只基金季报前十大持仓（含持仓权重）"""
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    holdings = fetch_qdii_holdings(code)
+    if not holdings:
+        return {"code": code, "holdings": [], "error": "fetch_failed"}
+    return {"code": code, "holdings": holdings}
+
+
+@app.get("/api/qdii/valuations")
+def api_qdii_valuations(response: Response, force: bool = False):
+    """
+    批量返回所有主动 QDII 基金的估值结果。
+
+    数据策略（session-aware）:
+    - CN 时段 (09:30-15:00 北京, UTC 01:30-07:00):
+        优先 fundgz gszzl（基金公司全仓实时估值，15min 刷新），覆盖率=100%。
+        gszzl 无数据时降级到缓存股价加权（昨收）。
+    - US 时段 (09:30-17:00 美东, UTC 13:30-21:00):
+        优先 Yahoo Finance 实时股价加权计算。
+        Yahoo 拿不到时用 gszzl 兜底。
+    - 盘后/周末:
+        用 gszzl 最新值或缓存股价，TTL 6h/24h。
+
+    ?force=true 强制跳过所有缓存重新计算。
+    """
+    session   = _current_session()
+    cache_key = "qdii_valuations"
+
+    if force:
+        _cache_delete(cache_key)
+        for code in QDII_CODES:
+            _cache_delete(f"qdii_h_{code}")
+            _cache_delete(f"qdii_meta_{code}")
+            _cache_delete(f"qdii_gszzl_{code}")   # gszzl 缓存已包含 nav，qdii_nav_ 已弃用
+        _cache_delete("qdii_fx_chg")
+        _cache_delete("qdii_fx_data")
+        logger.info(f"[qdii] force refresh: cleared all caches (session={session})")
+    else:
+        cached = _cache_get(cache_key)
+        if cached:
+            cached_session = cached.get("session", "closed")
+            # 若缓存是盘后写入，但现在已进入开盘时段，强制失效重算
+            # 避免 6h 盘后缓存覆盖整个开盘时段，导致实时数据永远拿不到
+            if cached_session == "closed" and session in ("cn", "us"):
+                logger.info(f"[qdii] session changed closed→{session}, invalidating stale cache")
+                _cache_delete(cache_key)
+            else:
+                # 缓存有效：更新 session 为当前值后返回
+                cached["session"] = session
+                response.headers["Cache-Control"] = "no-store"
+                return cached
+
+    fx_data   = fetch_fx_data()
+    fx_change = fx_data["change"]
+    fx_price  = fx_data["price"]
+
+    # ── Step 1: 并发拉取 gszzl(含nav) + 持仓 + meta ─────────────────────────────
+    # fetch_fund_gszzl 已合并 fetch_fund_nav，一次 HTTP 拿 dwjz+gszzl+gsz+gztime
+    gszzl_cache:  dict[str, dict] = {}
+    all_holdings: dict[str, list] = {}
+    meta_cache:   dict[str, dict] = {}
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        gf = {ex.submit(fetch_fund_gszzl,   code): ("gszzl", code) for code in QDII_CODES}
+        hf = {ex.submit(fetch_qdii_holdings, code): ("h",     code) for code in QDII_CODES}
+        mf = {ex.submit(fetch_fund_meta,     code): ("meta",  code) for code in QDII_CODES}
+        for bucket in (gf, hf, mf):
+            for fut, (kind, code) in bucket.items():
+                try:
+                    val = fut.result()
+                except Exception:
+                    val = {"gszzl": None, "gsz": None, "gztime": None, "is_fresh": False, "nav": None} \
+                          if kind == "gszzl" else [] if kind == "h" else {}
+                if   kind == "gszzl": gszzl_cache[code] = val
+                elif kind == "h":     all_holdings[code] = val
+                else:                 meta_cache[code]   = val
+
+    # ── Step 2: 并发拉取股价（始终拉，CN 时段用缓存值，US 时段用实时值）──────────
+    all_symbols = {
+        h["symbol"]
+        for holdings in all_holdings.values()
+        for h in holdings if h["symbol"]
+    }
+    stock_cache: dict[str, Optional[float]] = {}
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        sf = {ex.submit(fetch_stock_change, sym): sym for sym in all_symbols}
+        for fut, sym in sf.items():
+            try:    stock_cache[sym] = fut.result()
+            except: stock_cache[sym] = None
+
+    # ── Step 3: 逐基金估值（session-aware 优先级）─────────────────────────────
+    results = []
+    for code in QDII_CODES:
+        g        = gszzl_cache.get(code, {})
+        meta     = meta_cache.get(code, {})
+        gszzl_v  = g.get("gszzl")       # 估值涨跌幅%
+        gztime   = g.get("gztime")
+        is_fresh = g.get("is_fresh", False)
+
+        if session == "cn" and is_fresh and gszzl_v is not None:
+            # CN 时段且 gszzl 今日有效 → 直接使用全仓估值，覆盖率100%（基金公司全仓计算）
+            r = {
+                "code":        code,
+                "valuation":   gszzl_v,
+                "holdings":    all_holdings.get(code, []),
+                "coverage":    100,
+                "fx_change":   fx_change,
+                "data_source": "gszzl",
+                "gszzl_time":  gztime,
+            }
+        else:
+            # US 时段 / 盘后 / gszzl 无今日数据 → 持仓加权计算
+            r = calc_valuation_for_fund(code, stock_cache, fx_change)
+            if r["valuation"] is None and gszzl_v is not None:
+                # 持仓算不出时，用 gszzl 兜底（不限是否今日）
+                # Bug fix: 保留原始持仓覆盖率，不误设为100%（gszzl可能是旧数据）
+                r["valuation"]   = gszzl_v
+                r["data_source"] = "gszzl_fallback"
+            else:
+                r["data_source"] = "calc_live" if session == "us" else "calc_cached"
+            r["gszzl_time"] = gztime
+
+        # 净值：gszzl 里的 dwjz 优先，meta pingzhongdata 兜底
+        r["nav"]        = g.get("nav") or meta.get("nav_latest")
+        r["scale"]      = meta.get("scale")
+        r["ytd_return"] = meta.get("ytd_return")
+        results.append(r)
+
+    today      = datetime.utcnow().strftime("%Y-%m-%d")
+    updated_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # ── Step 4: 持久化到 SQLite ────────────────────────────────────────────────
+    try:
+        _db_save_stock_prices(stock_cache, today)
+        for r in results:
+            if r.get("holdings"):
+                _db_save_holdings(r["code"], r["holdings"], report_date="")
+        _db_save_valuations(results, today)
+        logger.info(f"[qdii] saved: {len(results)} funds, {len(stock_cache)} stocks, session={session}")
+    except Exception as e:
+        logger.warning(f"[qdii] DB save failed: {e}")
+
+    payload = {
+        "fx_change":  fx_change,
+        "fx_price":   fx_price,
+        "updated_at": updated_at,
+        "session":    session,
+        "funds":      results,
+    }
+    _cache_set(cache_key, payload, _valuation_ttl())
+
+    response.headers["Cache-Control"] = "no-store"
+    return payload
