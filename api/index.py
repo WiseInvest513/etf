@@ -1963,6 +1963,13 @@ def _init_qdii_tables():
             created_at  TEXT,
             UNIQUE(fund_code, date)
         );
+
+        CREATE TABLE IF NOT EXISTS qdii_full_cache (
+            id          INTEGER PRIMARY KEY,
+            payload     TEXT NOT NULL,
+            session     TEXT NOT NULL,
+            computed_at TEXT NOT NULL
+        );
         """)
 
 _init_qdii_tables()
@@ -2005,6 +2012,33 @@ def _db_save_valuations(results: list, date: str):
                         valuation=excluded.valuation, coverage=excluded.coverage,
                         fx_change=excluded.fx_change, created_at=excluded.created_at
                 """, (r["code"], date, r["valuation"], r["coverage"], r["fx_change"], now))
+
+def _db_save_full_cache(payload: dict):
+    """将完整估值 payload 持久化到 SQLite，供重启后冷启动使用。"""
+    try:
+        with _db() as conn:
+            conn.execute("DELETE FROM qdii_full_cache")
+            conn.execute(
+                "INSERT INTO qdii_full_cache(payload, session, computed_at) VALUES(?,?,?)",
+                (json.dumps(payload, ensure_ascii=False), payload.get("session", "closed"), payload.get("updated_at", ""))
+            )
+    except Exception as e:
+        logger.warning(f"[qdii] db save full cache failed: {e}")
+
+
+def _db_load_full_cache() -> Optional[dict]:
+    """从 SQLite 加载上一次计算的完整估值 payload。"""
+    try:
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT payload FROM qdii_full_cache ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                return json.loads(row["payload"])
+    except Exception as e:
+        logger.warning(f"[qdii] db load full cache failed: {e}")
+    return None
+
 
 # 缓存 TTL
 _HOLDINGS_TTL   = 24 * 3600   # 季报持仓，每天刷一次
@@ -2666,6 +2700,11 @@ def api_qdii_valuations(response: Response, force: bool = False):
         logger.info(f"[qdii] force refresh: cleared all caches (session={session})")
     else:
         cached = _cache_get(cache_key)
+        if not cached:
+            # Redis 为空（冷启动/重启）→ 尝试从 SQLite 加载上次结果
+            cached = _db_load_full_cache()
+            if cached:
+                logger.info("[qdii] redis miss, loaded from sqlite full cache")
         if cached:
             cached_session = cached.get("session", "closed")
             # 若缓存是盘后写入，但现在已进入开盘时段，强制失效重算
@@ -2674,8 +2713,9 @@ def api_qdii_valuations(response: Response, force: bool = False):
                 logger.info(f"[qdii] session changed closed→{session}, invalidating stale cache")
                 _cache_delete(cache_key)
             else:
-                # 缓存有效：更新 session 为当前值后返回
+                # 缓存有效：更新 session 为当前值后返回，并回填 Redis
                 cached["session"] = session
+                _cache_set(cache_key, cached, _valuation_ttl())
                 response.headers["Cache-Control"] = "no-store"
                 return cached
 
@@ -2777,6 +2817,7 @@ def api_qdii_valuations(response: Response, force: bool = False):
         "funds":      results,
     }
     _cache_set(cache_key, payload, _valuation_ttl())
+    _db_save_full_cache(payload)
 
     response.headers["Cache-Control"] = "no-store"
     return payload
