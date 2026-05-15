@@ -1091,7 +1091,7 @@ export default function QDIIPage() {
               如果这个工具对你有帮助<br/>欢迎赞赏支持作者持续迭代更多功能
             </div>
             <img
-              src="/收款.jpg"
+              src="/donate.jpg"
               alt="收款码"
               style={{ width:"100%", borderRadius:12, display:"block", marginBottom:16 }}
             />
