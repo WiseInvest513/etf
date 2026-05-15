@@ -3103,11 +3103,10 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     cache_key = "qdii_valuations"
 
     if light:
-        # 只清顶层估值缓存 + 股价子缓存（需要拿最新盘前/盘后价格）
-        # 持仓数据(qdii_h_*)、gszzl(qdii_gszzl_*)、汇率 均保留 → 重算只需 3-5s
+        # 只清顶层估值缓存，所有子缓存（股价/持仓/gszzl）全部保留
+        # → 重算只是从缓存里读数据再加权，1-2s 完成
         _cache_delete(cache_key)
-        _cache_delete_pattern("stock_pf_*")
-        logger.info(f"[qdii] light refresh: cleared valuations + stock prices (session={session})")
+        logger.info(f"[qdii] light refresh: cleared qdii_valuations only (session={session})")
     elif force:
         _cache_delete(cache_key)
         for code in QDII_CODES:

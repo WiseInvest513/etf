@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
 function useIsMobile() {
@@ -598,6 +599,7 @@ export default function QDIIPage() {
   });
   const [simpleMode, setSimpleMode] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "open" | "suspended"
+  const [showDonate, setShowDonate] = useState(false);
   const CC = dark ? DARK : C;
 
   function toggleDark() {
@@ -894,6 +896,20 @@ export default function QDIIPage() {
               />
               <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:14, color:CC.textDim }}>🔍</span>
             </div>
+            {/* 赞赏按钮 */}
+            <button
+              onClick={() => setShowDonate(true)}
+              title="赞赏作者"
+              style={{
+                height:34, borderRadius:10, border:"1.5px solid #f59e0b",
+                background:"linear-gradient(135deg,#fef3c7,#fde68a)",
+                color:"#92400e", fontSize:12, fontWeight:700,
+                cursor:"pointer", display:"flex", alignItems:"center",
+                gap:4, padding:"0 10px", whiteSpace:"nowrap", flexShrink:0,
+              }}
+            >
+              ☕ 赞赏
+            </button>
             {/* 暗夜模式 */}
             <button
               onClick={toggleDark}
@@ -1040,6 +1056,55 @@ export default function QDIIPage() {
 
       {/* 详情面板 */}
       {selected && <DetailPanel fund={selected} onClose={() => setSelected(null)} cc={CC} session={session} />}
+
+      {/* 赞赏弹窗 */}
+      {showDonate && createPortal(
+        <div
+          onClick={() => setShowDonate(false)}
+          style={{
+            position:"fixed", inset:0, zIndex:9999,
+            background:"rgba(0,0,0,0.55)", backdropFilter:"blur(4px)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background:"#fff", borderRadius:20, padding:"28px 24px",
+              maxWidth:320, width:"90%", textAlign:"center",
+              boxShadow:"0 24px 60px rgba(0,0,0,0.25)",
+              position:"relative",
+            }}
+          >
+            <button
+              onClick={() => setShowDonate(false)}
+              style={{
+                position:"absolute", top:12, right:12,
+                width:28, height:28, borderRadius:"50%", border:"none",
+                background:"#f3f4f6", color:"#6b7280",
+                fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+              }}
+            >×</button>
+            <div style={{ fontSize:22, marginBottom:6 }}>☕</div>
+            <div style={{ fontSize:16, fontWeight:800, color:"#1d1d1f", marginBottom:6 }}>感谢赞赏</div>
+            <div style={{ fontSize:13, color:"#6e6e73", lineHeight:1.7, marginBottom:16, fontWeight:600, textAlign:"center" }}>
+              如果这个工具对你有帮助<br/>欢迎赞赏支持作者持续迭代更多功能
+            </div>
+            <img
+              src="/收款.jpg"
+              alt="收款码"
+              style={{ width:"100%", borderRadius:12, display:"block", marginBottom:16 }}
+            />
+            <div style={{ fontSize:13, color:"#6e6e73", lineHeight:1.9, textAlign:"center", fontWeight:600 }}>
+              💡 赞赏用于支付服务器和数据接口费用<br/>Wise 会记住每一个赞赏的朋友
+              <div style={{ marginTop:8, color:"#92400e" }}>
+                一元两元也是爱 ❤️<br/>五元十元就大爱 🔥
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       <style>{`
         @keyframes slideInRight {
