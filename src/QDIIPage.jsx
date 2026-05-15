@@ -316,6 +316,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
   const val = fund.valuation;
   const status = getSessionStatus(session || "weekend");
   const [showAll, setShowAll] = useState(false);
+  const isMobile = useIsMobile();
 
   return (
     <div
@@ -477,62 +478,67 @@ function DetailPanel({ fund, onClose, cc, session }) {
           </SectionTitle>
           {holdings.length > 0 ? (
             <div style={{ borderRadius:12, border:`1px solid ${cc.border}`, overflow:"hidden" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize: isMobile ? 12 : 13 }}>
                 {(() => {
-                    const priceLabel  = session === "us_open" ? "实时价格" : "收盘价";
-                    const changeLabel = { pre_market:"盘前涨跌", us_open:"盘中涨跌", post_market:"盘后涨跌", a_share:"昨日涨跌", weekend:"昨日涨跌" }[session] ?? "涨跌幅";
+                    const priceLabel  = session === "us_open" ? "实时价" : "收盘价";
+                    const changeLabel = { pre_market:"盘前", us_open:"盘中", post_market:"盘后", a_share:"昨涨跌", weekend:"昨涨跌" }[session] ?? "涨跌";
                     const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
                     const sortedAll = [...holdings].sort((a, b) => b.weight - a.weight);
                     const displayed = showAll ? sortedAll : sortedAll.slice(0, 10);
+                    const tdP = isMobile ? "8px 6px" : "13px 14px";
+                    const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
+                      padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
                     return (<>
                 <thead>
                   <tr style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)" }}>
-                    <th style={{ ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent" }}>名称</th>
-                    <th style={{ ...mkTh(cc), position:"static", textAlign:"center", color:"rgba(255,255,255,0.8)", background:"transparent" }}>占比</th>
-                    <th style={{ ...mkTh(cc), position:"static", textAlign:"right", color:"rgba(255,255,255,0.8)", background:"transparent" }}>{priceLabel}</th>
-                    <th style={{ ...mkTh(cc), position:"static", textAlign:"right", color:"rgba(255,255,255,0.8)", background:"transparent" }}>{changeLabel}</th>
+                    <th style={{ ...thStyle, textAlign:"left" }}>名称</th>
+                    <th style={{ ...thStyle, textAlign:"center" }}>占比</th>
+                    <th style={{ ...thStyle, textAlign:"right" }}>{priceLabel}</th>
+                    <th style={{ ...thStyle, textAlign:"right" }}>{changeLabel}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {displayed.map((h, i) => {
                     const dotColor = i < 10 ? DONUT_COLORS[i] : "#d1d5db";
-                    // 盘中显示实时价，盘前/盘后/收盘显示上一收盘价（price 后端已按会话选好）
                     const displayPrice = h.price;
-                    // 盘前且无专属盘前涨跌时，change 已 fallback 到 regular_pct
-                    const isPreFallback = session === "pre_market" && h.change != null;
                     return (
                       <tr key={h.symbol || i} style={{ background: i % 2 ? cc.bg : cc.card }}>
-                        <td style={mkTd(cc)}>
-                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                            <div style={{ width:8, height:8, borderRadius:2, background:dotColor, flexShrink:0 }} />
+                        <td style={{ ...mkTd(cc), padding: tdP }}>
+                          <div style={{ display:"flex", alignItems:"center", gap: isMobile ? 4 : 6 }}>
+                            <div style={{ width:6, height:6, borderRadius:2, background:dotColor, flexShrink:0 }} />
                             <div>
-                              <div style={{ fontWeight:500, color:cc.text }}>{h.name || h.symbol}</div>
-                              <div style={{ fontSize:11, color:cc.textDim, fontFamily:"monospace" }}>{h.symbol}</div>
+                              <div style={{ fontWeight:500, color:cc.text, fontSize: isMobile ? 12 : 13 }}>{h.name || h.symbol}</div>
+                              {!isMobile && <div style={{ fontSize:11, color:cc.textDim, fontFamily:"monospace" }}>{h.symbol}</div>}
+                              {isMobile && <div style={{ fontSize:10, color:cc.textDim, fontFamily:"monospace" }}>{h.symbol}</div>}
                             </div>
                           </div>
                         </td>
-                        <td style={{ ...mkTd(cc), textAlign:"center" }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center" }}>
-                            <div style={{ width:50, height:4, borderRadius:2, background:cc.borderLight, overflow:"hidden" }}>
-                              <div style={{ width:`${(h.weight / maxW) * 100}%`, height:"100%", background: dotColor, borderRadius:2 }} />
+                        <td style={{ ...mkTd(cc), textAlign:"center", padding: tdP }}>
+                          {isMobile ? (
+                            <span style={{ fontSize:12, fontWeight:600, color:cc.text }}>{h.weight.toFixed(1)}%</span>
+                          ) : (
+                            <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center" }}>
+                              <div style={{ width:50, height:4, borderRadius:2, background:cc.borderLight, overflow:"hidden" }}>
+                                <div style={{ width:`${(h.weight / maxW) * 100}%`, height:"100%", background: dotColor, borderRadius:2 }} />
+                              </div>
+                              <span style={{ fontSize:12, fontWeight:600, color:cc.text }}>{h.weight.toFixed(2)}%</span>
                             </div>
-                            <span style={{ fontSize:12, fontWeight:600, color:cc.text }}>{h.weight.toFixed(2)}%</span>
-                          </div>
+                          )}
                         </td>
-                        <td style={{ ...mkTd(cc), textAlign:"right", fontFamily:"monospace", fontSize:12 }}>
+                        <td style={{ ...mkTd(cc), textAlign:"right", fontFamily:"monospace", fontSize: isMobile ? 11 : 12, padding: tdP }}>
                           {displayPrice != null ? (
                             <span style={{ color:cc.textMuted, fontWeight:500 }}>${displayPrice.toFixed(2)}</span>
                           ) : (
                             <span style={{ color:cc.textDim }}>—</span>
                           )}
                         </td>
-                        <td style={{ ...mkTd(cc), textAlign:"right" }}>
+                        <td style={{ ...mkTd(cc), textAlign:"right", padding: tdP }}>
                           {h.change != null ? (
-                            <span style={{ color: h.change >= 0 ? cc.red : cc.green, fontWeight:600 }}>
+                            <span style={{ color: h.change >= 0 ? cc.red : cc.green, fontWeight:600, fontSize: isMobile ? 12 : 13 }}>
                               {h.change >= 0 ? "+" : ""}{h.change.toFixed(2)}%
                             </span>
                           ) : (
-                            <span style={{ color:cc.textDim, fontSize:12 }} title="非美股或暂无报价">—</span>
+                            <span style={{ color:cc.textDim, fontSize: isMobile ? 11 : 12 }} title="非美股或暂无报价">—</span>
                           )}
                         </td>
                       </tr>
@@ -819,6 +825,25 @@ export default function QDIIPage() {
                   );
                 })()}
               </div>
+
+              {/* 手机端：2×2 指数卡片（替代 说明条） */}
+              {isMobile && (
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:14 }}>
+                  {indexData.map(d => {
+                    const isPos = d.value !== null && d.value >= 0;
+                    const sub = d.label === "美元/人民币" && fxPrice != null ? `¥${fxPrice.toFixed(4)}` : undefined;
+                    return (
+                      <div key={d.label} style={{ textAlign:"center", padding:"8px 10px", background:"rgba(255,255,255,0.10)", borderRadius:10, border:"1px solid rgba(255,255,255,0.15)" }}>
+                        <div style={{ fontSize:10, color:"rgba(255,255,255,0.65)", marginBottom:4, fontWeight:500 }}>{d.label}</div>
+                        <div style={{ fontSize:18, fontWeight:800, letterSpacing:-0.5, color: d.value === null ? "rgba(255,255,255,0.4)" : isPos ? "#ff6b6b" : "#6ee7b7" }}>
+                          {d.value === null ? "—" : `${isPos ? "+" : ""}${d.value.toFixed(2)}%`}
+                        </div>
+                        {sub && <div style={{ fontSize:10, color:"rgba(255,255,255,0.55)", marginTop:2 }}>{sub}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* 右：更新策略 + 2×2 指数卡片 */}
@@ -866,8 +891,8 @@ export default function QDIIPage() {
         </div>
       </div>
 
-      {/* ── 说明条 ───────────────────────────────────────────────────────────── */}
-      <div style={{ background:CC.card, borderBottom:`1px solid ${CC.border}` }}>
+      {/* ── 说明条（仅桌面）────────────────────────────────────────────────────── */}
+      {!isMobile && <div style={{ background:CC.card, borderBottom:`1px solid ${CC.border}` }}>
         <div style={{ maxWidth:1440, margin:"0 auto", padding: isMobile ? "10px 16px" : "12px 40px" }}>
           <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: isMobile ? 10 : 20 }}>
             {[
@@ -886,7 +911,7 @@ export default function QDIIPage() {
             ))}
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ── 基金表格 ─────────────────────────────────────────────────────────── */}
       <div style={{ maxWidth:1440, margin:"28px auto", padding: isMobile ? "0 16px" : "0 40px" }}>
@@ -1242,6 +1267,71 @@ export default function QDIIPage() {
         </div>,
         document.body
       )}
+
+      {/* ── Footer ──────────────────────────────────────────────────────────── */}
+      <footer style={{ background: CC.card, borderTop:`1px solid ${CC.border}`, marginTop:40 }}>
+        <div style={{ maxWidth:1440, margin:"0 auto", padding: isMobile ? "28px 16px 20px" : "48px 40px 40px",
+          display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto auto", gap: isMobile ? 28 : "48px 72px" }}>
+
+          {/* 品牌介绍 */}
+          <div style={{ maxWidth:320 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+              <div style={{ width:30, height:30, borderRadius:8, background:"linear-gradient(135deg,#1a56db,#7c3aed)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900, fontSize:13, color:"#fff" }}>W</div>
+              <span style={{ fontSize:18, fontWeight:800, letterSpacing:-0.5, color:CC.text }}>Wise<span style={{ color:"#1a56db" }}>ETF</span></span>
+            </div>
+            <p style={{ fontSize:13, color:CC.textMuted, lineHeight:1.85, marginBottom:8 }}>
+              中国投资者的美股ETF与QDII基金追踪平台，提供实时估值、费率对比、溢价监控与申购状态追踪。
+            </p>
+            <p style={{ fontSize:12, color:CC.textDim }}>wise-etf.com</p>
+          </div>
+
+          {/* 快速导航 */}
+          <div style={{ minWidth:160 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:CC.text, marginBottom:16 }}>本站导航</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {[
+                { label:"← 返回首页",    href:"/" },
+                { label:"ETF 溢价监控",  href:"/" },
+                { label:"基金费率对比",  href:"/" },
+              ].map(l => (
+                <a key={l.label} href={l.href}
+                  style={{ fontSize:13, color:CC.textMuted, textDecoration:"none", transition:"color 0.15s" }}
+                  onMouseEnter={e => e.target.style.color = "#1a56db"}
+                  onMouseLeave={e => e.target.style.color = CC.textMuted}>
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          </div>
+
+          {/* 其他平台 */}
+          <div style={{ minWidth:160 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:CC.text, marginBottom:16 }}>Wise 旗下</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {[
+                { label:"投资主站",     href:"https://www.wise-invest.org",  icon:"🌐" },
+                { label:"Wise-Witness", href:"https://www.wise-witness.com",  icon:"🏦" },
+                { label:"Wise-Hold",    href:"https://www.wise-hold.com",     icon:"📈" },
+                { label:"Wise-SIM",     href:"https://www.wise-sim.org",      icon:"📱" },
+              ].map(l => (
+                <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize:13, color:CC.textMuted, textDecoration:"none", display:"flex", alignItems:"center", gap:7, transition:"color 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "#1a56db"}
+                  onMouseLeave={e => e.currentTarget.style.color = CC.textMuted}>
+                  <span>{l.icon}</span>{l.label}
+                </a>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ borderTop:`1px solid ${CC.border}` }} />
+        <div style={{ maxWidth:1440, margin:"0 auto", padding: isMobile ? "12px 16px" : "16px 40px",
+          display:"flex", justifyContent:"center", flexDirection:"column", alignItems:"center", gap:4 }}>
+          <div style={{ fontSize:11, color:CC.textDim }}>© 2026 wise-etf.com · All rights reserved</div>
+          <div style={{ fontSize:11, color:CC.textDim }}>仅提供信息参考，不构成任何投资建议</div>
+        </div>
+      </footer>
 
       <style>{`
         @keyframes slideInRight {
