@@ -3119,27 +3119,6 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         logger.info(f"[qdii] force refresh: cleared all caches (session={session})")
     else:
         cached = _cache_get(cache_key)
-        if not cached:
-            db_cached = _db_load_full_cache()
-            if db_cached:
-                # SQLite 仅用于冷启动（进程刚重启 Redis 还没有数据）
-                # 如果缓存时间超过当前时段 TTL，视为过期，不使用（避免数据永远不更新）
-                ttl_sec = _valuation_ttl()
-                updated = db_cached.get("updated_at", "")
-                is_fresh = False
-                if updated:
-                    try:
-                        from datetime import timezone
-                        age = (datetime.now(timezone.utc) - datetime.fromisoformat(
-                            updated.replace("Z", "+00:00"))).total_seconds()
-                        is_fresh = age < ttl_sec
-                    except Exception:
-                        pass
-                if is_fresh:
-                    cached = db_cached
-                    logger.info(f"[qdii] redis miss, sqlite cache is fresh (age<{ttl_sec}s), using it")
-                else:
-                    logger.info(f"[qdii] redis miss, sqlite cache is stale, will recompute")
         if cached:
             cached_session = cached.get("session", "weekend")
             # 估值来源发生根本性切换时必须失效，否则旧 session 数据会持续到 TTL 到期
@@ -3317,7 +3296,6 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         "funds":      results,
     }
     _cache_set(cache_key, payload, _valuation_ttl())
-    _db_save_full_cache(payload)
 
     response.headers["Cache-Control"] = "no-store"
     return payload
