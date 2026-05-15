@@ -101,6 +101,19 @@ def _cache_delete(key: str):
     except Exception as e:
         logger.warning(f"[redis:del] {key}: {e}")
 
+def _cache_delete_pattern(pattern: str):
+    """批量删除匹配 pattern 的所有 Redis key（用于 force refresh 清股价缓存）"""
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        keys = r.keys(pattern)
+        if keys:
+            r.delete(*keys)
+            logger.info(f"[redis] del pattern={pattern} count={len(keys)}")
+    except Exception as e:
+        logger.warning(f"[redis:del_pattern] {pattern}: {e}")
+
 def _mem_get(key: str, kind: str) -> Optional[any]:
     return _cache_get(key)
 
@@ -172,7 +185,6 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"006555","name":"浦银安盛全球智能科技股票(QDII)A","fee_rate":1.40,"scale":8.7,"ytd_return":43.81,"daily_limit":"3000元","buy_status":"open"},
         {"code":"017730","name":"嘉实全球产业升级股票(QDII)A","fee_rate":1.40,"scale":7.2,"ytd_return":75.36,"daily_limit":"100元","buy_status":"open"},
         {"code":"006373","name":"国富全球科技互联混合(QDII)人民币A","fee_rate":1.40,"scale":24.3,"ytd_return":53.48,"daily_limit":"100元","buy_status":"open"},
-        {"code":"000043","name":"嘉实美国成长股票(QDII)","fee_rate":1.40,"scale":50.1,"ytd_return":20.01,"daily_limit":"100元","buy_status":"open"},
         {"code":"012920","name":"易方达全球成长精选混合(QDII)A","fee_rate":1.40,"scale":28.3,"ytd_return":107.95,"daily_limit":"50元","buy_status":"open"},
         {"code":"539002","name":"建信新兴市场优选混合(QDII)A","fee_rate":1.40,"scale":4.6,"ytd_return":92.11,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"001668","name":"汇添富全球移动互联混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":43.29,"daily_limit":"5000元","buy_status":"open"},
@@ -262,6 +274,224 @@ YF_HEADERS = {
     "Accept": "application/json,text/plain,*/*",
 }
 
+# ─── Yahoo Finance crumb 认证 ────────────────────────────────────────────────
+# Yahoo Finance 2024 起强制要求 cookie+crumb，不带则返回 429
+_YF_CRUMB: dict = {"crumb": None, "cookies": None, "ts": 0.0}
+
+def _yf_get_crumb() -> tuple:
+    """
+    返回 (crumb, cookies)。
+    内存缓存 12h；过期后从 Redis 取；再取不到才重新走认证流程。
+    """
+    now = time.time()
+    if _YF_CRUMB["crumb"] and now - _YF_CRUMB["ts"] < 12 * 3600:
+        return _YF_CRUMB["crumb"], _YF_CRUMB["cookies"]
+
+    cached = _cache_get("yf_crumb")
+    if cached and cached.get("crumb"):
+        _YF_CRUMB.update({**cached, "ts": now})
+        return cached["crumb"], cached.get("cookies") or {}
+
+    try:
+        import requests as _req
+        sess = _req.Session()
+        sess.get("https://finance.yahoo.com/", headers=YF_HEADERS, timeout=(5, 15), verify=False)
+        resp = sess.get(
+            "https://query1.finance.yahoo.com/v1/test/getcrumb",
+            headers=YF_HEADERS, timeout=(4, 10), verify=False,
+        )
+        if resp.ok and resp.text.strip():
+            crumb   = resp.text.strip()
+            cookies = dict(sess.cookies)
+            _YF_CRUMB.update({"crumb": crumb, "cookies": cookies, "ts": now})
+            _cache_set("yf_crumb", {"crumb": crumb, "cookies": cookies}, 12 * 3600)
+            logger.info(f"[yf_crumb] obtained crumb={crumb[:8]}…")
+            return crumb, cookies
+    except Exception as e:
+        logger.warning(f"[yf_crumb] failed: {e}")
+    return None, {}
+
+
+def _yf_chart(symbol: str, interval: str = "1d", range_: str = "5d") -> Optional[dict]:
+    """
+    带 crumb 认证的 Yahoo Finance chart 请求。
+    自动重试一次（crumb 失效时重新获取）。
+    """
+    for attempt in range(2):
+        crumb, cookies = _yf_get_crumb()
+        params = {"interval": interval, "range": range_}
+        if crumb:
+            params["crumb"] = crumb
+        try:
+            resp = _get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                params=params,
+                headers=YF_HEADERS,
+                cookies=cookies or {},
+                timeout=(4, 10),
+            )
+            if resp and resp.status_code == 429 and attempt == 0:
+                # crumb 可能过期，重置后重试
+                _YF_CRUMB["crumb"] = None
+                _cache_delete("yf_crumb")
+                logger.warning(f"[yf_chart] 429 for {symbol}, resetting crumb and retrying")
+                continue
+            if resp and resp.ok:
+                return resp.json()["chart"]["result"][0]
+        except Exception as e:
+            logger.warning(f"[yf_chart] {symbol} attempt {attempt}: {e}")
+    return None
+
+
+def _yf_quote_summary(symbol: str) -> Optional[dict]:
+    """
+    Yahoo Finance v10 quoteSummary price 模块。
+    直接返回 preMarketChangePercent / postMarketChangePercent，
+    比从 chart 推算更可靠（Yahoo 经常在 chart meta 里省略 preMarketPrice）。
+    返回 {pre_pct, post_pct, regular_pct, pre_price, post_price, regular_price, prev_close}，
+    均可为 None。
+    """
+    crumb, cookies = _yf_get_crumb()
+    params = {"modules": "price", "formatted": "false"}
+    if crumb:
+        params["crumb"] = crumb
+    try:
+        resp = _get(
+            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
+            params=params,
+            headers=YF_HEADERS,
+            cookies=cookies or {},
+            timeout=(4, 10),
+        )
+        if not (resp and resp.ok):
+            return None
+        price_data = resp.json()["quoteSummary"]["result"][0]["price"]
+
+        def _raw(field) -> Optional[float]:
+            v = price_data.get(field)
+            if isinstance(v, dict):
+                v = v.get("raw")
+            try:   return float(v) if v is not None else None
+            except (ValueError, TypeError): return None
+
+        def _as_pct(raw_val) -> Optional[float]:
+            """quoteSummary 的 changePercent 字段存的是小数（0.024 = 2.4%），换算为 %。"""
+            return round(raw_val * 100, 2) if raw_val is not None else None
+
+        return {
+            "pre_pct":       _as_pct(_raw("preMarketChangePercent")),
+            "post_pct":      _as_pct(_raw("postMarketChangePercent")),
+            "regular_pct":   _as_pct(_raw("regularMarketChangePercent")),
+            "pre_price":     _raw("preMarketPrice"),
+            "post_price":    _raw("postMarketPrice"),
+            "regular_price": _raw("regularMarketPrice"),
+            "prev_close":    _raw("regularMarketPreviousClose"),
+        }
+    except Exception as e:
+        logger.debug(f"[yf_quote_summary] {symbol}: {e}")
+    return None
+
+
+def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
+    """
+    Yahoo Finance v7 批量报价 — 一次请求拿所有股票盘前/盘中/盘后涨跌幅和价格。
+    preMarketChangePercent 是现成字段，直接用，不用自己算。
+    返回 {symbol: {pre_pct, regular_pct, post_pct, price, close_price}}
+    """
+    if not symbols:
+        return {}
+    crumb, cookies = _yf_get_crumb()
+    fields = ("regularMarketPrice,preMarketPrice,postMarketPrice,"
+              "preMarketChangePercent,postMarketChangePercent,"
+              "regularMarketChangePercent,regularMarketPreviousClose")
+    params = {"symbols": ",".join(symbols), "fields": fields, "formatted": "false"}
+    if crumb:
+        params["crumb"] = crumb
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params=params,
+            headers=YF_HEADERS,
+            cookies=cookies or {},
+            timeout=(5, 15),
+            verify=False,
+        )
+        if not (resp and resp.ok):
+            logger.warning(f"[yf_batch] HTTP {resp.status_code if resp else 'N/A'}")
+            return {}
+        results = resp.json().get("quoteResponse", {}).get("result", [])
+        s = _current_session()
+        out: Dict[str, dict] = {}
+        for q in results:
+            sym = q.get("symbol", "")
+            if not sym:
+                continue
+            def _f(key):
+                v = q.get(key)
+                try: return float(v) if v is not None else None
+                except (TypeError, ValueError): return None
+            # v7 formatted:false 的 changePercent 直接是 % 数值（-1.93 表示 -1.93%）
+            pre_pct  = round(_f("preMarketChangePercent"),  2) if _f("preMarketChangePercent")  is not None else None
+            post_pct = round(_f("postMarketChangePercent"), 2) if _f("postMarketChangePercent") is not None else None
+            reg_pct  = round(_f("regularMarketChangePercent"), 2) if _f("regularMarketChangePercent") is not None else None
+            reg_p    = _f("regularMarketPrice")
+            pre_p    = _f("preMarketPrice")
+            post_p   = _f("postMarketPrice")
+            close_price = round(reg_p, 2) if reg_p else None
+            if s == "pre_market":
+                price = round(pre_p, 2) if pre_p else close_price
+            elif s == "post_market":
+                price = round(post_p or reg_p, 2) if (post_p or reg_p) else close_price
+            elif s == "us_open":
+                price = round(reg_p, 2) if reg_p else close_price
+            else:
+                price = close_price
+            out[sym] = {"pre_pct": pre_pct, "regular_pct": reg_pct, "post_pct": post_pct,
+                        "price": price, "close_price": close_price}
+        logger.info(f"[yf_batch] {len(out)}/{len(symbols)} symbols ok")
+        return out
+    except Exception as e:
+        logger.warning(f"[yf_batch] failed: {e}")
+        return {}
+
+
+def _nasdaq_fetch(symbol: str) -> dict:
+    """
+    Nasdaq.com API：返回 {pct, price}，均可缺失。
+      pct  — 当日涨跌幅%（盘前/盘中/盘后均为从上一收盘价计算的总变动，无需认证，实时）
+      price — lastSalePrice（盘前时通常为上一收盘价，盘中/盘后为最新成交价）
+    """
+    try:
+        url  = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
+        resp = _get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+        }, timeout=(4, 10))
+        if not (resp and resp.ok):
+            return {}
+        primary = (resp.json().get("data") or {}).get("primaryData") or {}
+        result: dict = {}
+        # 涨跌幅
+        pct_str = primary.get("percentageChange", "").replace("%", "").replace("+", "").strip()
+        if pct_str and pct_str not in ("--", "N/A"):
+            try:   result["pct"] = round(float(pct_str), 2)
+            except (ValueError, TypeError): pass
+        # 价格
+        price_str = primary.get("lastSalePrice", "").replace("$", "").replace(",", "").strip()
+        if price_str and price_str not in ("--", "N/A"):
+            try:   result["price"] = round(float(price_str), 2)
+            except (ValueError, TypeError): pass
+        return result
+    except Exception as e:
+        logger.debug(f"[nasdaq_api] {symbol}: {e}")
+    return {}
+
+
+def _nasdaq_change(symbol: str) -> Optional[float]:
+    """向后兼容包装，返回涨跌幅%。"""
+    return _nasdaq_fetch(symbol).get("pct")
+
 # ─── HTTP 工具 ─────────────────────────────────────────────────────────────────
 
 def _get(url, **kwargs) -> Optional[requests.Response]:
@@ -303,8 +533,8 @@ def fetch_fund_performance(code: str) -> list:
     return []
 
 
-# 只包含会变动的字段（fee_rate/scale/track_error 不变；daily_limit/buy_status 每日可能变化）
-_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "ytd_return", "daily_limit"}
+# 只包含会变动的字段（fee_rate/track_error 不变；scale 季度更新；daily_limit/buy_status 每日可能变化）
+_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "ytd_return", "daily_limit", "scale"}
 
 
 def fetch_one_fund(code: str, category: str) -> Optional[dict]:
@@ -356,11 +586,29 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
                         result["daily_limit"] = "不限额"
                     else:
                         try:
-                            result["daily_limit"] = "不限额" if int(maxsg) >= 100_000_000 else f"{maxsg}元"
+                            # 用 float() 先转换，避免 "1e11" 或 "100000.00" 等格式导致 int() 抛 ValueError
+                            result["daily_limit"] = "不限额" if int(float(maxsg)) >= 100_000_000 else f"{int(float(maxsg))}元"
                         except (ValueError, TypeError):
                             result["daily_limit"] = f"{maxsg}元"
+                # SYL_1N 作为 ytd_return 兜底（当 FundMNPeriodIncrease 未能匹配标题时）
+                if "ytd_return" not in result:
+                    syl1n = d.get("SYL_1N", "")
+                    if syl1n not in ("", "--", None):
+                        try:
+                            result["ytd_return"] = float(syl1n)
+                        except (ValueError, TypeError):
+                            pass
     except Exception:
         pass
+
+    # us_active: 补充实时规模（pingzhongdata，缓存 12h）
+    if category == "us_active":
+        try:
+            meta = fetch_fund_meta(code)
+            if meta.get("scale") is not None:
+                result["scale"] = meta["scale"]
+        except Exception:
+            pass
 
     return result
 
@@ -477,11 +725,9 @@ def fetch_etfs_em_fallback(codes: List[str]) -> Dict[str, dict]:
 def fetch_index_price(symbol: str) -> dict:
     """从 Yahoo Finance 获取指数实时点位 + 多周期涨幅 + 近15日历史"""
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        resp = _get(url, params={"interval": "1d", "range": "1y"}, headers=YF_HEADERS, timeout=(4, 15))
-        if not (resp and resp.ok):
+        result = _yf_chart(symbol, interval="1d", range_="1y")
+        if not result:
             return {}
-        result = resp.json()["chart"]["result"][0]
         meta   = result["meta"]
         price  = meta.get("regularMarketPrice")
         if not price:
@@ -897,12 +1143,9 @@ def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
 
 
 def _yf_monthly(symbol: str) -> dict:
-    url  = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    resp = _get(url, params={"interval": "1mo", "range": "11y"},
-                headers=YF_HEADERS, timeout=(4, 20))
-    if not (resp and resp.ok):
+    res = _yf_chart(symbol, interval="1mo", range_="11y")
+    if not res:
         raise ConnectionError(f"Yahoo Finance unavailable for {symbol}")
-    res    = resp.json()["chart"]["result"][0]
     closes = res["indicators"]["quote"][0]["close"]
     return {
         datetime.utcfromtimestamp(ts).strftime("%Y-%m"): close
@@ -1424,10 +1667,14 @@ def _fetch_live_one(code: str) -> tuple:
                     buy_status = "suspended" if truly_suspended else "open"
                     if truly_suspended:
                         daily_limit = "暂停申购"
-                    elif has_limit:
-                        daily_limit = f"{maxsg}元"
-                    else:
+                    elif not has_limit:
                         daily_limit = "不限额"
+                    else:
+                        try:
+                            v = int(float(maxsg))
+                            daily_limit = "不限额" if v >= 100_000_000 else f"{v}元"
+                        except (ValueError, TypeError):
+                            daily_limit = f"{maxsg}元"
             break
         except Exception:
             if attempt == 0:
@@ -2009,7 +2256,9 @@ def _db_save_holdings(fund_code: str, holdings: list, report_date: str = ""):
 def _db_save_stock_prices(stock_cache: dict, date: str):
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     with _db() as conn:
-        for sym, pct in stock_cache.items():
+        for sym, pf in stock_cache.items():
+            # stock_cache 值为 {pre_pct, regular_pct, post_pct}，取 regular 存库
+            pct = pf.get("regular_pct") if isinstance(pf, dict) else pf
             if pct is not None:
                 conn.execute("""
                     INSERT INTO qdii_stock_prices(symbol, date, change_pct, updated_at)
@@ -2064,26 +2313,31 @@ _HOLDINGS_TTL   = 24 * 3600   # 季报持仓，每天刷一次
 _STOCK_CHG_TTL  = 20 * 3600   # 个股涨跌幅，盘后固定
 
 def _current_session() -> str:
-    """返回当前市场时段：'cn' A股/港股, 'us' 美股, 'closed' 盘后/周末"""
-    from datetime import timezone
-    now = datetime.now(timezone.utc)
+    """
+    返回当前市场时段（基于 HKT）：
+      a_share     HKT 08:00-16:00 工作日（A股交易中）
+      pre_market  HKT 16:00-21:30 工作日（美股盘前）
+      us_open     HKT 21:30-04:00 工作日（美股盘中，跨午夜）
+      post_market HKT 04:00-08:00 工作日（美股盘后）
+      weekend     HKT 周六/日全天
+    """
+    from datetime import timezone, timedelta
+    HKT = timezone(timedelta(hours=8))
+    now = datetime.now(HKT)
     if now.weekday() >= 5:
-        return "closed"
+        return "weekend"
     h = now.hour + now.minute / 60.0
-    if 1.5 <= h < 7.0:    return "cn"   # 北京 09:30-15:00
-    if 13.5 <= h < 21.0:  return "us"   # 美东 09:30-17:00
-    return "closed"
+    if 8.0 <= h < 16.0:      return "a_share"
+    if 16.0 <= h < 21.5:     return "pre_market"
+    if h >= 21.5 or h < 4.0: return "us_open"
+    return "post_market"  # HKT 04:00-08:00
 
 def _valuation_ttl() -> int:
-    """开盘时段 15min，盘后 6h，周末 24h。"""
-    from datetime import timezone
-    now = datetime.now(timezone.utc)
-    if now.weekday() >= 5:
-        return 24 * 3600
-    h = now.hour + now.minute / 60
-    if (1.5 <= h < 7.0) or (13.5 <= h < 21.0):
-        return 15 * 60
-    return 6 * 3600
+    """us_open 10min，weekend 60min，其余时段 15min。"""
+    s = _current_session()
+    if s == "us_open":  return 10 * 60
+    if s == "weekend":  return 60 * 60
+    return 15 * 60
 
 _VALUATION_TTL  = 20 * 3600   # 持仓数据写 DB 时用，实际缓存由 _valuation_ttl() 决定
 
@@ -2139,16 +2393,23 @@ def _parse_em_holdings_table(html: str) -> list:
     解析东方财富持仓 HTML 表格，动态检测权重列。
     季报: 序号|代码|名称|最新价|涨跌幅|相关资讯|占净值%|持股数|持仓市值
     年报/半年报: 序号|代码|名称|相关资讯|占净值%|持股数|持仓市值（列数不同）
-    只解析最大的那个表格（完整持仓），忽略其他小表格（历史季报 top-10）。
+    取第一张有实质内容的表格（即当前报告期），忽略页面下方历史季报小表。
     """
-    # 提取所有表格内容，取行数最多（即最完整）的那张
     tables = re.findall(r'<table[^>]*>(.*?)</table>', html, re.DOTALL)
     if not tables:
         return []
-    target = max(tables, key=lambda t: len(re.findall(r'<tr[^>]*>', t)))
+    # 取第一张行数 >= 2 的表（当前报告期），而非最大的表（可能是历史合并）
+    target = None
+    for t in tables:
+        if len(re.findall(r'<tr[^>]*>', t)) >= 2:
+            target = t
+            break
+    if not target:
+        return []
 
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', target, re.DOTALL)
     holdings = []
+    seen_symbols: set = set()
     for row in rows:
         raw_cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
         cells = [_strip_tags(c) for c in raw_cells]
@@ -2166,18 +2427,22 @@ def _parse_em_holdings_table(html: str) -> list:
                 symbol = _map_em_id_to_yahoo(mu.group(1), mu.group(2).strip())
             else:
                 symbol = _normalize_symbol(sym_raw)
-        # 动态找权重列：找第一个 0 < val <= 25 的列（避免误识别价格/持股数）
+        # 去重
+        if symbol in seen_symbols:
+            continue
+        # 动态找权重列：找第一个 0 < val <= 30 的列（避免误识别价格/持股数）
         weight = None
         for i in range(3, min(len(cells), 10)):
             try:
                 w = float(cells[i].replace('%', '').strip())
-                if 0 < w <= 25:
+                if 0 < w <= 30:
                     weight = w
                     break
             except ValueError:
                 continue
         if weight is None:
             continue
+        seen_symbols.add(symbol)
         holdings.append({
             "name":   name_raw,
             "symbol": symbol,
@@ -2326,12 +2591,11 @@ def _fetch_holdings_from_annual_pdf(code: str) -> list:
 
 def fetch_qdii_holdings(code: str) -> list:
     """
-    多层次持仓获取策略：
+    持仓获取策略：
     1. 最新季报（最准确的当前权重，top-10）
-    2. 找最近的年报/半年报（完整持仓，用于补充季报没有的品种）
-    3. 合并：季报权重为准，年报补充剩余空间
-    4. 若年报也失败，尝试 PDF 解析
-    策略核心：季报权重最新最准，年报只补充覆盖更多品种。
+    2. 2025年报（最新完整持仓，用于补充季报没有的品种）
+       - 若2025年报解析异常（权重>120%或条数>200），跳过补充，只用季报
+    3. 合并：季报权重为准，年报只补充季报中没有的品种并按剩余空间缩放
     """
     cache_key = f"qdii_h_{code}"
     cached = _cache_get(cache_key)
@@ -2344,47 +2608,50 @@ def fetch_qdii_holdings(code: str) -> list:
     latest_q = _fetch_em_holdings_for_period(code, "", "")
     logger.info(f"[qdii_holdings] {code} latest quarterly: {len(latest_q)} holdings")
 
-    # Step 2: 找最近的完整报告（年报/半年报，按时间倒序尝试，最远回溯到 2022）
+    # Step 2: 最新完整报告（优先2025年报，按时间倒序，最远回溯到2023）
+    # 2025年报在4月后发布；2025半年报在9月后发布
     complete_periods = []
-    if now.month >= 4 or now.year > 2026:
+    if now.month >= 4 or now.year > 2025:
         complete_periods.append(("2025", "12"))
     if now.month >= 9 or now.year > 2025:
         complete_periods.append(("2025", "6"))
     complete_periods += [
         ("2024", "12"), ("2024", "6"),
         ("2023", "12"), ("2023", "6"),
-        ("2022", "12"), ("2022", "6"),
     ]
 
     complete_h: list = []
-    for year, month in complete_periods:
-        h = _fetch_em_holdings_for_period(code, year, month)
-        logger.info(f"[qdii_holdings] {code} y={year} m={month}: {len(h)} holdings")
+    for yr, mo in complete_periods:
+        h = _fetch_em_holdings_for_period(code, yr, mo)
+        if not h:
+            continue
+        total_w = sum(x["weight"] for x in h)
+        logger.info(f"[qdii_holdings] {code} y={yr} m={mo}: {len(h)} holdings, total_w={total_w:.1f}%")
+        # 合理性校验：权重>120%或条数>200视为解析异常，跳过
+        if total_w > 120 or len(h) > 200:
+            logger.warning(f"[qdii_holdings] {code} y={yr} m={mo}: 异常(weight={total_w:.1f}%,count={len(h)})，跳过")
+            continue
         if len(h) > 10:
             complete_h = h
             break
 
     # Step 3: 合并
     if latest_q and complete_h:
-        # 季报 symbol 集合（权重最准）
         q_symbols = {h["symbol"] for h in latest_q}
         q_weight_total = sum(h["weight"] for h in latest_q)
 
-        # 年报中季报没有的品种（补充）
         supplemental = [h for h in complete_h if h["symbol"] not in q_symbols]
         sup_weight_total = sum(h["weight"] for h in supplemental)
 
-        # 剩余空间缩放：假设季报权重占 q_weight_total%，剩余交给年报补充
         remaining = max(0.0, 100.0 - q_weight_total)
         if sup_weight_total > 0 and remaining > 1.0:
             scale = remaining / sup_weight_total
             supplemental = [{**h, "weight": round(h["weight"] * scale, 4)} for h in supplemental]
-            merged = latest_q + supplemental
+            best_holdings = latest_q + supplemental
         else:
-            merged = latest_q  # 季报已接近100%，不再补充
+            best_holdings = latest_q
 
-        logger.info(f"[qdii_holdings] {code}: merged={len(merged)} (q={len(latest_q)}+sup={len(supplemental)})")
-        best_holdings = merged
+        logger.info(f"[qdii_holdings] {code}: merged={len(best_holdings)} (q={len(latest_q)}+sup={len(supplemental)})")
 
     elif latest_q:
         best_holdings = latest_q
@@ -2408,43 +2675,155 @@ def fetch_qdii_holdings(code: str) -> list:
     return best_holdings
 
 
-# ─── 个股涨跌幅（Yahoo Finance）────────────────────────────────────────────────
+# ─── 个股价格与涨跌幅（四层容灾）──────────────────────────────────────────────
 
-def fetch_stock_change(symbol: str) -> Optional[float]:
-    """获取单只美股昨晚收盘涨跌幅%，缓存 20h"""
-    cache_key = f"stock_chg_{symbol}"
+def fetch_stock_price_fields(symbol: str) -> dict:
+    """
+    获取单只股票各时段价格和涨跌幅。
+    返回: {pre_pct, regular_pct, post_pct, price, close_price}，字段可为 None。
+
+    四层容灾（不放弃任何一只股票）：
+      层1  : Yahoo Finance v8 chart（crumb 认证）→ 收盘价序列 + 三段 pct
+      层1b : Yahoo Finance v10 quoteSummary    → 直接提供 preMarketChangePercent /
+             postMarketChangePercent（比 chart meta 更可靠）
+      层2  : Nasdaq.com API（无需认证）         → 当前涨跌幅 + 最新成交价
+      层3  : Redis stale cache（7天）           → 任何外部源全部失败时的最后保障
+
+    side-effect：post_market 时段成功后写 stock_last_post_{symbol}（48h），
+                 供 a_share 时段读取"昨日涨跌"。
+    """
+    cache_key       = f"stock_pf_{symbol}"
+    stale_cache_key = f"stock_pf_stale_{symbol}"
+    last_post_key   = f"stock_last_post_{symbol}"
+
     cached = _cache_get(cache_key)
     if cached is not None:
-        return float(cached)
+        return cached
 
-    url  = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    resp = _get(url, params={"interval": "1d", "range": "5d"},
-                headers=YF_HEADERS, timeout=(4, 10))
-    if not (resp and resp.ok):
-        return None
-    try:
-        result = resp.json()["chart"]["result"][0]
-        meta   = result["meta"]
-        price  = float(meta.get("regularMarketPrice") or 0)
-        prev   = float(
-            meta.get("regularMarketPreviousClose")
-            or meta.get("previousClose")
-            or meta.get("chartPreviousClose")
-            or 0
-        )
-        # 还拿不到 prev，从历史 closes 取倒数第二条
-        if not prev:
-            closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c]
+    s   = _current_session()
+    ttl = _valuation_ttl() if s in ("us_open", "pre_market", "post_market") else 8 * 3600
+    out: dict = {"pre_pct": None, "regular_pct": None, "post_pct": None,
+                 "price": None, "close_price": None}
+
+    # ── 层1：Yahoo Finance chart（crumb 认证）──────────────────────────────────
+    yf_ok  = False
+    result = _yf_chart(symbol, interval="1d", range_="5d")
+    if result:
+        try:
+            meta   = result["meta"]
+            closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
+            prev   = 0.0
             if len(closes) >= 2:
-                prev = closes[-2]
-        if not price or not prev:
-            return None
-        pct = round((price - prev) / prev * 100, 2)
-        _cache_set(cache_key, pct, _STOCK_CHG_TTL)
-        return pct
-    except Exception as e:
-        logger.warning(f"[stock_chg] {symbol}: {e}")
-        return None
+                prev = float(closes[-2])
+            else:
+                for key in ("regularMarketPreviousClose", "previousClose", "chartPreviousClose"):
+                    v = meta.get(key)
+                    if v:
+                        prev = float(v); break
+            if prev:
+                def _calc_pct(price_key: str) -> Optional[float]:
+                    p = float(meta.get(price_key) or 0)
+                    return round((p - prev) / prev * 100, 2) if p else None
+                out["regular_pct"] = _calc_pct("regularMarketPrice")
+                out["pre_pct"]     = _calc_pct("preMarketPrice")
+                out["post_pct"]    = _calc_pct("postMarketPrice")
+
+                close_price = round(float(closes[-1]), 2) if closes else None
+                out["close_price"] = close_price
+
+                pre_p  = float(meta.get("preMarketPrice")  or 0)
+                post_p = float(meta.get("postMarketPrice") or 0)
+                reg_p  = float(meta.get("regularMarketPrice") or 0)
+                if s == "pre_market":
+                    raw_price = pre_p or close_price or 0
+                elif s == "post_market":
+                    raw_price = post_p or reg_p or close_price or 0
+                elif s == "us_open":
+                    raw_price = reg_p or close_price or 0
+                else:
+                    raw_price = close_price or reg_p or 0
+                out["price"] = round(raw_price, 2) if raw_price else None
+                yf_ok = True
+        except Exception as e:
+            logger.warning(f"[stock_pf] chart parse {symbol}: {e}")
+
+    # ── 层1b：Yahoo quoteSummary 补全盘前/盘后涨跌幅 ───────────────────────────
+    # chart 的 meta.preMarketPrice 经常缺失；quoteSummary 直接有 changePercent 字段
+    if yf_ok and (
+        (s == "pre_market"  and out["pre_pct"]  is None) or
+        (s == "post_market" and out["post_pct"] is None)
+    ):
+        qs = _yf_quote_summary(symbol)
+        if qs:
+            if s == "pre_market" and qs.get("pre_pct") is not None:
+                out["pre_pct"] = qs["pre_pct"]
+                if qs.get("pre_price") and not out["price"]:
+                    out["price"] = round(float(qs["pre_price"]), 2)
+                logger.info(f"[stock_pf] {symbol}: pre_pct from quoteSummary={qs['pre_pct']}%")
+            elif s == "post_market" and qs.get("post_pct") is not None:
+                out["post_pct"] = qs["post_pct"]
+                if qs.get("post_price") and not out["price"]:
+                    out["price"] = round(float(qs["post_price"]), 2)
+                logger.info(f"[stock_pf] {symbol}: post_pct from quoteSummary={qs['post_pct']}%")
+
+    # ── 层2：Nasdaq.com API（chart 完全失败 OR pre/post pct 仍缺）─────────────
+    nasdaq_needed = (
+        not yf_ok or
+        (s == "pre_market"  and out["pre_pct"]  is None) or
+        (s == "post_market" and out["post_pct"] is None)
+    )
+    if nasdaq_needed:
+        nd = _nasdaq_fetch(symbol)
+        if nd:
+            nd_pct   = nd.get("pct")
+            nd_price = nd.get("price")
+            if not yf_ok:
+                # chart 完全失败：Nasdaq 作为主数据源
+                out["regular_pct"] = nd_pct
+                if s == "pre_market":
+                    out["pre_pct"]   = nd_pct
+                    out["close_price"] = nd_price  # 盘前 lastSalePrice ≈ 昨收
+                elif s == "post_market":
+                    out["post_pct"]  = nd_pct
+                    out["close_price"] = nd_price
+                else:
+                    out["close_price"] = nd_price
+                out["price"] = nd_price
+                logger.info(f"[stock_pf] {symbol}: chart failed, nasdaq pct={nd_pct}% price={nd_price}")
+            else:
+                # chart 成功但 pre/post pct 缺失：仅补涨跌幅
+                if s == "pre_market"  and out["pre_pct"]  is None and nd_pct is not None:
+                    out["pre_pct"]  = nd_pct
+                    logger.info(f"[stock_pf] {symbol}: pre_pct from nasdaq={nd_pct}%")
+                elif s == "post_market" and out["post_pct"] is None and nd_pct is not None:
+                    out["post_pct"] = nd_pct
+                    logger.info(f"[stock_pf] {symbol}: post_pct from nasdaq={nd_pct}%")
+
+    # ── 有任意有效数据则缓存并返回 ────────────────────────────────────────────
+    has_data = any(out.get(k) is not None for k in ("regular_pct","pre_pct","post_pct","price","close_price"))
+    if has_data:
+        # 盘后快照：写入 stock_last_post_{symbol}，供 a_share 时段读"昨日涨跌"
+        if s == "post_market":
+            snap_pct = out.get("post_pct") or out.get("regular_pct")
+            if snap_pct is not None:
+                _cache_set(last_post_key, {
+                    "pct":         snap_pct,
+                    "close_price": out.get("close_price"),
+                }, 48 * 3600)
+        _cache_set(cache_key, out, ttl)
+        _cache_set(stale_cache_key, out, 7 * 24 * 3600)
+        return out
+
+    # ── 层3：Redis stale cache（所有外部源均失败）────────────────────────────
+    stale = _cache_get(stale_cache_key)
+    if stale:
+        logger.warning(f"[stock_pf] {symbol}: all sources failed, using stale cache")
+        out = {**stale, "_stale": True}
+        _cache_set(cache_key, out, min(ttl, 3600))
+        return out
+
+    logger.warning(f"[stock_pf] {symbol}: all sources failed, no data")
+    return out
 
 
 def fetch_fx_data() -> dict:
@@ -2457,26 +2836,25 @@ def fetch_fx_data() -> dict:
     if cached is not None:
         return cached
 
-    url  = "https://query1.finance.yahoo.com/v8/finance/chart/USDCNY=X"
-    resp = _get(url, params={"interval": "1d", "range": "5d"},
-                headers=YF_HEADERS, timeout=(4, 10))
-    if not (resp and resp.ok):
+    res = _yf_chart("USDCNY=X", interval="1d", range_="5d")
+    if not res:
         return {"change": 0.0, "price": None}
     try:
-        res   = resp.json()["chart"]["result"][0]
         meta  = res["meta"]
         price = float(meta.get("regularMarketPrice") or 0)
-        prev  = float(meta.get("regularMarketPreviousClose")
-                      or meta.get("chartPreviousClose")
-                      or meta.get("previousClose") or 0)
-        if not prev:
-            closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", [])
-            valid = [c for c in closes if c is not None]
-            if len(valid) >= 2:
-                prev = valid[-2]
+        closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", []) if isinstance(res, dict) else []
+        valid = [c for c in closes if c is not None]
+        prev = float(valid[-2]) if len(valid) >= 2 else float(
+            meta.get("regularMarketPreviousClose")
+            or meta.get("chartPreviousClose")
+            or meta.get("previousClose") or 0
+        )
         pct = round((price - prev) / prev * 100, 2) if price and prev else 0.0
         result = {"change": pct, "price": round(price, 4) if price else None}
-        _cache_set(cache_key, result, _VALUATION_TTL)
+        # 汇率在美股盘中随时变，跟随 _valuation_ttl()；非交易时段用 8h
+        s = _current_session()
+        ttl = _valuation_ttl() if s in ("us_open", "pre_market", "post_market") else 8 * 3600
+        _cache_set(cache_key, result, ttl)
         return result
     except Exception:
         return {"change": 0.0, "price": None}
@@ -2520,7 +2898,7 @@ def fetch_fund_gszzl(code: str) -> dict:
     cached = _cache_get(cache_key)
     if cached:
         return cached
-    result: dict = {"gszzl": None, "gsz": None, "gztime": None, "is_fresh": False, "nav": None}
+    result: dict = {"gszzl": None, "gsz": None, "gztime": None, "is_fresh": False, "nav": None, "nav_date": None}
     try:
         from datetime import timezone, timedelta
         url  = f"https://fundgz.1234567.com.cn/js/{code}.js"
@@ -2535,6 +2913,7 @@ def fetch_fund_gszzl(code: str) -> dict:
         gszzl_str = (data.get("gszzl") or "").strip()
         gsz_str   = (data.get("gsz")   or "").strip()
         dwjz_str  = (data.get("dwjz")  or "").strip()
+        jzrq_str  = (data.get("jzrq")  or "").strip()   # 净值日期 e.g. "2025-05-14"
         beijing_today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         gszzl: Optional[float] = None
         if gszzl_str and gszzl_str not in ("0.00", "0", ""):
@@ -2557,8 +2936,11 @@ def fetch_fund_gszzl(code: str) -> dict:
             "gztime":   gztime or None,
             "is_fresh": is_fresh,
             "nav":      nav,
+            "nav_date": jzrq_str or None,
         }
-        ttl = 15 * 60 if _current_session() in ("cn", "us") else 30 * 60
+        s   = _current_session()
+        # 周末 A股不开盘，gszzl 数据不变，缓存 12h；其他时段跟随 _valuation_ttl()
+        ttl = 12 * 3600 if s == "weekend" else _valuation_ttl()
         _cache_set(cache_key, result, ttl)
     except Exception as e:
         logger.warning(f"[gszzl] {code}: {e}")
@@ -2627,10 +3009,12 @@ def fetch_fund_meta(code: str) -> dict:
 
 # ─── 估值计算核心 ──────────────────────────────────────────────────────────────
 
-def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float) -> dict:
+def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
+                             session: str = "a_share") -> dict:
     """
     计算单只基金估值。
-    stock_cache: {symbol -> change_pct}，由调用方批量填充，减少重复请求。
+    stock_cache: {symbol -> {pre_pct, regular_pct, post_pct}}，由调用方批量填充。
+    session: 当前时段，决定使用哪个价格字段。
     """
     raw_holdings = fetch_qdii_holdings(code)
     if not raw_holdings:
@@ -2657,8 +3041,19 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float) -> d
     enriched = []
     for h in holdings:
         sym = h["symbol"]
-        chg = stock_cache.get(sym)
-        enriched.append({**h, "change": chg})
+        pf  = stock_cache.get(sym) or {}
+        # 根据时段选价格字段
+        if session == "pre_market":
+            chg = pf.get("pre_pct") or pf.get("regular_pct")
+        elif session == "post_market":
+            chg = pf.get("post_pct") or pf.get("regular_pct")
+        elif session == "a_share":
+            # a_share：用盘后快照涨跌幅（last_post_pct），表示"昨日涨跌"
+            chg = pf.get("last_post_pct") or pf.get("post_pct") or pf.get("regular_pct")
+        else:  # us_open, weekend
+            chg = pf.get("regular_pct")
+        enriched.append({**h, "change": chg, "price": pf.get("price"),
+                         "close_price": pf.get("close_price")})
         if chg is not None:
             weighted_sum   += h["weight"] / 100.0 * chg
             covered_weight += h["weight"]
@@ -2689,50 +3084,79 @@ def api_qdii_holdings(code: str, response: Response):
 
 
 @app.get("/api/qdii/valuations")
-def api_qdii_valuations(response: Response, force: bool = False):
+def api_qdii_valuations(response: Response, force: bool = False, light: bool = False):
     """
     批量返回所有主动 QDII 基金的估值结果。
 
-    数据策略（session-aware）:
-    - CN 时段 (09:30-15:00 北京, UTC 01:30-07:00):
-        优先 fundgz gszzl（基金公司全仓实时估值，15min 刷新），覆盖率=100%。
-        gszzl 无数据时降级到缓存股价加权（昨收）。
-    - US 时段 (09:30-17:00 美东, UTC 13:30-21:00):
-        优先 Yahoo Finance 实时股价加权计算。
-        Yahoo 拿不到时用 gszzl 兜底。
-    - 盘后/周末:
-        用 gszzl 最新值或缓存股价，TTL 6h/24h。
+    数据策略（5-session-aware）:
+    - a_share  (HKT 08:00-16:00 工作日): 优先 fundgz gszzl 实时估值，15min 刷新
+    - pre_market (HKT 16:00-21:30 工作日): Yahoo preMarketPrice 加权，15min 刷新
+    - us_open   (HKT 21:30-04:00 工作日): Yahoo regularMarketPrice 加权，10min 刷新
+    - post_market (HKT 04:00-08:00 工作日): Yahoo postMarketPrice 加权，15min 刷新
+    - weekend   (HKT 周六/日): 缓存上次收盘价，60min 刷新
 
-    ?force=true 强制跳过所有缓存重新计算。
+    ?light=true  轻量预热：只清顶层+股价缓存，持仓/gszzl 保留（~3-5s 完成）
+    ?force=true  全量重算：清所有缓存（慢，仅调试用）
     """
+    from datetime import timezone, timedelta
     session   = _current_session()
     cache_key = "qdii_valuations"
 
-    if force:
+    if light:
+        # 只清顶层估值缓存 + 股价子缓存（需要拿最新盘前/盘后价格）
+        # 持仓数据(qdii_h_*)、gszzl(qdii_gszzl_*)、汇率 均保留 → 重算只需 3-5s
+        _cache_delete(cache_key)
+        _cache_delete_pattern("stock_pf_*")
+        logger.info(f"[qdii] light refresh: cleared valuations + stock prices (session={session})")
+    elif force:
         _cache_delete(cache_key)
         for code in QDII_CODES:
             _cache_delete(f"qdii_h_{code}")
             _cache_delete(f"qdii_meta_{code}")
-            _cache_delete(f"qdii_gszzl_{code}")   # gszzl 缓存已包含 nav，qdii_nav_ 已弃用
+            _cache_delete(f"qdii_gszzl_{code}")
         _cache_delete("qdii_fx_chg")
         _cache_delete("qdii_fx_data")
+        _cache_delete_pattern("stock_pf_*")
         logger.info(f"[qdii] force refresh: cleared all caches (session={session})")
     else:
         cached = _cache_get(cache_key)
         if not cached:
-            # Redis 为空（冷启动/重启）→ 尝试从 SQLite 加载上次结果
-            cached = _db_load_full_cache()
-            if cached:
-                logger.info("[qdii] redis miss, loaded from sqlite full cache")
+            db_cached = _db_load_full_cache()
+            if db_cached:
+                # SQLite 仅用于冷启动（进程刚重启 Redis 还没有数据）
+                # 如果缓存时间超过当前时段 TTL，视为过期，不使用（避免数据永远不更新）
+                ttl_sec = _valuation_ttl()
+                updated = db_cached.get("updated_at", "")
+                is_fresh = False
+                if updated:
+                    try:
+                        from datetime import timezone
+                        age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                            updated.replace("Z", "+00:00"))).total_seconds()
+                        is_fresh = age < ttl_sec
+                    except Exception:
+                        pass
+                if is_fresh:
+                    cached = db_cached
+                    logger.info(f"[qdii] redis miss, sqlite cache is fresh (age<{ttl_sec}s), using it")
+                else:
+                    logger.info(f"[qdii] redis miss, sqlite cache is stale, will recompute")
         if cached:
-            cached_session = cached.get("session", "closed")
-            # 若缓存是盘后写入，但现在已进入开盘时段，强制失效重算
-            # 避免 6h 盘后缓存覆盖整个开盘时段，导致实时数据永远拿不到
-            if cached_session == "closed" and session in ("cn", "us"):
-                logger.info(f"[qdii] session changed closed→{session}, invalidating stale cache")
+            cached_session = cached.get("session", "weekend")
+            # 估值来源发生根本性切换时必须失效，否则旧 session 数据会持续到 TTL 到期
+            # a_share  → gszzl 全仓估值
+            # pre/us/post → Yahoo 实时/盘前/盘后加权
+            # weekend  → 缓存收盘价
+            _SOURCE_CHANGED = (
+                (cached_session == "weekend"    and session != "weekend") or
+                (cached_session == "a_share"    and session in ("pre_market", "us_open", "post_market")) or
+                (cached_session == "post_market" and session in ("a_share", "pre_market", "us_open")) or
+                (cached_session in ("pre_market", "us_open") and session == "a_share")
+            )
+            if _SOURCE_CHANGED:
+                logger.info(f"[qdii] session {cached_session}→{session}, invalidating cache")
                 _cache_delete(cache_key)
             else:
-                # 缓存有效：更新 session 为当前值后返回，并回填 Redis
                 cached["session"] = session
                 _cache_set(cache_key, cached, _valuation_ttl())
                 response.headers["Cache-Control"] = "no-store"
@@ -2743,7 +3167,6 @@ def api_qdii_valuations(response: Response, force: bool = False):
     fx_price  = fx_data["price"]
 
     # ── Step 1: 并发拉取 gszzl(含nav) + 持仓 + meta ─────────────────────────────
-    # fetch_fund_gszzl 已合并 fetch_fund_nav，一次 HTTP 拿 dwjz+gszzl+gsz+gztime
     gszzl_cache:  dict[str, dict] = {}
     all_holdings: dict[str, list] = {}
     meta_cache:   dict[str, dict] = {}
@@ -2757,59 +3180,118 @@ def api_qdii_valuations(response: Response, force: bool = False):
                 try:
                     val = fut.result()
                 except Exception:
-                    val = {"gszzl": None, "gsz": None, "gztime": None, "is_fresh": False, "nav": None} \
+                    val = {"gszzl": None, "gsz": None, "gztime": None, "is_fresh": False,
+                           "nav": None, "nav_date": None} \
                           if kind == "gszzl" else [] if kind == "h" else {}
                 if   kind == "gszzl": gszzl_cache[code] = val
                 elif kind == "h":     all_holdings[code] = val
                 else:                 meta_cache[code]   = val
 
-    # ── Step 2: 并发拉取股价（始终拉，CN 时段用缓存值，US 时段用实时值）──────────
-    all_symbols = {
+    # ── Step 2: 并发拉取股价 ────────────────────────────────────────────────────
+    all_symbols = list({
         h["symbol"]
         for holdings in all_holdings.values()
         for h in holdings if h["symbol"]
-    }
-    stock_cache: dict[str, Optional[float]] = {}
-    with ThreadPoolExecutor(max_workers=16) as ex:
-        sf = {ex.submit(fetch_stock_change, sym): sym for sym in all_symbols}
-        for fut, sym in sf.items():
-            try:    stock_cache[sym] = fut.result()
-            except: stock_cache[sym] = None
+    })
+    _EMPTY_PF = {"pre_pct": None, "regular_pct": None, "post_pct": None,
+                 "price": None, "close_price": None}
+    stock_cache: dict[str, dict] = {}
+    if session in ("pre_market", "us_open", "post_market"):
+        # 美股交易时段：并发实时拉取
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in all_symbols}
+            for fut, sym in sf.items():
+                try:    stock_cache[sym] = fut.result()
+                except: stock_cache[sym] = dict(_EMPTY_PF)
+    else:
+        # a_share / weekend：美股已收盘
+        # 1) 读常规 8h 缓存（有就用）
+        # 2) 缓存为空时拉一次填充收盘价
+        # 3) a_share：叠加 stock_last_post_{sym} 快照，注入 last_post_pct（"昨日涨跌"）
+        missing = [sym for sym in all_symbols if not _cache_get(f"stock_pf_{sym}")]
+        if missing:
+            with ThreadPoolExecutor(max_workers=16) as ex:
+                sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
+                for fut, sym in sf.items():
+                    try:    stock_cache[sym] = fut.result()
+                    except: stock_cache[sym] = dict(_EMPTY_PF)
+        for sym in all_symbols:
+            if sym not in stock_cache:
+                stock_cache[sym] = _cache_get(f"stock_pf_{sym}") or dict(_EMPTY_PF)
+
+        # a_share：读盘后快照，注入 last_post_pct 供 "昨日涨跌" 展示
+        if session == "a_share":
+            for sym in all_symbols:
+                snap = _cache_get(f"stock_last_post_{sym}") or {}
+                if snap.get("pct") is not None:
+                    stock_cache[sym] = {**stock_cache[sym], "last_post_pct": snap["pct"]}
+                    if snap.get("close_price") and not stock_cache[sym].get("close_price"):
+                        stock_cache[sym]["close_price"] = snap["close_price"]
 
     # ── Step 3: 逐基金估值（session-aware 优先级）─────────────────────────────
+    # 计算「上周五」日期，用于 weekend nav_published 判断
+    HKT = timezone(timedelta(hours=8))
+    now_hkt = datetime.now(HKT)
+    days_since_friday = (now_hkt.weekday() - 4) % 7
+    last_friday = (now_hkt - timedelta(days=days_since_friday)).strftime("%Y-%m-%d")
+
     results = []
     for code in QDII_CODES:
         g        = gszzl_cache.get(code, {})
         meta     = meta_cache.get(code, {})
-        gszzl_v  = g.get("gszzl")       # 估值涨跌幅%
+        gszzl_v  = g.get("gszzl")
         gztime   = g.get("gztime")
         is_fresh = g.get("is_fresh", False)
+        nav_date = g.get("nav_date")
 
-        if session == "cn" and is_fresh and gszzl_v is not None:
-            # CN 时段且 gszzl 今日有效 → 直接使用全仓估值，覆盖率100%（基金公司全仓计算）
+        if session == "a_share" and is_fresh and gszzl_v is not None:
+            # A股时段且 gszzl 今日有效 → 直接使用全仓估值，覆盖率100%
+            # 持仓填入昨日盘后涨跌（last_post_pct > post_pct > regular_pct），用于详情面板"昨日涨跌"
+            raw_h = all_holdings.get(code, [])
+            enriched_h = [
+                {**h,
+                 "change": (
+                     (stock_cache.get(h["symbol"]) or {}).get("last_post_pct") or
+                     (stock_cache.get(h["symbol"]) or {}).get("post_pct") or
+                     (stock_cache.get(h["symbol"]) or {}).get("regular_pct")
+                 ),
+                 "price":       (stock_cache.get(h["symbol"]) or {}).get("price"),
+                 "close_price": (stock_cache.get(h["symbol"]) or {}).get("close_price")}
+                for h in raw_h
+            ]
             r = {
                 "code":        code,
                 "valuation":   gszzl_v,
-                "holdings":    all_holdings.get(code, []),
+                "holdings":    enriched_h,
                 "coverage":    100,
                 "fx_change":   fx_change,
                 "data_source": "gszzl",
                 "gszzl_time":  gztime,
             }
         else:
-            # US 时段 / 盘后 / gszzl 无今日数据 → 持仓加权计算
-            r = calc_valuation_for_fund(code, stock_cache, fx_change)
+            # 其他时段 → 持仓加权计算（session决定价格字段）
+            r = calc_valuation_for_fund(code, stock_cache, fx_change, session)
             if r["valuation"] is None and gszzl_v is not None:
-                # 持仓算不出时，用 gszzl 兜底（不限是否今日）
-                # Bug fix: 保留原始持仓覆盖率，不误设为100%（gszzl可能是旧数据）
                 r["valuation"]   = gszzl_v
                 r["data_source"] = "gszzl_fallback"
             else:
-                r["data_source"] = "calc_live" if session == "us" else "calc_cached"
+                src_map = {
+                    "pre_market":  "pre_market_calc",
+                    "us_open":     "us_open_calc",
+                    "post_market": "post_market_calc",
+                    "a_share":     "a_share_post_calc",
+                    "weekend":     "cached_post",
+                }
+                r["data_source"] = src_map.get(session, "cached_post")
             r["gszzl_time"] = gztime
 
-        # 净值：gszzl 里的 dwjz 优先，meta pingzhongdata 兜底
-        r["nav"]        = g.get("nav") or meta.get("nav_latest")
+        # 净值
+        r["nav"]      = g.get("nav") or meta.get("nav_latest")
+        r["nav_date"] = nav_date
+        # 周末：若净值日期 >= 上周五，标记已公布最新净值
+        r["nav_published"] = bool(
+            session == "weekend" and nav_date and nav_date >= last_friday
+        )
         r["scale"]      = meta.get("scale")
         r["ytd_return"] = meta.get("ytd_return")
         results.append(r)
@@ -2840,3 +3322,38 @@ def api_qdii_valuations(response: Response, force: bool = False):
 
     response.headers["Cache-Control"] = "no-store"
     return payload
+
+
+@app.get("/api/stocks/prices")
+def api_stocks_prices(symbols: str = "", response: Response = None):
+    """
+    独立股票价格端点。
+    GET /api/stocks/prices?symbols=TSLA,META,NVDA
+
+    返回每只股票的 {pre_pct, regular_pct, post_pct, price, close_price}，
+    四层容灾确保所有股票均有数据。5分钟缓存（美股交易时段），8小时（非交易时段）。
+    """
+    if response:
+        response.headers["Cache-Control"] = "no-store"
+
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not syms:
+        return {"session": _current_session(), "data": {}}
+
+    s = _current_session()
+    result: dict = {}
+    with ThreadPoolExecutor(max_workers=min(16, len(syms))) as ex:
+        futures = {ex.submit(fetch_stock_price_fields, sym): sym for sym in syms}
+        for fut, sym in futures.items():
+            try:
+                result[sym] = fut.result()
+            except Exception as e:
+                logger.warning(f"[api/stocks/prices] {sym}: {e}")
+                result[sym] = {"pre_pct": None, "regular_pct": None,
+                               "post_pct": None, "price": None, "close_price": None}
+
+    return {
+        "session":    s,
+        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "data":       result,
+    }

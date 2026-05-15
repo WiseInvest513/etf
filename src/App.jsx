@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line, LineChart, PieChart, Pie, Cell } from "recharts";
 import { Analytics } from "@vercel/analytics/react";
 import LazyPage from "./LazyPage.jsx";
@@ -1299,7 +1300,7 @@ function GroupChatModal({onClose}) {
 }
 
 function GalaxyCard({isMobile}) {
-  const [showWx, setShowWx] = React.useState(false);
+  const [showWx, setShowWx] = useState(false);
   const fees = [
     {label:"ETF / LOF",  value:"万0.5，1毛起",  highlight:true,  note:"免五"},
     {label:"股票",        value:"万0.86，5元起",  highlight:false, note:"50万↑万0.8"},
@@ -1359,26 +1360,29 @@ function GalaxyCard({isMobile}) {
       </div>
     </Card>
 
-    {/* 微信弹窗 */}
-    {showWx&&(
+    {/* 微信弹窗：用 portal 挂到 body，避免父级 transform 影响 fixed 定位 */}
+    {showWx && createPortal(
       <div onClick={()=>setShowWx(false)}
-        style={{position:"fixed",inset:0,zIndex:2000,background:"rgba(0,0,0,0.55)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+        style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.55)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
         <div onClick={e=>e.stopPropagation()}
-          style={{background:"#fff",borderRadius:20,padding:"28px 28px 20px",maxWidth:340,width:"100%",boxShadow:"0 24px 80px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",alignItems:"center",gap:4,animation:"fadeInUp 0.25s ease both"}}>
-          <button onClick={()=>setShowWx(false)}
-            style={{position:"absolute",marginLeft:"auto",alignSelf:"flex-end",background:"none",border:"none",fontSize:20,color:"#999",cursor:"pointer",lineHeight:1}}>✕</button>
-          <div style={{fontSize:16,fontWeight:800,color:"#1d1d1f",marginBottom:2,textAlign:"center"}}>添加微信，获取专属开户支持</div>
-          <div style={{fontSize:12,color:"#6e6e73",textAlign:"center",marginBottom:12,lineHeight:1.6}}>
-            扫码添加好友，发送「银河证券」<br/>即可获取专属开户费率协助
+          style={{background:"#fff",borderRadius:20,padding:"20px 20px 16px",maxWidth:280,width:"100%",boxShadow:"0 24px 80px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",alignItems:"center",gap:8,animation:"fadeInUp 0.25s ease both"}}>
+          <div style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1d1d1f"}}>添加微信，获取开户支持</div>
+            <button onClick={()=>setShowWx(false)}
+              style={{background:"none",border:"none",fontSize:18,color:"#999",cursor:"pointer",lineHeight:1,padding:0}}>✕</button>
           </div>
-          <div style={{borderRadius:16,overflow:"hidden",border:"1px solid #e5e5ea",width:"100%"}}>
-            <img src="/wx_personal.png" alt="微信二维码"
+          <div style={{fontSize:11,color:"#6e6e73",textAlign:"center",lineHeight:1.5}}>
+            扫码添加，发送「银河证券」获取专属费率
+          </div>
+          <div style={{borderRadius:12,overflow:"hidden",border:"1px solid #e5e5ea",width:240,flexShrink:0}}>
+            <img src="/WX.jpg" alt="微信二维码"
               style={{width:"100%",height:"auto",display:"block"}}
               onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
           </div>
-          <div style={{fontSize:12,color:"#6e6e73",marginTop:8,textAlign:"center"}}>长按或扫码识别二维码</div>
+          <div style={{fontSize:11,color:"#aaa",textAlign:"center"}}>长按或扫码识别</div>
         </div>
-      </div>
+      </div>,
+      document.body
     )}
     </>
   );
@@ -4238,7 +4242,7 @@ export default function App() {
      render:v=>v?<span style={{fontFamily:"monospace",fontSize:11,color:C.cyan,background:C.cyan+"18",padding:"2px 7px",borderRadius:4,fontWeight:700,letterSpacing:"0.5px"}}>{v}</span>:<span style={{color:C.textDim,fontSize:11}}>—</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），不含申购赎回费，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"近1年滚动涨幅（API实时数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据，每5分钟更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小越紧密",align:"right",render:v=>v!=null?<span style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
@@ -4251,7 +4255,7 @@ export default function App() {
     {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12}}>{v}</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），主动型普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"近1年滚动涨幅（API实时数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
@@ -4263,7 +4267,7 @@ export default function App() {
     {key:"name",  label:"ETF名称"},
     {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
     {key:"scale", label:"规模(亿)",tip:"基金总规模，越大流动性越好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（静态数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"近1年滚动涨幅（API实时数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},

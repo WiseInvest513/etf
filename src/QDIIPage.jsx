@@ -11,21 +11,45 @@ function useIsMobile() {
   return m;
 }
 
-// 判断当前市场时段（与后端 _current_session() 保持一致）
+// 基于固定时钟格计算距离下一次刷新的秒数
+// 盘前 16:00 起、盘中 21:30 起、盘后 04:00 起，每 15 分钟一个格
+function clockCountdown(session) {
+  if (session === "a_share" || session === "weekend") return null;
+  const now = new Date();
+  const hkt = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
+  const totalSec = hkt.getHours() * 3600 + hkt.getMinutes() * 60 + hkt.getSeconds();
+  const DAY = 24 * 3600;
+  // 盘中 10 分钟一格，其他时段 15 分钟
+  const INTERVAL = session === "us_open" ? 10 * 60 : 15 * 60;
+  const anchor = { pre_market: 16 * 3600, us_open: 21 * 3600 + 30 * 60, post_market: 4 * 3600 }[session] ?? 0;
+  const elapsed = (totalSec - anchor + DAY) % DAY;
+  return INTERVAL - (elapsed % INTERVAL); // 距离下一个格的秒数
+}
+
+function sessionInterval(session) {
+  return session === "us_open" ? 10 * 60 : 15 * 60;
+}
+
+// 判断当前市场时段（与后端 _current_session() 保持一致，基于 HKT）
 function getMarketSession() {
-  const now  = new Date();
-  const day  = now.getUTCDay();   // 0=Sun, 6=Sat
-  if (day === 0 || day === 6) return "closed";
-  const h = now.getUTCHours() + now.getUTCMinutes() / 60;
-  if (h >= 1.5  && h < 7.0)  return "cn";   // 北京 09:30-15:00
-  if (h >= 13.5 && h < 21.0) return "us";   // 美东 09:30-17:00
-  return "closed";
+  const now = new Date();
+  // 转为 HKT（UTC+8）
+  const hkt = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
+  const day = hkt.getDay(); // 0=Sun, 6=Sat in HKT
+  if (day === 0 || day === 6) return "weekend";
+  const h = hkt.getHours() + hkt.getMinutes() / 60;
+  if (h >= 8  && h < 16)  return "a_share";    // HKT 08:00-16:00
+  if (h >= 16 && h < 21.5) return "pre_market"; // HKT 16:00-21:30
+  if (h >= 21.5 || h < 4)  return "us_open";    // HKT 21:30-04:00
+  return "post_market";                          // HKT 04:00-08:00
 }
 
 const SESSION_INFO = {
-  cn:     { label:"A股时段",   desc:"fundgz 实时全仓估值，15分钟刷新", color:"#059669", bg:"rgba(5,150,105,0.15)" },
-  us:     { label:"美股时段",   desc:"Yahoo 实时股价加权，15分钟刷新",  color:"#2563eb", bg:"rgba(37,99,235,0.15)" },
-  closed: { label:"盘后数据",   desc:"数据已固定，次日开盘前不变",       color:"#6b7280", bg:"rgba(107,114,128,0.12)" },
+  a_share:     { label:"A股时段",  valLabel:"昨日估值", desc:"昨日盘后涨跌幅加权，数据已固定",      color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
+  pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
+  us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"实时股价加权估值，10分钟刷新",         color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
+  post_market: { label:"美股盘后", valLabel:"盘后估值", desc:"盘后涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(124,58,237,0.85)",  dot:"#c4b5fd" },
+  weekend:     { label:"周末休市", valLabel:"最新估值", desc:"数据已固定，周一美股开盘前不变",        color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
 };
 
 // ─── 颜色 ─────────────────────────────────────────────────────────────────────
@@ -38,8 +62,22 @@ const C = {
   textDim:     "#aeaeb2",
   bg:          "#f5f5f7",
   card:        "#ffffff",
+  stripe:      "#f5f5f7",
   border:      "#e0e0e5",
   borderLight: "#f0f0f5",
+};
+const DARK = {
+  accent:      "#60a5fa",
+  red:         "#f87171",
+  green:       "#34d399",
+  text:        "#f3f4f6",
+  textMuted:   "#d1d5db",
+  textDim:     "#9ca3af",
+  bg:          "#16171d",
+  card:        "#1f2028",
+  stripe:      "#12131a",
+  border:      "#2e303a",
+  borderLight: "#252630",
 };
 
 // ─── 基金数据 ─────────────────────────────────────────────────────────────────
@@ -48,7 +86,6 @@ const QDII_FUNDS = [
   { code:"006555", name:"浦银安盛全球智能科技股票(QDII)A",      fee_rate:1.40, scale:8.7,   ytd_return:43.81,  daily_limit:"500元",    buy_status:"open" },
   { code:"270023", name:"广发全球精选股票(QDII)A",              fee_rate:1.40, scale:104.5, ytd_return:32.39,  daily_limit:"5000元",   buy_status:"open" },
   { code:"017730", name:"嘉实全球产业升级股票(QDII)A",          fee_rate:1.40, scale:7.2,   ytd_return:75.36,  daily_limit:"100元",    buy_status:"open" },
-  { code:"000043", name:"嘉实美国成长股票(QDII)",               fee_rate:1.40, scale:50.1,  ytd_return:20.01,  daily_limit:"100元",    buy_status:"open" },
   { code:"012920", name:"易方达全球成长精选混合(QDII)A",         fee_rate:1.40, scale:28.3,  ytd_return:107.95, daily_limit:"50元",     buy_status:"open" },
   { code:"539002", name:"建信新兴市场优选混合(QDII)A",           fee_rate:1.40, scale:4.6,   ytd_return:92.11,  daily_limit:"50元",     buy_status:"open" },
   { code:"006373", name:"国富全球科技互联混合(QDII)人民币A",     fee_rate:1.40, scale:24.3,  ytd_return:53.48,  daily_limit:"100元",    buy_status:"open" },
@@ -112,8 +149,8 @@ function MiniIndexCard({ label, value, subValue }) {
   const isPos = value !== null && value >= 0;
   return (
     <div style={{
-      width: 150, textAlign: "center",
-      padding: "10px 14px",
+      width: 120, textAlign: "center",
+      padding: "8px 10px",
       background: "rgba(255,255,255,0.10)",
       borderRadius: 10,
       border: "1px solid rgba(255,255,255,0.15)",
@@ -133,26 +170,31 @@ function MiniIndexCard({ label, value, subValue }) {
 }
 
 // ─── 表格样式 ─────────────────────────────────────────────────────────────────
-const thStyle = {
-  padding: "11px 14px", textAlign: "center",
-  fontSize: 13, fontWeight: 800, color: C.text,
-  letterSpacing: 0.3, textTransform: "uppercase",
-  borderBottom: `1px solid ${C.border}`,
-  background: "#fafafa",
-  whiteSpace: "nowrap",
-  position: "sticky", top: 0, zIndex: 1,
-};
-const tdStyle = {
-  padding: "13px 14px", fontSize: 13,
-  color: C.text, fontWeight: 500, borderBottom: `1px solid ${C.borderLight}`,
-};
+function mkTh(cc) {
+  return {
+    padding: "13px 14px", textAlign: "center",
+    fontSize: 15, fontWeight: 800, color: cc.text,
+    letterSpacing: 0.3,
+    borderBottom: `1px solid ${cc.border}`,
+    background: cc.card,
+    whiteSpace: "nowrap",
+    position: "sticky", top: 0, zIndex: 1,
+  };
+}
+function mkTd(cc) {
+  return {
+    padding: "13px 14px", fontSize: 13,
+    color: cc.text, fontWeight: 500, borderBottom: `1px solid ${cc.borderLight}`,
+  };
+}
 
-// ─── 可信度 ───────────────────────────────────────────────────────────────────
-function getAccuracy(coverage) {
-  if (coverage == null) return null;
-  if (coverage >= 70) return { label:"高可信", color:"#059669", bg:"#d1fae5", border:"#6ee7b7" };
-  if (coverage >= 50) return { label:"中等",   color:"#b45309", bg:"#fef3c7", border:"#fcd34d" };
-  return               { label:"仅供参考", color:"#6b7280", bg:"#f3f4f6", border:"#d1d5db" };
+// ─── 状态 ─────────────────────────────────────────────────────────────────────
+function getSessionStatus(session) {
+  if (session === "a_share")     return { label:"A股交易中", color:"#059669", bg:"#d1fae5", border:"#6ee7b7" };
+  if (session === "pre_market")  return { label:"美股盘前",  color:"#ea580c", bg:"#fff7ed", border:"#fdba74" };
+  if (session === "us_open")     return { label:"美股交易中", color:"#1d4ed8", bg:"#dbeafe", border:"#93c5fd" };
+  if (session === "post_market") return { label:"美股盘后",  color:"#7c3aed", bg:"#ede9fe", border:"#c4b5fd" };
+  return                                { label:"休市",      color:"#6b7280", bg:"#f3f4f6", border:"#d1d5db" };
 }
 
 // 圆环图色盘
@@ -162,91 +204,86 @@ const DONUT_COLORS = [
 ];
 
 // ─── 基金行 ───────────────────────────────────────────────────────────────────
-function FundRow({ fund, onClick, isEven, isMobile }) {
+function FundRow({ fund, onClick, isEven, isMobile, cc, session }) {
   const ytd = fund.ytd_return;
   const val = fund.valuation;
   const isOpen = fund.buy_status === "open";
-  const acc = getAccuracy(fund.coverage);
+  const status = getSessionStatus(session);
 
   return (
     <tr
       onClick={() => onClick(fund)}
-      style={{ background: isEven ? "#fafafa" : C.card, cursor: "pointer", transition: "background 0.15s" }}
+      style={{ background: isEven ? (cc.stripe ?? cc.bg) : cc.card, cursor: "pointer", transition: "background 0.15s" }}
       onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
-      onMouseLeave={e => e.currentTarget.style.background = isEven ? "#fafafa" : C.card}
+      onMouseLeave={e => e.currentTarget.style.background = isEven ? (cc.stripe ?? cc.bg) : cc.card}
     >
       {isMobile ? (
-        <td style={{ ...tdStyle, maxWidth: 220 }}>
-          <div style={{ fontWeight:600, color:C.text, fontSize:13, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fund.name}</div>
+        <td style={{ ...mkTd(cc), maxWidth: 220 }}>
+          <div style={{ fontWeight:600, color:cc.text, fontSize:13, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fund.name}</div>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, flexWrap:"nowrap" }}>
             <span style={{ fontFamily:"monospace", fontSize:10, color:"#4f46e5", fontWeight:700, whiteSpace:"nowrap" }}>代码：{fund.code}</span>
             {fund.nav != null && (
-              <span style={{ fontSize:10, color:C.red, fontFamily:"monospace", fontWeight:600, whiteSpace:"nowrap" }}>净值：{fund.nav.toFixed(4)}</span>
+              <span style={{ fontSize:10, color:cc.red, fontFamily:"monospace", fontWeight:600, whiteSpace:"nowrap" }}>净值：{fund.nav.toFixed(4)}</span>
             )}
-            {fund.coverage != null && (
-              <span style={{ fontSize:10, color:acc ? acc.color : C.textDim, fontWeight:600, whiteSpace:"nowrap" }}>可信度：{fund.coverage}%</span>
-            )}
+            <span style={{ fontSize:10, fontWeight:700, color:status.color, whiteSpace:"nowrap" }}>{status.label}</span>
           </div>
         </td>
       ) : (
         <>
-          <td style={tdStyle}>
+          <td style={mkTd(cc)}>
             <span style={{ fontFamily:"monospace", fontSize:12, color:"#4f46e5", fontWeight:700 }}>{fund.code}</span>
           </td>
-          <td style={{ ...tdStyle, maxWidth:260, fontWeight:500, color:C.text }}>
+          <td style={{ ...mkTd(cc), maxWidth:260, fontWeight:500, color:cc.text }}>
             <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fund.name}</div>
           </td>
         </>
       )}
-      {!isMobile && <td style={{ ...tdStyle, textAlign:"center" }}>{fund.fee_rate.toFixed(1)}%</td>}
-      {!isMobile && <td style={{ ...tdStyle, textAlign:"center" }}>
+      {!isMobile && <td style={{ ...mkTd(cc), textAlign:"center" }}>
         {fund.scale > 0 ? `${fund.scale.toFixed(1)}` : "—"}
       </td>}
-      {!isMobile && <td style={{ ...tdStyle, textAlign:"right" }}>
+      {!isMobile && <td style={{ ...mkTd(cc), textAlign:"right" }}>
         {ytd != null && ytd !== 0 ? (
-          <span style={{ color: ytd >= 0 ? C.red : C.green, fontWeight:600 }}>
+          <span style={{ color: ytd >= 0 ? cc.red : cc.green, fontWeight:600 }}>
             {ytd >= 0 ? "+" : ""}{ytd.toFixed(2)}%
           </span>
         ) : "—"}
       </td>}
-      {!isMobile && <td style={{ ...tdStyle, textAlign:"center" }}>
+      {!isMobile && <td style={{ ...mkTd(cc), textAlign:"center" }}>
         <span style={{
           padding:"2px 8px", borderRadius:6, fontSize:12,
           background: isOpen ? "#1a9e5a12" : "#e0e0e510",
-          color: isOpen ? C.green : C.textDim,
-          border: `1px solid ${isOpen ? C.green+"30" : C.border}`,
+          color: isOpen ? cc.green : cc.textDim,
+          border: `1px solid ${isOpen ? cc.green+"30" : cc.border}`,
           whiteSpace:"nowrap",
         }}>
           {fund.daily_limit}
         </span>
       </td>}
-      {!isMobile && <td style={{ ...tdStyle, textAlign:"center" }}>
-        {acc ? (
-          <span style={{
-            display:"inline-flex", flexDirection:"column", alignItems:"center",
-            padding:"3px 10px", borderRadius:6, fontSize:11, fontWeight:600, lineHeight:1.5,
-            color: acc.color, background: acc.bg, border:`1px solid ${acc.border}`,
-            whiteSpace:"nowrap",
-          }}>
-            <span>{acc.label}</span>
-            <span style={{ fontSize:10, fontWeight:400, opacity:0.8 }}>{fund.coverage}% 覆盖</span>
-          </span>
-        ) : (
-          <span style={{ color:C.textDim, fontSize:12 }}>—</span>
-        )}
+      {!isMobile && <td style={{ ...mkTd(cc), textAlign:"center" }}>
+        <span style={{
+          padding:"3px 10px", borderRadius:6, fontSize:12, fontWeight:700,
+          color: status.color, background: status.bg, border:`1px solid ${status.border}`,
+          whiteSpace:"nowrap",
+        }}>
+          {status.label}
+        </span>
       </td>}
-      {!isMobile && <td style={{ ...tdStyle, textAlign:"center" }}>
+      {!isMobile && <td style={{ ...mkTd(cc), textAlign:"center" }}>
         {fund.nav != null ? (
-          <span style={{ fontWeight:600, color:C.text, fontSize:13, fontFamily:"monospace" }}>
+          <span style={{
+            fontWeight:600, fontSize:13, fontFamily:"monospace",
+            color: fund.nav_published ? "#059669" : cc.text,
+          }} title={fund.nav_published ? `最新净值已公布（${fund.nav_date}）` : undefined}>
             {fund.nav.toFixed(4)}
+            {fund.nav_published && <span style={{ fontSize:9, marginLeft:3, color:"#059669" }}>✓新</span>}
           </span>
         ) : (
-          <span style={{ color:C.textDim, fontSize:12 }}>—</span>
+          <span style={{ color:cc.textDim, fontSize:12 }}>—</span>
         )}
       </td>}
-      <td style={{ ...tdStyle, textAlign:"center", fontWeight:700 }}>
+      <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
         {val != null ? (
-          <span style={{ color: val >= 0 ? C.red : C.green, fontSize:15 }}>
+          <span style={{ color: val >= 0 ? cc.red : cc.green, fontSize:15 }}>
             {val >= 0 ? "+" : ""}{val.toFixed(2)}%
           </span>
         ) : (
@@ -258,7 +295,7 @@ function FundRow({ fund, onClick, isEven, isMobile }) {
 }
 
 // ─── 详情面板 ─────────────────────────────────────────────────────────────────
-function DetailPanel({ fund, onClose }) {
+function DetailPanel({ fund, onClose, cc, session }) {
   // 优先用 API 实时持仓，无数据时显示占位
   const holdings = (fund.holdings && fund.holdings.length > 0)
     ? fund.holdings
@@ -266,7 +303,7 @@ function DetailPanel({ fund, onClose }) {
   const navHistory = useMemo(() => genNavHistory(), [fund.code]);
   const ytd = fund.ytd_return;
   const val = fund.valuation;
-  const acc = getAccuracy(fund.coverage);
+  const status = getSessionStatus(session || "weekend");
   const [showAll, setShowAll] = useState(false);
 
   return (
@@ -275,7 +312,7 @@ function DetailPanel({ fund, onClose }) {
       onClick={e => e.target === e.currentTarget && onClose()}
     >
       <div style={{
-        width:"min(620px,100%)", height:"100%", background:C.card,
+        width:"min(620px,100%)", height:"100%", background:cc.card,
         overflowY:"auto", boxShadow:"-8px 0 48px rgba(0,0,0,0.18)",
         borderRadius:"20px 0 0 20px",
         animation:"slideInRight 0.28s ease", display:"flex", flexDirection:"column",
@@ -303,10 +340,14 @@ function DetailPanel({ fund, onClose }) {
                 {val >= 0 ? "+" : ""}{val.toFixed(2)}%
               </div>
               <div style={{ fontSize:12, opacity:0.7, lineHeight:1.5 }}>
-                今日估算涨跌幅<br/>
-                {fund.data_source === "gszzl" ? "fundgz 全仓实时估值" :
-                 fund.data_source === "gszzl_fallback" ? "gszzl 兜底数据" :
-                 fund.data_source === "calc_live" ? "Yahoo 实时股价加权" : "季报持仓加权"}
+                {SESSION_INFO[session]?.valLabel ?? "今日估值"}涨跌幅<br/>
+                {fund.data_source === "gszzl"           ? "fundgz 全仓实时估值" :
+                 fund.data_source === "gszzl_fallback"  ? "gszzl 兜底数据" :
+                 fund.data_source === "us_open_calc"    ? "实时股价加权" :
+                 fund.data_source === "pre_market_calc" ? "盘前涨跌幅加权" :
+                 fund.data_source === "post_market_calc"? "盘后涨跌幅加权" :
+                 fund.data_source === "a_share_post_calc"? "昨日盘后涨跌加权" :
+                 "季报持仓加权"}
               </div>
             </div>
           )}
@@ -315,25 +356,25 @@ function DetailPanel({ fund, onClose }) {
         <div style={{ padding:"24px 28px", flex:1 }}>
 
           {/* 基本信息 */}
-          <SectionTitle icon="📋">基本信息</SectionTitle>
+          <SectionTitle icon="📋" cc={cc}>基本信息</SectionTitle>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:28 }}>
             {[
-              { label:"运作费率", value:`${fund.fee_rate.toFixed(1)}%` },
               { label:"基金规模", value: fund.scale > 0 ? `${fund.scale.toFixed(1)} 亿元` : "—" },
               { label:"2025年涨幅", value: ytd != null && ytd !== 0 ? `${ytd >= 0 ? "+" : ""}${ytd.toFixed(2)}%` : "—" },
               { label:"每日限额", value: fund.daily_limit },
               { label:"申购状态", value: fund.buy_status === "open" ? "✅ 开放申购" : "⛔ 暂停申购" },
-              { label:"估值可信度", value: acc ? `${acc.label}（持仓覆盖 ${fund.coverage}% 净值）` : "暂无数据" },
+              { label:"当前状态", value: status.label, color: status.color },
+              ...(fund.nav_date ? [{ label:"净值日期", value: fund.nav_published ? `${fund.nav_date} ✓已公布` : fund.nav_date, color: fund.nav_published ? "#059669" : undefined }] : []),
             ].map(item => (
-              <div key={item.label} style={{ padding:"10px 14px", borderRadius:10, background:C.bg, border:`1px solid ${C.border}` }}>
-                <div style={{ fontSize:11, color:C.textDim, marginBottom:3 }}>{item.label}</div>
-                <div style={{ fontSize:14, fontWeight:600, color: item.label === "估值可信度" && acc ? acc.color : C.text }}>{item.value}</div>
+              <div key={item.label} style={{ padding:"10px 14px", borderRadius:10, background:cc.bg, border:`1px solid ${cc.border}` }}>
+                <div style={{ fontSize:11, color:cc.textDim, marginBottom:3 }}>{item.label}</div>
+                <div style={{ fontSize:14, fontWeight:600, color: item.color || cc.text }}>{item.value}</div>
               </div>
             ))}
           </div>
 
           {/* 估值说明 */}
-          <SectionTitle icon="🧮">估值计算说明</SectionTitle>
+          <SectionTitle icon="🧮" cc={cc}>估值计算说明</SectionTitle>
           <div style={{ padding:"14px 16px", borderRadius:12, background:"#eff6ff", border:"1px solid #bfdbfe", marginBottom:28 }}>
             {fund.data_source === "gszzl" || fund.data_source === "gszzl_fallback" ? (
               <>
@@ -342,7 +383,7 @@ function DetailPanel({ fund, onClose }) {
                 </div>
                 <div style={{ fontSize:12, color:"#3b82f6", marginTop:6, lineHeight:1.7 }}>
                   fundgz 涵盖基金全部持仓（非仅前十），数据每 15 分钟由基金公司更新一次，
-                  精准度远高于持仓加权计算。A股/港股交易时段（09:30-15:00）实时可用。
+                  精准度远高于持仓加权计算。A股交易时段（08:00-16:00 HKT）实时可用。
                   {fund.gszzl_time && <span>（最后更新：{fund.gszzl_time}）</span>}
                 </div>
               </>
@@ -352,8 +393,13 @@ function DetailPanel({ fund, onClose }) {
                   估值涨跌幅 ≈ <strong>Σ（持仓占比 × 股票涨跌幅）</strong> + <strong>汇率变动</strong>
                 </div>
                 <div style={{ fontSize:12, color:"#3b82f6", marginTop:6, lineHeight:1.7 }}>
-                  基于季报前十重仓股加权计算。美股交易时段使用 Yahoo 实时价格，盘后使用收盘价缓存。
-                  前十覆盖率越高，估值越接近真实净值变动。非美股（港股/欧股）暂无法获取实时价格，会影响覆盖率。
+                  基于季报前十重仓股加权计算。
+                  {fund.data_source === "pre_market_calc"  ? "使用盘前涨跌幅（Yahoo+Nasdaq）。" :
+                   fund.data_source === "us_open_calc"     ? "使用实时股价（Yahoo）。" :
+                   fund.data_source === "post_market_calc" ? "使用盘后涨跌幅（Yahoo+Nasdaq）。" :
+                   fund.data_source === "a_share_post_calc"? "使用昨日盘后涨跌幅（冻结）。" :
+                   "使用收盘价缓存。"}
+                  {" "}前十覆盖率越高，估值越接近真实净值变动。非美股（港股/欧股）暂无法获取实时价格，会影响覆盖率。
                 </div>
               </>
             )}
@@ -371,8 +417,8 @@ function DetailPanel({ fund, onClose }) {
             ];
             return (
               <div style={{ marginBottom:28 }}>
-                <SectionTitle icon="🍩">前十大持仓结构</SectionTitle>
-                <div style={{ borderRadius:14, border:`1px solid ${C.border}`, padding:"16px", background:C.card }}>
+                <SectionTitle icon="🍩" cc={cc}>前十大持仓结构</SectionTitle>
+                <div style={{ borderRadius:14, border:`1px solid ${cc.border}`, padding:"16px", background:cc.card }}>
                   <div style={{ display:"flex", gap:16, alignItems:"center" }}>
                     {/* 圆环 */}
                     <div style={{ position:"relative", flexShrink:0 }}>
@@ -394,8 +440,8 @@ function DetailPanel({ fund, onClose }) {
                       </PieChart>
                       {/* 中心文字 */}
                       <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", textAlign:"center", pointerEvents:"none" }}>
-                        <div style={{ fontSize:16, fontWeight:800, color:C.text }}>{top10Weight.toFixed(0)}%</div>
-                        <div style={{ fontSize:9, color:C.textDim }}>前十</div>
+                        <div style={{ fontSize:16, fontWeight:800, color:cc.text }}>{top10Weight.toFixed(0)}%</div>
+                        <div style={{ fontSize:9, color:cc.textDim }}>前十</div>
                       </div>
                     </div>
                     {/* 图例 */}
@@ -403,8 +449,8 @@ function DetailPanel({ fund, onClose }) {
                       {pieData.map((d, i) => (
                         <div key={i} style={{ display:"flex", alignItems:"center", gap:6, fontSize:11 }}>
                           <div style={{ width:8, height:8, borderRadius:2, background:d.color, flexShrink:0 }} />
-                          <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color: d.symbol ? C.text : C.textDim }}>{d.name || d.symbol}</span>
-                          <span style={{ fontWeight:600, color: d.symbol ? C.text : C.textDim, flexShrink:0 }}>{d.value.toFixed(1)}%</span>
+                          <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color: d.symbol ? cc.text : cc.textDim }}>{d.name || d.symbol}</span>
+                          <span style={{ fontWeight:600, color: d.symbol ? cc.text : cc.textDim, flexShrink:0 }}>{d.value.toFixed(1)}%</span>
                         </div>
                       ))}
                     </div>
@@ -415,65 +461,83 @@ function DetailPanel({ fund, onClose }) {
           })()}
 
           {/* 持仓明细 */}
-          <SectionTitle icon="🏢">
+          <SectionTitle icon="🏢" cc={cc}>
             {showAll ? `全部持仓明细（${holdings.length}只）` : `前十大持仓`}
           </SectionTitle>
           {holdings.length > 0 ? (
-            <div style={{ borderRadius:12, border:`1px solid ${C.border}`, overflow:"hidden" }}>
+            <div style={{ borderRadius:12, border:`1px solid ${cc.border}`, overflow:"hidden" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                {(() => {
+                    const priceLabel  = session === "us_open" ? "实时价格" : "收盘价";
+                    const changeLabel = { pre_market:"盘前涨跌", us_open:"盘中涨跌", post_market:"盘后涨跌", a_share:"昨日涨跌", weekend:"昨日涨跌" }[session] ?? "涨跌幅";
+                    const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
+                    const sortedAll = [...holdings].sort((a, b) => b.weight - a.weight);
+                    const displayed = showAll ? sortedAll : sortedAll.slice(0, 10);
+                    return (<>
                 <thead>
                   <tr style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)" }}>
-                    <th style={{ ...thStyle, position:"static", color:"rgba(255,255,255,0.8)", background:"transparent" }}>名称</th>
-                    <th style={{ ...thStyle, position:"static", textAlign:"center", color:"rgba(255,255,255,0.8)", background:"transparent" }}>占比</th>
-                    <th style={{ ...thStyle, position:"static", textAlign:"right", color:"rgba(255,255,255,0.8)", background:"transparent" }}>昨晚涨跌</th>
+                    <th style={{ ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent" }}>名称</th>
+                    <th style={{ ...mkTh(cc), position:"static", textAlign:"center", color:"rgba(255,255,255,0.8)", background:"transparent" }}>占比</th>
+                    <th style={{ ...mkTh(cc), position:"static", textAlign:"right", color:"rgba(255,255,255,0.8)", background:"transparent" }}>{priceLabel}</th>
+                    <th style={{ ...mkTh(cc), position:"static", textAlign:"right", color:"rgba(255,255,255,0.8)", background:"transparent" }}>{changeLabel}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(() => { const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
-                  const sortedAll = [...holdings].sort((a, b) => b.weight - a.weight);
-                  const displayed = showAll ? sortedAll : sortedAll.slice(0, 10);
-                  return displayed.map((h, i) => {
+                  {displayed.map((h, i) => {
                     const dotColor = i < 10 ? DONUT_COLORS[i] : "#d1d5db";
+                    // 盘中显示实时价，盘前/盘后/收盘显示上一收盘价（price 后端已按会话选好）
+                    const displayPrice = h.price;
+                    // 盘前且无专属盘前涨跌时，change 已 fallback 到 regular_pct
+                    const isPreFallback = session === "pre_market" && h.change != null;
                     return (
-                      <tr key={h.symbol || i} style={{ background: i % 2 ? "#fafafa" : C.card }}>
-                        <td style={tdStyle}>
+                      <tr key={h.symbol || i} style={{ background: i % 2 ? cc.bg : cc.card }}>
+                        <td style={mkTd(cc)}>
                           <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                             <div style={{ width:8, height:8, borderRadius:2, background:dotColor, flexShrink:0 }} />
                             <div>
-                              <div style={{ fontWeight:500, color:C.text }}>{h.name || h.symbol}</div>
-                              <div style={{ fontSize:11, color:C.textDim, fontFamily:"monospace" }}>{h.symbol}</div>
+                              <div style={{ fontWeight:500, color:cc.text }}>{h.name || h.symbol}</div>
+                              <div style={{ fontSize:11, color:cc.textDim, fontFamily:"monospace" }}>{h.symbol}</div>
                             </div>
                           </div>
                         </td>
-                        <td style={{ ...tdStyle, textAlign:"center" }}>
+                        <td style={{ ...mkTd(cc), textAlign:"center" }}>
                           <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center" }}>
-                            <div style={{ width:50, height:4, borderRadius:2, background:C.borderLight, overflow:"hidden" }}>
+                            <div style={{ width:50, height:4, borderRadius:2, background:cc.borderLight, overflow:"hidden" }}>
                               <div style={{ width:`${(h.weight / maxW) * 100}%`, height:"100%", background: dotColor, borderRadius:2 }} />
                             </div>
-                            <span style={{ fontSize:12, fontWeight:600, color:C.text }}>{h.weight.toFixed(2)}%</span>
+                            <span style={{ fontSize:12, fontWeight:600, color:cc.text }}>{h.weight.toFixed(2)}%</span>
                           </div>
                         </td>
-                        <td style={{ ...tdStyle, textAlign:"right" }}>
+                        <td style={{ ...mkTd(cc), textAlign:"right", fontFamily:"monospace", fontSize:12 }}>
+                          {displayPrice != null ? (
+                            <span style={{ color:cc.textMuted, fontWeight:500 }}>${displayPrice.toFixed(2)}</span>
+                          ) : (
+                            <span style={{ color:cc.textDim }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ ...mkTd(cc), textAlign:"right" }}>
                           {h.change != null ? (
-                            <span style={{ color: h.change >= 0 ? C.red : C.green, fontWeight:600 }}>
+                            <span style={{ color: h.change >= 0 ? cc.red : cc.green, fontWeight:600 }}>
                               {h.change >= 0 ? "+" : ""}{h.change.toFixed(2)}%
                             </span>
                           ) : (
-                            <span style={{ color:C.textDim, fontSize:12 }} title="非美股或暂无报价">—</span>
+                            <span style={{ color:cc.textDim, fontSize:12 }} title="非美股或暂无报价">—</span>
                           )}
                         </td>
                       </tr>
                     );
-                  }); })()}
+                  })}
                 </tbody>
+                    </>);
+                  })()}
               </table>
               {holdings.length > 10 && (
-                <div style={{ textAlign:"center", padding:"12px 0", borderTop:`1px solid ${C.borderLight}` }}>
+                <div style={{ textAlign:"center", padding:"12px 0", borderTop:`1px solid ${cc.borderLight}` }}>
                   <button
                     onClick={() => setShowAll(v => !v)}
                     style={{
-                      padding:"6px 20px", borderRadius:8, border:`1px solid ${C.border}`,
-                      background:C.card, color:"#4f46e5", fontSize:12, fontWeight:600,
+                      padding:"6px 20px", borderRadius:8, border:`1px solid ${cc.border}`,
+                      background:cc.card, color:"#4f46e5", fontSize:12, fontWeight:600,
                       cursor:"pointer",
                     }}
                   >
@@ -481,13 +545,13 @@ function DetailPanel({ fund, onClose }) {
                   </button>
                 </div>
               )}
-              <div style={{ padding:"10px 14px", fontSize:11, color:C.textDim, borderTop:`1px solid ${C.border}`, background:"#fafafa", display:"flex", justifyContent:"space-between" }}>
+              <div style={{ padding:"10px 14px", fontSize:11, color:cc.textDim, borderTop:`1px solid ${cc.border}`, background:cc.bg, display:"flex", justifyContent:"space-between" }}>
                 <span>数据来源：基金最新季报</span>
                 <span>「—」表示非美股或暂无报价，不计入估值</span>
               </div>
             </div>
           ) : (
-            <div style={{ padding:"48px 0", textAlign:"center", color:C.textDim, fontSize:13, background:C.bg, borderRadius:12 }}>
+            <div style={{ padding:"48px 0", textAlign:"center", color:cc.textDim, fontSize:13, background:cc.bg, borderRadius:12 }}>
               持仓数据加载中…
             </div>
           )}
@@ -497,11 +561,12 @@ function DetailPanel({ fund, onClose }) {
   );
 }
 
-function SectionTitle({ icon, children }) {
+function SectionTitle({ icon, children, cc }) {
+  const col = cc || C;
   return (
     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
       <span style={{ fontSize:16 }}>{icon}</span>
-      <div style={{ fontSize:13, fontWeight:700, color:C.textMuted, letterSpacing:0.3, textTransform:"uppercase" }}>{children}</div>
+      <div style={{ fontSize:13, fontWeight:700, color:col.textMuted, letterSpacing:0.3, textTransform:"uppercase" }}>{children}</div>
     </div>
   );
 }
@@ -516,6 +581,7 @@ export default function QDIIPage() {
 
   // ── API 数据 ──
   const [valuations, setValuations]   = useState({});   // { code -> {valuation, holdings, coverage, nav} }
+  const [usActive, setUsActive]       = useState({});   // { code -> {scale, ytd_return, daily_limit, buy_status} }
   const [fxPrice, setFxPrice]         = useState(null);
   const [indexData, setIndexData]     = useState([
     { label:"纳斯达克",    value: null },
@@ -526,6 +592,21 @@ export default function QDIIPage() {
   const [loading, setLoading]         = useState(true);
   const [updatedAt, setUpdatedAt]     = useState(null);
   const [session, setSession]         = useState(() => getMarketSession());
+  const [countdown, setCountdown]     = useState(null);
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem("qdii_dark") === "1"; } catch { return false; }
+  });
+  const [simpleMode, setSimpleMode] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all"); // "all" | "open" | "suspended"
+  const CC = dark ? DARK : C;
+
+  function toggleDark() {
+    setDark(d => {
+      const next = !d;
+      try { localStorage.setItem("qdii_dark", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }
 
   function toggleSort(key) {
     if (sortKey === key) setSortDir(d => d === "desc" ? "asc" : "desc");
@@ -559,14 +640,38 @@ export default function QDIIPage() {
     fetchValuations(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 每 15 分钟检查一次：开盘时段则刷新，盘后跳过
-  // 始终挂载 interval，避免页面在盘后打开、开盘后无法自动刷新的问题
+  // 每秒刷新倒计时 + 预热 + 整点 UI 刷新
   useEffect(() => {
     const timer = setInterval(() => {
-      if (getMarketSession() !== "closed") fetchValuations(false);
-    }, 15 * 60 * 1000);
+      const s = getMarketSession();
+      setSession(s);
+      const secs = clockCountdown(s);
+      setCountdown(secs);
+      if (s === "weekend" || s === "a_share") return;
+      const interval = sessionInterval(s);
+      // T-90s：静默预热（只清顶层+股价缓存，持仓保留）→ 后台重算，约 3-5s 完成
+      if (secs === 90) {
+        fetch("/api/qdii/valuations?light=true", { cache: "no-store" }).catch(() => {});
+      }
+      // T=0（新格开始）：UI 正式刷新，此时数据已在 Redis 中
+      if (secs === interval) {
+        fetchValuations(false);
+      }
+    }, 1000);
     return () => clearInterval(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 拉美股主动数据（scale/ytd_return/daily_limit/buy_status）
+  useEffect(() => {
+    fetch("/api/funds/us_active")
+      .then(r => r.json())
+      .then(data => {
+        const map = {};
+        (data.data || []).forEach(f => { map[f.code] = f; });
+        setUsActive(map);
+      })
+      .catch(() => {});
+  }, []);
 
   // 拉指数数据（market-sentiment）
   useEffect(() => {
@@ -588,24 +693,31 @@ export default function QDIIPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    // 将 API 估值数据合并进静态基金列表
+    // 将 API 估值数据 + 美股主动数据合并进静态基金列表
     let list = QDII_FUNDS.map(f => {
       const api = valuations[f.code] || {};
+      const ua  = usActive[f.code]  || {};
       return {
         ...f,
-        // API 数据优先，静态数据兜底
-        scale:       api.scale       ?? (f.scale      > 0 ? f.scale      : null),
-        ytd_return:  api.ytd_return  ?? (f.ytd_return > 0 ? f.ytd_return : null),
-        valuation:   api.valuation   ?? null,
-        coverage:    api.coverage    ?? null,
-        holdings:    api.holdings    ?? null,
-        nav:         api.nav         ?? null,
-        data_source: api.data_source ?? null,
-        gszzl_time:  api.gszzl_time  ?? null,
+        // 美股主动 live 数据优先 > QDII valuation API > 静态兜底
+        scale:       ua.scale       ?? api.scale       ?? (f.scale      > 0 ? f.scale      : null),
+        ytd_return:  ua.ytd_return  ?? api.ytd_return  ?? (f.ytd_return > 0 ? f.ytd_return : null),
+        daily_limit: ua.daily_limit ?? f.daily_limit,
+        buy_status:  ua.buy_status  ?? f.buy_status,
+        valuation:     api.valuation     ?? null,
+        coverage:      api.coverage      ?? null,
+        holdings:      api.holdings      ?? null,
+        nav:           api.nav           ?? null,
+        nav_date:      api.nav_date      ?? null,
+        nav_published: api.nav_published ?? false,
+        data_source:   api.data_source   ?? null,
+        gszzl_time:    api.gszzl_time    ?? null,
       };
     });
 
     if (q) list = list.filter(f => f.name.toLowerCase().includes(q) || f.code.includes(q));
+    if (statusFilter === "open")      list = list.filter(f => f.buy_status === "open");
+    if (statusFilter === "suspended") list = list.filter(f => f.buy_status === "suspended");
 
     if (sortKey) {
       list.sort((a, b) => {
@@ -620,10 +732,10 @@ export default function QDIIPage() {
       });
     }
     return list;
-  }, [search, sortKey, sortDir, valuations]);
+  }, [search, sortKey, sortDir, valuations, usActive, statusFilter]);
 
   return (
-    <div style={{ minHeight:"100vh", background:C.bg, paddingBottom:60 }}>
+    <div style={{ minHeight:"100vh", background:CC.bg, paddingBottom:60, transition:"background 0.2s" }}>
 
       {/* ── Hero ─────────────────────────────────────────────────────────────── */}
       <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden" }}>
@@ -636,7 +748,7 @@ export default function QDIIPage() {
             <span style={{ fontSize:14 }}>←</span> 返回首页
           </a>
 
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:24, flexWrap: isMobile ? "wrap" : "nowrap" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:20, flexWrap: isMobile ? "wrap" : "nowrap" }}>
             {/* 左：标题区 */}
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ display:"inline-flex", alignItems:"center", gap:6, background:"rgba(255,255,255,0.15)", borderRadius:20, padding:"3px 10px", fontSize:10, fontWeight:600, letterSpacing:"0.05em", marginBottom:8 }}>
@@ -660,11 +772,11 @@ export default function QDIIPage() {
                 ))}
                 {/* 动态时段状态徽章 */}
                 {(() => {
-                  const si = SESSION_INFO[session] || SESSION_INFO.closed;
+                  const si = SESSION_INFO[session] || SESSION_INFO.weekend;
                   return (
                     <div style={{ display:"flex", alignItems:"center", gap:5, background: si.bg, border:`1px solid ${si.color}40`, borderRadius:20, padding:"3px 10px", fontSize:11, color: si.color, fontWeight:600 }}>
-                      <span style={{ width:6, height:6, borderRadius:"50%", background: si.color, display:"inline-block",
-                        ...(session !== "closed" ? { animation:"pulse 1.5s infinite" } : {}) }} />
+                      <span style={{ width:6, height:6, borderRadius:"50%", background: si.dot || si.color, display:"inline-block",
+                        ...(session !== "weekend" ? { animation:"pulse 1.5s infinite" } : {}) }} />
                       {si.label} · {si.desc}
                     </div>
                   );
@@ -672,19 +784,45 @@ export default function QDIIPage() {
               </div>
             </div>
 
-            {/* 右：指数数据（单行 4 列）*/}
+            {/* 右：更新策略 + 2×2 指数卡片 */}
             {!isMobile && (
-              <div style={{ display:"flex", flexDirection:"column", gap:5, flexShrink:0 }}>
-                <div style={{ fontSize:10, color:"rgba(255,255,255,0.6)", textAlign:"center", marginBottom:2 }}>昨晚美股收盘数据</div>
-                <div style={{ display:"flex", gap:8 }}>
+              <div style={{ display:"flex", gap:10, flexShrink:0, alignItems:"stretch" }}>
+
+                {/* 更新策略 */}
+                <div style={{
+                  padding: "10px 14px",
+                  background: "rgba(255,255,255,0.10)",
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.22)",
+                  display: "flex", flexDirection:"column", justifyContent:"center", gap:6,
+                }}>
+                  <div style={{ fontSize:10, color:"rgba(255,255,255,0.55)", fontWeight:700, letterSpacing:"0.05em", marginBottom:1 }}>数据更新策略</div>
+                  {[
+                    { dot:"#9ca3af", label:"休市 / 周末",      time:"数据冻结" },
+                    { dot:"#fdba74", label:"盘前 16:00–21:30", time:"15分钟刷新" },
+                    { dot:"#93c5fd", label:"盘中 21:30–04:00", time:"10分钟刷新" },
+                    { dot:"#c4b5fd", label:"盘后 04:00–08:00", time:"15分钟刷新" },
+                  ].map(r => (
+                    <div key={r.label} style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ width:6, height:6, borderRadius:"50%", background:r.dot, flexShrink:0 }} />
+                      <span style={{ fontSize:11, color:"rgba(255,255,255,0.85)", whiteSpace:"nowrap" }}>
+                        {r.label}
+                        <span style={{ color:"rgba(255,255,255,0.4)", marginLeft:4, fontSize:10 }}>{r.time}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 2×2 指数卡片 */}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                   {indexData.map(d => (
                     <MiniIndexCard
-                      key={d.label}
-                      {...d}
+                      key={d.label} {...d}
                       subValue={d.label === "美元/人民币" && fxPrice != null ? `¥${fxPrice.toFixed(4)}` : undefined}
                     />
                   ))}
                 </div>
+
               </div>
             )}
           </div>
@@ -692,7 +830,7 @@ export default function QDIIPage() {
       </div>
 
       {/* ── 说明条 ───────────────────────────────────────────────────────────── */}
-      <div style={{ background:C.card, borderBottom:`1px solid ${C.border}` }}>
+      <div style={{ background:CC.card, borderBottom:`1px solid ${CC.border}` }}>
         <div style={{ maxWidth:1440, margin:"0 auto", padding: isMobile ? "10px 16px" : "12px 40px" }}>
           <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: isMobile ? 10 : 20 }}>
             {[
@@ -704,8 +842,8 @@ export default function QDIIPage() {
               <div key={item.title} style={{ display:"flex", gap:12, alignItems:"flex-start" }}>
                 <span style={{ fontSize:22, lineHeight:1, flexShrink:0 }}>{item.icon}</span>
                 <div>
-                  <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:3 }}>{item.title}</div>
-                  <div style={{ fontSize:11, color:C.textMuted, lineHeight:1.5 }}>{item.desc}</div>
+                  <div style={{ fontSize:13, fontWeight:700, color:CC.text, marginBottom:3 }}>{item.title}</div>
+                  <div style={{ fontSize:11, color:CC.textMuted, lineHeight:1.5 }}>{item.desc}</div>
                 </div>
               </div>
             ))}
@@ -718,98 +856,190 @@ export default function QDIIPage() {
         {/* 标题 + 搜索 */}
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:12 }}>
           <div>
-            <div style={{ fontSize:18, fontWeight:800, color:C.text, marginBottom:2 }}>
+            <div style={{ fontSize:18, fontWeight:800, color:CC.text, marginBottom:2 }}>
               {QDII_FUNDS.length} 只主动型 QDII 场外基金
             </div>
-            <div style={{ fontSize:12, color:C.textDim }}>点击任意行查看持仓明细和估值计算</div>
-          </div>
-          <div style={{ position:"relative" }}>
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="搜索基金名称或代码…"
-              style={{
-                width:220, padding:"8px 14px 8px 34px",
-                borderRadius:10, border:`1.5px solid ${C.border}`,
-                fontSize:13, color:C.text, background:C.card,
-                outline:"none", boxSizing:"border-box", transition:"border-color 0.2s",
-              }}
-              onFocus={e => e.target.style.borderColor = "#4f46e5"}
-              onBlur={e => e.target.style.borderColor = C.border}
-            />
-            <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:14, color:C.textDim }}>🔍</span>
-          </div>
-        </div>
-
-        {/* 表格 */}
-        <div style={{ borderRadius:16, border:`1px solid ${C.border}`, background:C.card, overflow:"hidden", boxShadow:"0 2px 16px rgba(0,0,0,0.06)" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse" }}>
-            <thead>
-              <tr>
-                {isMobile ? (
-                  <th style={{ ...thStyle, minWidth:180 }}>基金</th>
-                ) : (
-                  <>
-                    <th style={thStyle}>代码</th>
-                    <th style={{ ...thStyle, minWidth:200, textAlign:"left" }}>基金名称</th>
-                  </>
-                )}
-                {(isMobile ? [
-                  { key:"valuation", label:"今日估值", align:"center" },
-                ] : [
-                  { key:"fee_rate",    label:"费率",    align:"center" },
-                  { key:"scale",       label:"规模(亿)", align:"center" },
-                  { key:"ytd_return",  label:"25年涨幅", align:"right"  },
-                  { key:"daily_limit", label:"每日限额", align:"center" },
-                  { key:"coverage",    label:"可信度",   align:"center" },
-                  { key:"nav",         label:"最新净值", align:"center" },
-                  { key:"valuation",   label:"今日估值", align:"center"  },
-                ]).map(({ key, label, align }) => {
-                  const active = sortKey === key;
-                  const arrow = active ? (sortDir === "desc" ? " ▼" : " ▲") : " ↕";
-                  return (
-                    <th key={key}
-                      style={{ ...thStyle, textAlign: align, cursor:"pointer", userSelect:"none",
-                        color: active ? "#4f46e5" : C.textMuted,
-                        background: "#fafafa",
-                      }}
-                      onClick={() => toggleSort(key)}
-                    >
-                      {label}
-                      <span style={{ fontSize:10, opacity: active ? 1 : 0.4 }}>{arrow}</span>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((fund, i) => (
-                <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={setSelected} isMobile={isMobile} />
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={isMobile ? 2 : 9} style={{ padding:"60px 0", textAlign:"center", color:C.textDim, fontSize:14 }}>
-                    未找到相关基金
-                  </td>
-                </tr>
+            <div style={{ fontSize:12, color:CC.textDim, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+              <span>点击任意行查看持仓明细</span>
+              {updatedAt && (
+                <span style={{ color:CC.textDim }}>
+                  · 更新于 {new Date(updatedAt).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                </span>
               )}
-            </tbody>
-          </table>
-
-          <div style={{ padding:"12px 16px", borderTop:`1px solid ${C.border}`, fontSize:12, color:C.textDim, display:"flex", justifyContent:"space-between", alignItems:"center", background:"#fafafa" }}>
-            <span>共 {filtered.length} 只{loading ? " · 估值加载中…" : ""}</span>
-            <span>
-              {updatedAt
-                ? `更新于 ${new Date(updatedAt).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})} · `
-                : ""}
-              {session === "cn" ? "fundgz 全仓估值" : session === "us" ? "Yahoo 实时股价加权" : "季报持仓 × 收盘涨跌 + 汇率"}
-            </span>
+              {countdown != null && session !== "weekend" && session !== "a_share" && (
+                <span style={{
+                  color: countdown <= 60 ? (dark ? "#34d399" : "#059669") : CC.textDim,
+                  fontWeight: countdown <= 60 ? 600 : 400,
+                }}>
+                  · {countdown <= 0 ? "即将更新…" : countdown < 60 ? `${countdown}秒后更新` : `${Math.ceil(countdown/60)}分钟后更新`}
+                </span>
+              )}
+            </div>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:"auto" }}>
+            {/* 搜索框 */}
+            <div style={{ position:"relative" }}>
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="搜索基金名称或代码…"
+                style={{
+                  width:220, padding:"8px 14px 8px 34px",
+                  borderRadius:10, border:`1.5px solid ${CC.border}`,
+                  fontSize:13, color:CC.text, background:CC.card,
+                  outline:"none", boxSizing:"border-box", transition:"border-color 0.2s",
+                }}
+                onFocus={e => e.target.style.borderColor = "#4f46e5"}
+                onBlur={e => e.target.style.borderColor = CC.border}
+              />
+              <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:14, color:CC.textDim }}>🔍</span>
+            </div>
+            {/* 暗夜模式 */}
+            <button
+              onClick={toggleDark}
+              title={dark ? "切换日间模式" : "切换夜间模式"}
+              style={{
+                width:34, height:34, borderRadius:10, border:`1.5px solid ${CC.border}`,
+                background: CC.card, color: CC.textMuted,
+                fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+                transition:"all 0.18s", flexShrink:0,
+              }}
+            >
+              {dark ? "☀️" : "🌙"}
+            </button>
+            {/* 简约模式（仅桌面）*/}
+            {!isMobile && (
+              <button
+                onClick={() => setSimpleMode(s => !s)}
+                title={simpleMode ? "退出简约模式" : "简约模式"}
+                style={{
+                  padding:"7px 12px", borderRadius:10, border:`1.5px solid ${simpleMode ? "#4f46e5" : CC.border}`,
+                  background: simpleMode ? "#4f46e510" : CC.card,
+                  color: simpleMode ? "#4f46e5" : CC.textMuted,
+                  fontSize:12, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap",
+                  transition:"all 0.18s",
+                }}
+              >
+                {simpleMode ? "☰ 完整" : "≡ 简约"}
+              </button>
+            )}
           </div>
         </div>
+
+        {/* 表格 / 简约模式 */}
+        {simpleMode && !isMobile ? (
+          // ── 简约模式：代码 | 基金名称 | 今日估值 三列平分 ──
+          <div style={{ borderRadius:16, border:`1px solid ${CC.border}`, background:CC.card, overflow:"hidden", boxShadow:"0 2px 16px rgba(0,0,0,0.06)" }}>
+            {/* 表头 */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr 1fr", background: dark ? "#252630" : "#f4f4f8", borderBottom:`1px solid ${CC.border}`, padding:"12px 32px" }}>
+              {[
+                { label:"代码",   align:"center" },
+                { label:"基金名称", align:"center" },
+                { label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
+              ].map(h => (
+                <div key={h.label} style={{ fontSize:14, fontWeight:800, color:CC.text, letterSpacing:0.3, textAlign:h.align }}>{h.label}</div>
+              ))}
+            </div>
+            {/* 行 */}
+            {filtered.map((fund, i) => {
+              const val = fund.valuation;
+              const hoverBg = dark ? "#2a2d3a" : "#eff6ff";
+              return (
+                <div key={fund.code}
+                  onClick={() => setSelected(fund)}
+                  style={{
+                    display:"grid", gridTemplateColumns:"1fr 2fr 1fr", alignItems:"center",
+                    padding:"15px 32px", cursor:"pointer",
+                    background: i % 2 === 0 ? CC.card : CC.bg,
+                    borderBottom: i < filtered.length - 1 ? `1px solid ${CC.borderLight}` : "none",
+                    transition:"background 0.15s",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background=hoverBg}
+                  onMouseLeave={e => e.currentTarget.style.background= i % 2 === 0 ? CC.card : CC.bg}
+                >
+                  <div style={{ fontFamily:"monospace", fontSize:14, color: dark ? "#818cf8" : "#4f46e5", fontWeight:800, letterSpacing:0.5, textAlign:"center" }}>{fund.code}</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:CC.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textAlign:"center", padding:"0 12px" }}>{fund.name}</div>
+                  <div style={{ fontSize:16, fontWeight:800, color: val == null ? (dark ? "#818cf8" : "#a5b4fc") : val >= 0 ? CC.red : CC.green, letterSpacing:0.3, textAlign:"center" }}>
+                    {val == null ? "计算中…" : `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`}
+                  </div>
+                </div>
+              );
+            })}
+            {filtered.length === 0 && (
+              <div style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>未找到相关基金</div>
+            )}
+          </div>
+        ) : (
+          // ── 完整表格（原有逻辑）──
+          <div style={{ borderRadius:16, border:`1px solid ${CC.border}`, background:CC.card, overflow:"hidden", boxShadow:"0 2px 16px rgba(0,0,0,0.06)" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr>
+                  {isMobile ? (
+                    <th style={{ ...mkTh(CC), minWidth:180 }}>基金</th>
+                  ) : (
+                    <>
+                      <th style={mkTh(CC)}>代码</th>
+                      <th style={{ ...mkTh(CC), minWidth:200, textAlign:"left" }}>基金名称</th>
+                    </>
+                  )}
+                  {(isMobile ? [
+                    { key:"valuation", label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
+                  ] : [
+                    { key:"scale",       label:"规模(亿)", align:"center" },
+                    { key:"ytd_return",  label:"25年涨幅", align:"right"  },
+                    { key:"daily_limit", label:"每日限额", align:"center" },
+                    { key:"status",      label:"状态",     align:"center", noSort:true },
+                    { key:"nav",         label:"最新净值", align:"center" },
+                    { key:"valuation",   label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
+                  ]).map(({ key, label, align, noSort }) => {
+                    const active = sortKey === key;
+                    const arrow = active ? (sortDir === "desc" ? " ▼" : " ▲") : " ↕";
+                    return (
+                      <th key={key}
+                        style={{ ...mkTh(CC), textAlign: align, cursor: noSort ? "default" : "pointer", userSelect:"none",
+                          color: active ? "#4f46e5" : CC.textMuted,
+                          background: CC.card,
+                        }}
+                        onClick={() => !noSort && toggleSort(key)}
+                      >
+                        {label}
+                        {!noSort && <span style={{ fontSize:10, opacity: active ? 1 : 0.4 }}>{arrow}</span>}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((fund, i) => (
+                  <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={setSelected} isMobile={isMobile} cc={CC} session={session} />
+                ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={isMobile ? 2 : 8} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
+                      未找到相关基金
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+
+            <div style={{ padding:"12px 16px", borderTop:`1px solid ${CC.border}`, fontSize:12, color:CC.textDim, display:"flex", justifyContent:"space-between", alignItems:"center", background:CC.card }}>
+              <span>共 {filtered.length} 只{loading ? " · 估值加载中…" : ""}</span>
+              <span>
+                {session === "a_share"    ? "fundgz 全仓估值" :
+                 session === "us_open"    ? "Yahoo 实时股价加权" :
+                 session === "pre_market" ? "Yahoo 盘前价格加权" :
+                 session === "post_market"? "Yahoo 盘后价格加权" :
+                 "季报持仓 × 收盘涨跌 + 汇率"}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 详情面板 */}
-      {selected && <DetailPanel fund={selected} onClose={() => setSelected(null)} />}
+      {selected && <DetailPanel fund={selected} onClose={() => setSelected(null)} cc={CC} session={session} />}
 
       <style>{`
         @keyframes slideInRight {
