@@ -205,7 +205,7 @@ const DONUT_COLORS = [
 ];
 
 // ─── 基金行 ───────────────────────────────────────────────────────────────────
-function FundRow({ fund, onClick, isEven, isMobile, cc, session }) {
+function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onToggleWatch }) {
   const ytd = fund.ytd_return;
   const val = fund.valuation;
   const isOpen = fund.buy_status === "open";
@@ -218,8 +218,18 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session }) {
       onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
       onMouseLeave={e => e.currentTarget.style.background = isEven ? (cc.stripe ?? cc.bg) : cc.card}
     >
+      {/* 五角星 */}
+      <td style={{ ...mkTd(cc), width:32, padding:"0 4px 0 12px", textAlign:"center" }}>
+        <span
+          onClick={e => onToggleWatch(fund.code, e)}
+          title={watched ? "移出自选" : "加入自选"}
+          style={{ fontSize:16, cursor:"pointer", color: watched ? "#f59e0b" : cc.textDim, lineHeight:1, userSelect:"none" }}
+        >
+          {watched ? "★" : "☆"}
+        </span>
+      </td>
       {isMobile ? (
-        <td style={{ ...mkTd(cc), maxWidth: 220 }}>
+        <td style={{ ...mkTd(cc), maxWidth: 200, padding:"10px 8px 10px 4px" }}>
           <div style={{ fontWeight:600, color:cc.text, fontSize:13, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fund.name}</div>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, flexWrap:"nowrap" }}>
             <span style={{ fontFamily:"monospace", fontSize:10, color:"#4f46e5", fontWeight:700, whiteSpace:"nowrap" }}>代码：{fund.code}</span>
@@ -581,7 +591,14 @@ export default function QDIIPage() {
   const [sortDir, setSortDir]         = useState("desc");
 
   // ── API 数据 ──
-  const [valuations, setValuations]   = useState({});   // { code -> {valuation, holdings, coverage, nav} }
+  const [valuations, setValuations]   = useState(() => {
+    // 从 localStorage 恢复上次成功的估值，避免页面刷新时"计算中…"闪烁
+    try {
+      const saved = localStorage.getItem("qdii_val_cache");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });   // { code -> {valuation, holdings, coverage, nav} }
   const [usActive, setUsActive]       = useState({});   // { code -> {scale, ytd_return, daily_limit, buy_status} }
   const [fxPrice, setFxPrice]         = useState(null);
   const [indexData, setIndexData]     = useState([
@@ -590,7 +607,10 @@ export default function QDIIPage() {
     { label:"标普500",     value: null },
     { label:"美元/人民币", value: null },
   ]);
-  const [loading, setLoading]         = useState(true);
+  const [loading, setLoading]         = useState(() => {
+    // 有 localStorage 缓存时不显示初始 loading，避免遮盖旧数据
+    try { return !localStorage.getItem("qdii_val_cache"); } catch { return true; }
+  });
   const [updatedAt, setUpdatedAt]     = useState(null);
   const [session, setSession]         = useState(() => getMarketSession());
   const [countdown, setCountdown]     = useState(null);
@@ -598,8 +618,22 @@ export default function QDIIPage() {
     try { return localStorage.getItem("qdii_dark") === "1"; } catch { return false; }
   });
   const [simpleMode, setSimpleMode] = useState(false);
+  const [watchlistMode, setWatchlistMode] = useState(false);
+  const [watchlist, setWatchlist] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("qdii_watchlist") || "[]")); } catch { return new Set(); }
+  });
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "open" | "suspended"
   const [showDonate, setShowDonate] = useState(false);
+
+  function toggleWatch(code, e) {
+    e.stopPropagation();
+    setWatchlist(prev => {
+      const next = new Set(prev);
+      next.has(code) ? next.delete(code) : next.add(code);
+      try { localStorage.setItem("qdii_watchlist", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }
   const CC = dark ? DARK : C;
 
   function toggleDark() {
@@ -624,6 +658,7 @@ export default function QDIIPage() {
         const map = {};
         (data.funds || []).forEach(f => { map[f.code] = f; });
         setValuations(map);
+        try { localStorage.setItem("qdii_val_cache", JSON.stringify(map)); } catch {}
         setUpdatedAt(data.updated_at || null);
         setSession(data.session || getMarketSession());
         const fx = data.fx_change ?? null;
@@ -857,26 +892,44 @@ export default function QDIIPage() {
       <div style={{ maxWidth:1440, margin:"28px auto", padding: isMobile ? "0 16px" : "0 40px" }}>
         {/* 标题 + 搜索 */}
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:12 }}>
-          <div>
-            <div style={{ fontSize:18, fontWeight:800, color:CC.text, marginBottom:2 }}>
-              {QDII_FUNDS.length} 只主动型 QDII 场外基金
+          <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", width: isMobile ? "100%" : "auto", gap:8 }}>
+            <div>
+              <div style={{ fontSize:18, fontWeight:800, color:CC.text, marginBottom:2 }}>
+                {QDII_FUNDS.length} 只主动型 QDII 场外基金
+              </div>
+              <div style={{ fontSize:12, color:CC.textDim, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                <span>点击任意行查看持仓明细</span>
+                {updatedAt && (
+                  <span style={{ color:CC.textDim }}>
+                    · 更新于 {new Date(updatedAt).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                  </span>
+                )}
+                {countdown != null && session !== "weekend" && session !== "a_share" && (
+                  <span style={{
+                    color: countdown <= 60 ? (dark ? "#34d399" : "#059669") : CC.textDim,
+                    fontWeight: countdown <= 60 ? 600 : 400,
+                  }}>
+                    · {countdown <= 0 ? "即将更新…" : countdown < 60 ? `${countdown}秒后更新` : `${Math.ceil(countdown/60)}分钟后更新`}
+                  </span>
+                )}
+              </div>
             </div>
-            <div style={{ fontSize:12, color:CC.textDim, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-              <span>点击任意行查看持仓明细</span>
-              {updatedAt && (
-                <span style={{ color:CC.textDim }}>
-                  · 更新于 {new Date(updatedAt).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
-                </span>
-              )}
-              {countdown != null && session !== "weekend" && session !== "a_share" && (
-                <span style={{
-                  color: countdown <= 60 ? (dark ? "#34d399" : "#059669") : CC.textDim,
-                  fontWeight: countdown <= 60 ? 600 : 400,
-                }}>
-                  · {countdown <= 0 ? "即将更新…" : countdown < 60 ? `${countdown}秒后更新` : `${Math.ceil(countdown/60)}分钟后更新`}
-                </span>
-              )}
-            </div>
+            {/* 手机端赞赏，放标题右侧 */}
+            {isMobile && (
+              <button
+                onClick={() => setShowDonate(true)}
+                title="赞赏作者"
+                style={{
+                  flexShrink:0, height:34, borderRadius:10, border:"1.5px solid #f59e0b",
+                  background:"linear-gradient(135deg,#fef3c7,#fde68a)",
+                  color:"#92400e", fontSize:12, fontWeight:700,
+                  cursor:"pointer", display:"flex", alignItems:"center",
+                  gap:4, padding:"0 10px", whiteSpace:"nowrap",
+                }}
+              >
+                ☕ 赞赏
+              </button>
+            )}
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:"auto" }}>
             {/* 搜索框 */}
@@ -896,20 +949,22 @@ export default function QDIIPage() {
               />
               <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:14, color:CC.textDim }}>🔍</span>
             </div>
-            {/* 赞赏按钮 */}
-            <button
-              onClick={() => setShowDonate(true)}
-              title="赞赏作者"
-              style={{
-                height:34, borderRadius:10, border:"1.5px solid #f59e0b",
-                background:"linear-gradient(135deg,#fef3c7,#fde68a)",
-                color:"#92400e", fontSize:12, fontWeight:700,
-                cursor:"pointer", display:"flex", alignItems:"center",
-                gap:4, padding:"0 10px", whiteSpace:"nowrap", flexShrink:0,
-              }}
-            >
-              ☕ 赞赏
-            </button>
+            {/* 赞赏按钮（仅桌面，手机版在标题行）*/}
+            {!isMobile && (
+              <button
+                onClick={() => setShowDonate(true)}
+                title="赞赏作者"
+                style={{
+                  height:34, borderRadius:10, border:"1.5px solid #f59e0b",
+                  background:"linear-gradient(135deg,#fef3c7,#fde68a)",
+                  color:"#92400e", fontSize:12, fontWeight:700,
+                  cursor:"pointer", display:"flex", alignItems:"center",
+                  gap:4, padding:"0 10px", whiteSpace:"nowrap", flexShrink:0,
+                }}
+              >
+                ☕ 赞赏
+              </button>
+            )}
             {/* 暗夜模式 */}
             <button
               onClick={toggleDark}
@@ -922,6 +977,24 @@ export default function QDIIPage() {
               }}
             >
               {dark ? "☀️" : "🌙"}
+            </button>
+            {/* 自选（桌面文字；手机图标，和搜索同行）*/}
+            <button
+              onClick={() => setWatchlistMode(m => !m)}
+              title={watchlistMode ? "返回全部" : "查看自选"}
+              style={{
+                height:34, borderRadius:10,
+                border:`1.5px solid ${watchlistMode ? "#f59e0b" : CC.border}`,
+                background: watchlistMode ? "#fef3c710" : CC.card,
+                color: watchlistMode ? "#d97706" : CC.textMuted,
+                fontSize: isMobile ? 16 : 12, fontWeight:600, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                gap:4, padding: isMobile ? "0" : "0 12px",
+                width: isMobile ? 34 : "auto",
+                whiteSpace:"nowrap", transition:"all 0.18s", flexShrink:0,
+              }}
+            >
+              {isMobile ? (watchlistMode ? "★" : "☆") : (watchlistMode ? "★ 自选" : "☆ 自选")}
             </button>
             {/* 简约模式（仅桌面）*/}
             {!isMobile && (
@@ -942,40 +1015,102 @@ export default function QDIIPage() {
           </div>
         </div>
 
-        {/* 表格 / 简约模式 */}
-        {simpleMode && !isMobile ? (
+        {/* 表格 / 简约模式 / 自选模式 */}
+        {watchlistMode ? (
+          // ── 自选模式 ──────────────────────────────────────────────────────────
+          watchlist.size === 0 ? (
+            <div style={{ borderRadius:16, border:`1px solid ${CC.border}`, background:CC.card, padding:"60px 0", textAlign:"center", boxShadow:"0 2px 16px rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>☆</div>
+              <div style={{ fontSize:15, color:CC.textDim, marginBottom:6 }}>还没有自选基金</div>
+              <div style={{ fontSize:12, color:CC.textDim }}>点击列表左侧的 ☆ 收藏基金</div>
+            </div>
+          ) : isMobile ? (
+            // 手机自选：卡片列表
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {filtered.filter(f => watchlist.has(f.code)).map(fund => {
+                const val = fund.valuation;
+                return (
+                  <div key={fund.code}
+                    style={{ borderRadius:14, border:`1px solid ${CC.border}`, background:CC.card, padding:"14px 16px", boxShadow:"0 1px 8px rgba(0,0,0,0.05)", display:"flex", alignItems:"center", gap:12 }}
+                  >
+                    <span
+                      onClick={e => toggleWatch(fund.code, e)}
+                      style={{ fontSize:20, color:"#f59e0b", cursor:"pointer", flexShrink:0, lineHeight:1 }}
+                    >★</span>
+                    <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={() => setSelected(fund)}>
+                      <div style={{ fontWeight:700, fontSize:14, color:CC.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fund.name}</div>
+                      <div style={{ fontFamily:"monospace", fontSize:11, color:"#4f46e5", marginTop:2 }}>{fund.code}</div>
+                    </div>
+                    <div style={{ fontSize:18, fontWeight:800, color: val == null ? "#a5b4fc" : val >= 0 ? CC.red : CC.green, flexShrink:0, cursor:"pointer" }} onClick={() => setSelected(fund)}>
+                      {val == null ? "—" : `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`}
+                    </div>
+                  </div>
+                );
+              })}
+              {filtered.filter(f => watchlist.has(f.code)).length === 0 && (
+                <div style={{ borderRadius:14, border:`1px solid ${CC.border}`, background:CC.card, padding:"40px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>搜索结果中无自选基金</div>
+              )}
+            </div>
+          ) : (
+            // 桌面自选：简约3列 + 星号
+            <div style={{ borderRadius:16, border:`1px solid ${CC.border}`, background:CC.card, overflow:"hidden", boxShadow:"0 2px 16px rgba(0,0,0,0.06)" }}>
+              <div style={{ display:"grid", gridTemplateColumns:"40px 1fr 2fr 1fr", background: dark ? "#252630" : "#f4f4f8", borderBottom:`1px solid ${CC.border}`, padding:"12px 20px 12px 16px" }}>
+                <div/>
+                {[{ label:"代码" }, { label:"基金名称" }, { label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" }].map(h => (
+                  <div key={h.label} style={{ fontSize:14, fontWeight:800, color:CC.text, textAlign: h.align ?? "left" }}>{h.label}</div>
+                ))}
+              </div>
+              {filtered.filter(f => watchlist.has(f.code)).map((fund, i, arr) => {
+                const val = fund.valuation;
+                const hoverBg = dark ? "#2a2d3a" : "#eff6ff";
+                const bg = i % 2 === 0 ? CC.card : CC.bg;
+                return (
+                  <div key={fund.code}
+                    onClick={() => setSelected(fund)}
+                    style={{ display:"grid", gridTemplateColumns:"40px 1fr 2fr 1fr", alignItems:"center", padding:"14px 20px 14px 16px", cursor:"pointer", background:bg, borderBottom: i < arr.length-1 ? `1px solid ${CC.borderLight}` : "none", transition:"background 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background=hoverBg}
+                    onMouseLeave={e => e.currentTarget.style.background=bg}
+                  >
+                    <span onClick={e => toggleWatch(fund.code, e)} style={{ fontSize:16, color:"#f59e0b", cursor:"pointer", userSelect:"none" }}>★</span>
+                    <div style={{ fontFamily:"monospace", fontSize:13, color: dark ? "#818cf8" : "#4f46e5", fontWeight:800 }}>{fund.code}</div>
+                    <div style={{ fontSize:13, fontWeight:600, color:CC.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", paddingRight:16 }}>{fund.name}</div>
+                    <div style={{ fontSize:16, fontWeight:800, textAlign:"center", color: val == null ? (dark ? "#818cf8" : "#a5b4fc") : val >= 0 ? CC.red : CC.green }}>
+                      {val == null ? "计算中…" : `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`}
+                    </div>
+                  </div>
+                );
+              })}
+              {filtered.filter(f => watchlist.has(f.code)).length === 0 && (
+                <div style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>搜索结果中无自选基金</div>
+              )}
+            </div>
+          )
+        ) : simpleMode && !isMobile ? (
           // ── 简约模式：代码 | 基金名称 | 今日估值 三列平分 ──
           <div style={{ borderRadius:16, border:`1px solid ${CC.border}`, background:CC.card, overflow:"hidden", boxShadow:"0 2px 16px rgba(0,0,0,0.06)" }}>
-            {/* 表头 */}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr 1fr", background: dark ? "#252630" : "#f4f4f8", borderBottom:`1px solid ${CC.border}`, padding:"12px 32px" }}>
-              {[
-                { label:"代码",   align:"center" },
-                { label:"基金名称", align:"center" },
-                { label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
-              ].map(h => (
-                <div key={h.label} style={{ fontSize:14, fontWeight:800, color:CC.text, letterSpacing:0.3, textAlign:h.align }}>{h.label}</div>
+            <div style={{ display:"grid", gridTemplateColumns:"40px 1fr 2fr 1fr", background: dark ? "#252630" : "#f4f4f8", borderBottom:`1px solid ${CC.border}`, padding:"12px 20px 12px 16px" }}>
+              <div/>
+              {[{ label:"代码" }, { label:"基金名称" }, { label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" }].map(h => (
+                <div key={h.label} style={{ fontSize:14, fontWeight:800, color:CC.text, textAlign: h.align ?? "left" }}>{h.label}</div>
               ))}
             </div>
-            {/* 行 */}
             {filtered.map((fund, i) => {
               const val = fund.valuation;
               const hoverBg = dark ? "#2a2d3a" : "#eff6ff";
+              const bg = i % 2 === 0 ? CC.card : CC.bg;
               return (
                 <div key={fund.code}
                   onClick={() => setSelected(fund)}
-                  style={{
-                    display:"grid", gridTemplateColumns:"1fr 2fr 1fr", alignItems:"center",
-                    padding:"15px 32px", cursor:"pointer",
-                    background: i % 2 === 0 ? CC.card : CC.bg,
-                    borderBottom: i < filtered.length - 1 ? `1px solid ${CC.borderLight}` : "none",
-                    transition:"background 0.15s",
-                  }}
+                  style={{ display:"grid", gridTemplateColumns:"40px 1fr 2fr 1fr", alignItems:"center", padding:"14px 20px 14px 16px", cursor:"pointer", background:bg, borderBottom: i < filtered.length-1 ? `1px solid ${CC.borderLight}` : "none", transition:"background 0.15s" }}
                   onMouseEnter={e => e.currentTarget.style.background=hoverBg}
-                  onMouseLeave={e => e.currentTarget.style.background= i % 2 === 0 ? CC.card : CC.bg}
+                  onMouseLeave={e => e.currentTarget.style.background=bg}
                 >
-                  <div style={{ fontFamily:"monospace", fontSize:14, color: dark ? "#818cf8" : "#4f46e5", fontWeight:800, letterSpacing:0.5, textAlign:"center" }}>{fund.code}</div>
-                  <div style={{ fontSize:14, fontWeight:600, color:CC.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textAlign:"center", padding:"0 12px" }}>{fund.name}</div>
-                  <div style={{ fontSize:16, fontWeight:800, color: val == null ? (dark ? "#818cf8" : "#a5b4fc") : val >= 0 ? CC.red : CC.green, letterSpacing:0.3, textAlign:"center" }}>
+                  <span onClick={e => toggleWatch(fund.code, e)} title={watchlist.has(fund.code) ? "移出自选" : "加入自选"} style={{ fontSize:16, cursor:"pointer", color: watchlist.has(fund.code) ? "#f59e0b" : CC.textDim, userSelect:"none" }}>
+                    {watchlist.has(fund.code) ? "★" : "☆"}
+                  </span>
+                  <div style={{ fontFamily:"monospace", fontSize:13, color: dark ? "#818cf8" : "#4f46e5", fontWeight:800 }}>{fund.code}</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:CC.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", paddingRight:16 }}>{fund.name}</div>
+                  <div style={{ fontSize:16, fontWeight:800, textAlign:"center", color: val == null ? (dark ? "#818cf8" : "#a5b4fc") : val >= 0 ? CC.red : CC.green }}>
                     {val == null ? "计算中…" : `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`}
                   </div>
                 </div>
@@ -991,6 +1126,8 @@ export default function QDIIPage() {
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead>
                 <tr>
+                  {/* 星号列 */}
+                  <th style={{ ...mkTh(CC), width:32, padding:"0 4px 0 12px" }}/>
                   {isMobile ? (
                     <th style={{ ...mkTh(CC), minWidth:180 }}>基金</th>
                   ) : (
@@ -1028,11 +1165,11 @@ export default function QDIIPage() {
               </thead>
               <tbody>
                 {filtered.map((fund, i) => (
-                  <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={setSelected} isMobile={isMobile} cc={CC} session={session} />
+                  <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={setSelected} isMobile={isMobile} cc={CC} session={session} watched={watchlist.has(fund.code)} onToggleWatch={toggleWatch} />
                 ))}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={isMobile ? 2 : 8} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
+                    <td colSpan={isMobile ? 3 : 9} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
                       未找到相关基金
                     </td>
                   </tr>

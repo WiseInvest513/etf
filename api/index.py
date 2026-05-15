@@ -101,6 +101,43 @@ def _cache_delete(key: str):
     except Exception as e:
         logger.warning(f"[redis:del] {key}: {e}")
 
+def _cache_mget(keys: List[str]) -> Dict[str, any]:
+    """批量 MGET，返回 {key: value} 字典（缺失的 key 不在字典里）"""
+    if not keys:
+        return {}
+    r = _get_redis()
+    if not r:
+        return {}
+    try:
+        vals = r.mget(*keys)
+        result = {}
+        for k, v in zip(keys, vals):
+            if v is not None:
+                try:
+                    result[k] = json.loads(v) if isinstance(v, str) else v
+                except Exception:
+                    pass
+        return result
+    except Exception as e:
+        logger.warning(f"[redis:mget] {e}")
+        return {}
+
+def _cache_mset(items: Dict[str, any], ttl: int):
+    """批量 SET，通过 pipeline 一次 RTT 写入所有 key（代替 N 次串行 SET）"""
+    if not items:
+        return
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        pipe = r.pipeline()
+        for k, v in items.items():
+            pipe.set(k, json.dumps(v, ensure_ascii=False), ex=ttl)
+        pipe.exec()
+        logger.info(f"[redis] mset {len(items)} keys ttl={ttl}s")
+    except Exception as e:
+        logger.warning(f"[redis:mset] {e}")
+
 def _cache_delete_pattern(pattern: str):
     """批量删除匹配 pattern 的所有 Redis key（用于 force refresh 清股价缓存）"""
     r = _get_redis()
@@ -413,7 +450,7 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
             params=params,
             headers=YF_HEADERS,
             cookies=cookies or {},
-            timeout=(5, 15),
+            timeout=(3, 8),
             verify=False,
         )
         if not (resp and resp.ok):
@@ -663,6 +700,154 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
         except Exception:
             continue
     logger.info(f"[sina] got {len(result)}/{len(codes)} ETFs")
+    return result
+
+
+def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
+    """
+    新浪财经批量行情 — A股 + 港股（一次请求）。
+    输入 Yahoo Finance 格式的 symbol（如 600519.SS / 000001.SZ / 0700.HK）。
+    返回 {yahoo_symbol: {pre_pct, regular_pct, post_pct, price, close_price}}。
+
+    Sina 字段（逗号分隔）：
+      [0]名称  [1]今开  [2]昨收  [3]当前价  [4]最高  [5]最低  [9]成交额
+    HK 的字段位置与 A 股相同。
+    """
+    if not yahoo_symbols:
+        return {}
+
+    def _to_sina(sym: str) -> Optional[str]:
+        if sym.endswith(".SS"):
+            return f"sh{sym[:-3]}"
+        if sym.endswith(".SZ"):
+            return f"sz{sym[:-3]}"
+        if sym.endswith(".HK"):
+            code = sym[:-3]
+            try:
+                return f"hk{int(code):05d}"
+            except ValueError:
+                return None
+        return None
+
+    sina_to_yahoo: Dict[str, str] = {}
+    for sym in yahoo_symbols:
+        s = _to_sina(sym)
+        if s:
+            sina_to_yahoo[s] = sym
+
+    if not sina_to_yahoo:
+        return {}
+
+    symbols_str = ",".join(sina_to_yahoo.keys())
+    try:
+        resp = _get(f"http://hq.sinajs.cn/list={symbols_str}",
+                    headers=_SINA_HEADERS, timeout=(3, 8))
+        if not (resp and resp.ok):
+            return {}
+        text = resp.content.decode("gbk", errors="ignore")
+    except Exception as e:
+        logger.warning(f"[sina_stock] batch failed: {e}")
+        return {}
+
+    result: Dict[str, dict] = {}
+    for line in text.split("\n"):
+        m = re.search(r'hq_str_(\w+)="([^"]*)"', line)
+        if not m:
+            continue
+        sina_sym, data = m.group(1), m.group(2)
+        parts = data.split(",")
+        if len(parts) < 4:
+            continue
+        yahoo_sym = sina_to_yahoo.get(sina_sym)
+        if not yahoo_sym:
+            continue
+        try:
+            prev_close = float(parts[2])   # 昨收（索引2）
+            curr_price = float(parts[3])   # 当前价（索引3）
+            if prev_close <= 0 or curr_price <= 0:
+                continue
+            change_pct = round((curr_price - prev_close) / prev_close * 100, 2)
+            result[yahoo_sym] = {
+                "pre_pct":     change_pct,
+                "regular_pct": change_pct,
+                "post_pct":    change_pct,
+                "price":       curr_price,
+                "close_price": curr_price,
+            }
+        except (ValueError, IndexError):
+            continue
+    logger.info(f"[sina_stock] got {len(result)}/{len(sina_to_yahoo)} symbols")
+    return result
+
+
+def _stooq_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
+    """
+    Stooq 批量行情 — 美股（us_open 盘中）。
+    一次 HTTP 请求拿所有股票当前价 + 前收盘价，自己算 regular_pct。
+    输入 Yahoo Finance 格式的 symbol（如 AAPL / NVDA / TSM）。
+    返回 {yahoo_symbol: {pre_pct, regular_pct, post_pct, price, close_price}}。
+    注意：stooq 只有盘中数据，pre_pct/post_pct 填 None（由 Nasdaq 补充）。
+    """
+    if not yahoo_symbols:
+        return {}
+
+    # stooq symbol 格式：小写 + .us，多个用 + 连接（requests 会编码 +，必须手拼 URL）
+    def _to_stooq(sym: str) -> Optional[str]:
+        # 只处理纯美股（无后缀或 .US），跳过 .HK/.SS/.SZ 等
+        if "." not in sym:
+            return sym.lower() + ".us"
+        return None
+
+    stooq_to_yahoo: Dict[str, str] = {}
+    for sym in yahoo_symbols:
+        s = _to_stooq(sym)
+        if s:
+            stooq_to_yahoo[s] = sym
+
+    if not stooq_to_yahoo:
+        return {}
+
+    # 手动拼 URL 避免 + 被编码为 %2B
+    symbols_str = "+".join(stooq_to_yahoo.keys())
+    url = f"https://stooq.com/q/l/?s={symbols_str}&f=sd2t2cp"
+    try:
+        resp = _get(url, timeout=(5, 12))
+        if not (resp and resp.ok):
+            logger.warning(f"[stooq] HTTP {resp.status_code if resp else 'N/A'}")
+            return {}
+        text = resp.text
+    except Exception as e:
+        logger.warning(f"[stooq] batch failed: {e}")
+        return {}
+
+    result: Dict[str, dict] = {}
+    for line in text.strip().split("\r\n"):
+        if not line or "N/D" in line:
+            continue
+        parts = line.split(",")
+        if len(parts) < 5:
+            continue
+        stooq_sym = parts[0].lower()
+        yahoo_sym = stooq_to_yahoo.get(stooq_sym)
+        if not yahoo_sym:
+            continue
+        try:
+            curr  = float(parts[3])
+            prev  = float(parts[4])
+            if prev <= 0 or curr <= 0:
+                continue
+            pct = round((curr - prev) / prev * 100, 2)
+            result[yahoo_sym] = {
+                "pre_pct":     None,
+                "regular_pct": pct,
+                "post_pct":    None,
+                "price":       round(curr, 4),
+                "close_price": round(prev, 4),
+            }
+        except (ValueError, IndexError):
+            continue
+
+    logger.info(f"[stooq] got {len(result)}/{len(stooq_to_yahoo)} US symbols")
     return result
 
 
@@ -1604,6 +1789,34 @@ def cron_prem():
         except Exception as e:
             results[code] = str(e)
     return {"ts": datetime.now().isoformat(), "results": results}
+
+
+@app.get("/api/cron/qdii")
+def cron_qdii():
+    """
+    QDII估值预热 cron（Vercel Cron 触发）：
+    在各时段开始前5分钟运行，确保新时段开始时数据已在 Redis。
+      UTC 07:55 / HKT 15:55  → 盘前预热（pre_market 15:00 HKT 启动前）
+      UTC 13:25 / HKT 21:25  → 盘中预热（us_open 21:30 HKT 启动前）
+      UTC 19:55 / HKT 03:55  → 盘后预热（post_market 04:00 HKT 启动前）
+    策略：清旧缓存 → 全量重算 → 写入 Redis，用户刷新时直接命中缓存
+    """
+    session = _current_session()
+    logger.info(f"[cron/qdii] pre-warming started, session={session}")
+
+    # 清旧缓存（这里主动删是安全的，因为 cron 在窗口开始前5分钟跑，此时用户量极少）
+    _cache_delete("qdii_valuations")
+
+    # 复用主端点逻辑：force=False light=False + 无缓存 → 走完整计算流程
+    dummy_resp = Response()
+    try:
+        result = api_qdii_valuations(dummy_resp, force=False, light=False)
+        fund_count = len(result.get("funds", [])) if isinstance(result, dict) else 0
+        logger.info(f"[cron/qdii] pre-warming done: {fund_count} funds, session={session}")
+        return {"ok": True, "ts": datetime.now().isoformat(), "session": session, "funds": fund_count}
+    except Exception as e:
+        logger.error(f"[cron/qdii] pre-warming failed: {e}")
+        return {"ok": False, "ts": datetime.now().isoformat(), "session": session, "error": str(e)}
 
 
 @app.get("/api/cron/clear")
@@ -3010,13 +3223,15 @@ def fetch_fund_meta(code: str) -> dict:
 # ─── 估值计算核心 ──────────────────────────────────────────────────────────────
 
 def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
-                             session: str = "a_share") -> dict:
+                             session: str = "a_share",
+                             prefetched_holdings: Optional[list] = None) -> dict:
     """
     计算单只基金估值。
     stock_cache: {symbol -> {pre_pct, regular_pct, post_pct}}，由调用方批量填充。
     session: 当前时段，决定使用哪个价格字段。
+    prefetched_holdings: 由调用方传入已预取的持仓（避免重复 Redis 调用）。
     """
-    raw_holdings = fetch_qdii_holdings(code)
+    raw_holdings = prefetched_holdings if prefetched_holdings is not None else fetch_qdii_holdings(code)
     if not raw_holdings:
         return {"code": code, "valuation": None, "holdings": [], "coverage": 0,
                 "fx_change": fx_change}
@@ -3103,10 +3318,9 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     cache_key = "qdii_valuations"
 
     if light:
-        # 只清顶层估值缓存，所有子缓存（股价/持仓/gszzl）全部保留
-        # → 重算只是从缓存里读数据再加权，1-2s 完成
-        _cache_delete(cache_key)
-        logger.info(f"[qdii] light refresh: cleared qdii_valuations only (session={session})")
+        # light 模式：直接重算并覆盖缓存，不删除旧缓存
+        # → 计算期间并发请求仍命中旧缓存（不显示"计算中"），完成后原子覆盖
+        logger.info(f"[qdii] light refresh: recomputing in-place, old cache retained (session={session})")
     elif force:
         _cache_delete(cache_key)
         for code in QDII_CODES:
@@ -3166,27 +3380,138 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                 else:                 meta_cache[code]   = val
 
     # ── Step 2: 并发拉取股价 ────────────────────────────────────────────────────
+    # 每只基金只保留权重最大的前15个持仓参与估值，从 200+symbol 降到 ~40 个 US symbol
+    _TOP_N = 15
+    for code in list(all_holdings.keys()):
+        h_sorted = sorted(all_holdings[code], key=lambda h: h.get("weight", 0), reverse=True)
+        all_holdings[code] = h_sorted[:_TOP_N]
+
+    _NON_US_SUFFIX = (".HK", ".SS", ".SZ", ".TW", ".KS", ".T", ".L", ".PA", ".DE")
+
+    def _is_us(sym: str) -> bool:
+        return bool(sym) and not any(sym.endswith(s) for s in _NON_US_SUFFIX)
+
     all_symbols = list({
         h["symbol"]
         for holdings in all_holdings.values()
-        for h in holdings if h["symbol"]
+        for h in holdings if h.get("symbol")
     })
+    us_symbols  = [s for s in all_symbols if _is_us(s)]
+    non_us_syms = [s for s in all_symbols if not _is_us(s)]
+    logger.info(f"[qdii/stock] total={len(all_symbols)} US={len(us_symbols)} non-US={len(non_us_syms)}")
+
     _EMPTY_PF = {"pre_pct": None, "regular_pct": None, "post_pct": None,
                  "price": None, "close_price": None}
     stock_cache: dict[str, dict] = {}
+
+    # 批量 MGET 所有股价缓存（一次 RTT 代替 134 次串行 GET）
+    all_pf_keys   = [f"stock_pf_{s}"       for s in all_symbols]
+    stale_pf_keys = [f"stock_pf_stale_{s}" for s in all_symbols]
+    bulk_pf    = _cache_mget(all_pf_keys)
+    bulk_stale = _cache_mget(stale_pf_keys)
+
+    def _pf_cached(sym):   return bulk_pf.get(f"stock_pf_{sym}")
+    def _stale_cached(sym): return bulk_stale.get(f"stock_pf_stale_{sym}")
+
+    # non-US（A股/港股）：先读 Redis 缓存，缓存未命中的走新浪批量（单次请求）
+    non_us_fresh = []
+    for sym in non_us_syms:
+        c = _pf_cached(sym)
+        if c is not None:
+            stock_cache[sym] = c
+        else:
+            non_us_fresh.append(sym)
+
+    if non_us_fresh:
+        logger.info(f"[qdii/stock] Sina batch: {len(non_us_fresh)} A/HK symbols")
+        sina_result = _sina_stock_batch(non_us_fresh)
+        if sina_result:
+            _cache_mset({f"stock_pf_{s}":       pf for s, pf in sina_result.items()}, _valuation_ttl())
+            _cache_mset({f"stock_pf_stale_{s}": pf for s, pf in sina_result.items()}, 7 * 24 * 3600)
+        for sym, pf in sina_result.items():
+            stock_cache[sym] = pf
+        # 新浪也拿不到的：stale 兜底
+        for sym in non_us_fresh:
+            if sym not in stock_cache:
+                stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
+
     if session in ("pre_market", "us_open", "post_market"):
-        # 美股交易时段：并发实时拉取
-        with ThreadPoolExecutor(max_workers=16) as ex:
-            sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in all_symbols}
-            for fut, sym in sf.items():
-                try:    stock_cache[sym] = fut.result()
-                except: stock_cache[sym] = dict(_EMPTY_PF)
+        # 策略：① Redis缓存 → ② 拉新数据 → ③ stale兜底
+        # us_open: stooq 批量（~1.5s，一次请求）
+        # pre_market / post_market: Nasdaq 并发（有盘前/盘后数据，12s timeout）
+
+        # ① Redis 缓存命中的 US symbol
+        fresh_us = []
+        for sym in us_symbols:
+            c = _pf_cached(sym)
+            if c is not None:
+                stock_cache[sym] = c
+            else:
+                fresh_us.append(sym)
+
+        if fresh_us:
+            if session == "us_open":
+                # ─── 盘中：stooq 批量，一次请求搞定所有美股 ───────────────────
+                logger.info(f"[qdii/stock] stooq batch: {len(fresh_us)} US symbols")
+                stooq_result = _stooq_batch(fresh_us)
+                # 批量写回 Redis（pipeline 一次 RTT 代替 N 次串行 SET）
+                pf_batch    = {f"stock_pf_{sym}":       pf for sym, pf in stooq_result.items()}
+                stale_batch = {f"stock_pf_stale_{sym}": pf for sym, pf in stooq_result.items()}
+                _cache_mset(pf_batch,    _valuation_ttl())
+                _cache_mset(stale_batch, 7 * 24 * 3600)
+                for sym, pf in stooq_result.items():
+                    stock_cache[sym] = pf
+                # stooq 没返回的（非主流美股）：stale 兜底
+                for sym in fresh_us:
+                    if sym not in stock_cache:
+                        stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
+            else:
+                # ─── 盘前/盘后：Nasdaq 并发，有 pre/post 数据 ─────────────────
+                logger.info(f"[qdii/stock] Nasdaq concurrent: {len(fresh_us)} US symbols")
+
+                def _nasdaq_pf(sym: str) -> dict:
+                    r = _nasdaq_fetch(sym)
+                    pct   = r.get("pct")
+                    price = r.get("price")
+                    if pct is not None:
+                        return {"pre_pct": pct, "regular_pct": pct, "post_pct": pct,
+                                "price": price, "close_price": price}
+                    return dict(_EMPTY_PF)
+
+                nq_ex = ThreadPoolExecutor(max_workers=min(32, len(fresh_us)))
+                nq_results: Dict[str, dict] = {}
+                try:
+                    nq_futs = {nq_ex.submit(_nasdaq_pf, s): s for s in fresh_us}
+                    done, not_done = wait(list(nq_futs), timeout=12)
+                    for fut in not_done:
+                        fut.cancel()
+                    for fut in done:
+                        sym = nq_futs[fut]
+                        try:
+                            pf = fut.result()
+                            stock_cache[sym] = pf
+                            if any(v is not None for v in pf.values()):
+                                nq_results[sym] = pf
+                        except Exception:
+                            stock_cache[sym] = dict(_EMPTY_PF)
+                finally:
+                    nq_ex.shutdown(wait=False)
+
+                # 批量写回 Redis
+                if nq_results:
+                    _cache_mset({f"stock_pf_{s}":       pf for s, pf in nq_results.items()}, _valuation_ttl())
+                    _cache_mset({f"stock_pf_stale_{s}": pf for s, pf in nq_results.items()}, 7 * 24 * 3600)
+
+                # Nasdaq 超时/失败的：stale 兜底
+                for sym in fresh_us:
+                    if sym not in stock_cache or not any(v is not None for v in stock_cache[sym].values()):
+                        stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
     else:
         # a_share / weekend：美股已收盘
         # 1) 读常规 8h 缓存（有就用）
         # 2) 缓存为空时拉一次填充收盘价
         # 3) a_share：叠加 stock_last_post_{sym} 快照，注入 last_post_pct（"昨日涨跌"）
-        missing = [sym for sym in all_symbols if not _cache_get(f"stock_pf_{sym}")]
+        missing = [sym for sym in all_symbols if not _pf_cached(sym)]
         if missing:
             with ThreadPoolExecutor(max_workers=16) as ex:
                 sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
@@ -3195,12 +3520,14 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                     except: stock_cache[sym] = dict(_EMPTY_PF)
         for sym in all_symbols:
             if sym not in stock_cache:
-                stock_cache[sym] = _cache_get(f"stock_pf_{sym}") or dict(_EMPTY_PF)
+                stock_cache[sym] = _pf_cached(sym) or dict(_EMPTY_PF)
 
         # a_share：读盘后快照，注入 last_post_pct 供 "昨日涨跌" 展示
         if session == "a_share":
+            snap_keys = [f"stock_last_post_{s}" for s in all_symbols]
+            bulk_snap = _cache_mget(snap_keys)
             for sym in all_symbols:
-                snap = _cache_get(f"stock_last_post_{sym}") or {}
+                snap = bulk_snap.get(f"stock_last_post_{sym}") or {}
                 if snap.get("pct") is not None:
                     stock_cache[sym] = {**stock_cache[sym], "last_post_pct": snap["pct"]}
                     if snap.get("close_price") and not stock_cache[sym].get("close_price"):
@@ -3248,7 +3575,8 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
             }
         else:
             # 其他时段 → 持仓加权计算（session决定价格字段）
-            r = calc_valuation_for_fund(code, stock_cache, fx_change, session)
+            r = calc_valuation_for_fund(code, stock_cache, fx_change, session,
+                                        prefetched_holdings=all_holdings.get(code, []))
             if r["valuation"] is None and gszzl_v is not None:
                 r["valuation"]   = gszzl_v
                 r["data_source"] = "gszzl_fallback"
