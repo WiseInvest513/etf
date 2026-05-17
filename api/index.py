@@ -2375,6 +2375,18 @@ from contextlib import contextmanager as _ctx
 # 所有主动 QDII 基金代码（与前端 QDII_FUNDS 同步）
 QDII_CODES = [f["code"] for f in STATIC_FUNDS["us_active"]]
 
+# C 类 → A 类持仓重定向（同一投资组合，避免缓存时序差异导致 A/C 持仓不一致）
+_C_TO_A_HOLDINGS_MAP: dict[str, str] = {
+    "022184": "100055",  # 富国全球科技互联网C → A
+    "016702": "016701",  # 银华海外数字经济C → A
+    "017437": "017436",  # 华宝纳斯达克精选C → A
+    "017731": "017730",  # 嘉实全球产业升级C → A
+    "018036": "501226",  # 长城全球新能源汽车C → A
+    "017145": "017144",  # 华宝海外新能源汽车C → A
+    "018156": "018155",  # 创金合信全球医药生物C → A
+    "006309": "006308",  # 汇添富全球消费C → A
+}
+
 # ─── SQLite ───────────────────────────────────────────────────────────────────
 
 _SEED_DB_PATH = _Path(__file__).parent.parent / "wise_etf.db"
@@ -2527,19 +2539,42 @@ _STOCK_CHG_TTL  = 20 * 3600   # 个股涨跌幅，盘后固定
 
 def _current_session() -> str:
     """
-    返回当前市场时段（基于 HKT）：
-      a_share     HKT 08:00-16:00 工作日（A股交易中）
-      pre_market  HKT 16:00-21:30 工作日（美股盘前）
-      us_open     HKT 21:30-04:00 工作日（美股盘中，跨午夜）
-      post_market HKT 04:00-08:00 工作日（美股盘后）
-      weekend     HKT 周六/日全天
+    返回当前市场时段（基于 HKT，EDT=HKT-12）：
+      a_share     HKT 08:00-16:00 周一至周五（A股交易中）
+      pre_market  HKT 16:00-21:30 周一至周五（美股盘前）
+      us_open     HKT 21:30-04:00 周一至周五（美股盘中，跨午夜）
+                  + HKT 周六 00:00-04:00（美股周五收盘前，Fri 12:00-16:00 ET）
+      post_market HKT 04:00-08:00 周一至周五（美股盘后）
+      weekend     HKT 周六 04:00 至周一 08:00（美股完全休市）
+
+    修正说明：
+      - 周六 HKT 00:00-04:00：美股周五仍在交易（ET 12:00-16:00），应为 us_open
+      - 周一 HKT 00:00-08:00：美股仍是周日休市，应为 weekend（原代码误判为 us_open/post_market）
     """
     from datetime import timezone, timedelta
     HKT = timezone(timedelta(hours=8))
     now = datetime.now(HKT)
-    if now.weekday() >= 5:
+    wd = now.weekday()  # 0=周一 … 4=周五 5=周六 6=周日
+    h  = now.hour + now.minute / 60.0
+
+    # 周六：
+    #   00:00-04:00 → 美股周五盘中（Fri 12:00-16:00 ET）
+    #   04:00-08:00 → 美股周五盘后（Fri 16:00-20:00 ET）
+    #   08:00+      → 真正休市
+    if wd == 5:
+        if h < 4.0: return "us_open"
+        if h < 8.0: return "post_market"
         return "weekend"
-    h = now.hour + now.minute / 60.0
+
+    # 周日：全天休市（无盘后，美股周六不交易）
+    if wd == 6:
+        return "weekend"
+
+    # 周一：00:00-08:00 仍是美股周日休市（无盘后）；08:00 起 A 股开盘
+    if wd == 0 and h < 8.0:
+        return "weekend"
+
+    # 周一 08:00 至周五 24:00（正常工作日逻辑）
     if 8.0 <= h < 16.0:      return "a_share"
     if 16.0 <= h < 21.5:     return "pre_market"
     if h >= 21.5 or h < 4.0: return "us_open"
@@ -2805,50 +2840,41 @@ def _fetch_holdings_from_annual_pdf(code: str) -> list:
 def fetch_qdii_holdings(code: str) -> list:
     """
     持仓获取策略：
-    1. 最新季报（最准确的当前权重，top-10）
-    2. 2025年报（最新完整持仓，用于补充季报没有的品种）
-       - 若2025年报解析异常（权重>120%或条数>200），跳过补充，只用季报
-    3. 合并：季报权重为准，年报只补充季报中没有的品种并按剩余空间缩放
+    1. C 类基金重定向到对应 A 类，确保 A/C 持仓数据完全一致，避免缓存时序差异。
+    2. 最新季报（3.31 披露，前十大持仓，绝对准确，保持原顺序在前）。
+    3. 仅用 2025年12月年报 补充季报没有的品种（按剩余空间缩放后按权重排序追加）。
+       - 不回溯 2025年6月、2024年、2023年等更早数据。
+       - 若 2025年12月数据异常或缺失，仅返回季报前十，不补充。
     """
+    # Step 0: C 类重定向 → A 类（同一投资组合，共享持仓缓存）
+    master_code = _C_TO_A_HOLDINGS_MAP.get(code, code)
+    if master_code != code:
+        logger.info(f"[qdii_holdings] {code} → redirect to A class {master_code}")
+        return fetch_qdii_holdings(master_code)
+
     cache_key = f"qdii_h_{code}"
     cached = _cache_get(cache_key)
     if cached:
         return cached
 
-    now = datetime.utcnow()
-
-    # Step 1: 最新季报（最准确的当前权重）
+    # Step 1: 最新季报（前十大持仓，权重准确，保持原顺序）
     latest_q = _fetch_em_holdings_for_period(code, "", "")
     logger.info(f"[qdii_holdings] {code} latest quarterly: {len(latest_q)} holdings")
 
-    # Step 2: 最新完整报告（优先2025年报，按时间倒序，最远回溯到2023）
-    # 2025年报在4月后发布；2025半年报在9月后发布
-    complete_periods = []
-    if now.month >= 4 or now.year > 2025:
-        complete_periods.append(("2025", "12"))
-    if now.month >= 9 or now.year > 2025:
-        complete_periods.append(("2025", "6"))
-    complete_periods += [
-        ("2024", "12"), ("2024", "6"),
-        ("2023", "12"), ("2023", "6"),
-    ]
-
+    # Step 2: 仅取 2025年12月年报（不回溯）
     complete_h: list = []
-    for yr, mo in complete_periods:
-        h = _fetch_em_holdings_for_period(code, yr, mo)
-        if not h:
-            continue
+    h = _fetch_em_holdings_for_period(code, "2025", "12")
+    if h:
         total_w = sum(x["weight"] for x in h)
-        logger.info(f"[qdii_holdings] {code} y={yr} m={mo}: {len(h)} holdings, total_w={total_w:.1f}%")
-        # 合理性校验：权重>120%或条数>200视为解析异常，跳过
+        logger.info(f"[qdii_holdings] {code} y=2025 m=12: {len(h)} holdings, total_w={total_w:.1f}%")
         if total_w > 120 or len(h) > 200:
-            logger.warning(f"[qdii_holdings] {code} y={yr} m={mo}: 异常(weight={total_w:.1f}%,count={len(h)})，跳过")
-            continue
-        if len(h) > 10:
+            logger.warning(f"[qdii_holdings] {code} y=2025 m=12: 异常(weight={total_w:.1f}%,count={len(h)})，不使用年报补充")
+        elif len(h) > 10:
             complete_h = h
-            break
+    else:
+        logger.warning(f"[qdii_holdings] {code}: 未找到2025年12月年报，仅使用季报前十")
 
-    # Step 3: 合并
+    # Step 3: 合并（季报保持原顺序在前，年报补充按权重排序追加）
     if latest_q and complete_h:
         q_symbols = {h["symbol"] for h in latest_q}
         q_weight_total = sum(h["weight"] for h in latest_q)
@@ -2860,6 +2886,7 @@ def fetch_qdii_holdings(code: str) -> list:
         if sup_weight_total > 0 and remaining > 1.0:
             scale = remaining / sup_weight_total
             supplemental = [{**h, "weight": round(h["weight"] * scale, 4)} for h in supplemental]
+            supplemental.sort(key=lambda x: x["weight"], reverse=True)
             best_holdings = latest_q + supplemental
         else:
             best_holdings = latest_q
@@ -2869,6 +2896,7 @@ def fetch_qdii_holdings(code: str) -> list:
     elif latest_q:
         best_holdings = latest_q
     elif complete_h:
+        complete_h.sort(key=lambda x: x["weight"], reverse=True)
         best_holdings = complete_h
     else:
         best_holdings = []
@@ -3380,11 +3408,10 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                 else:                 meta_cache[code]   = val
 
     # ── Step 2: 并发拉取股价 ────────────────────────────────────────────────────
-    # 每只基金只保留权重最大的前15个持仓参与估值，从 200+symbol 降到 ~40 个 US symbol
+    # 价格查询只取每只基金权重最大的前15个 symbol（性能优化），
+    # 但 all_holdings 保持 fetch_qdii_holdings 返回的原始顺序（季报前十在前），
+    # 确保展示给用户的前十持仓与季报官方数据一致。
     _TOP_N = 15
-    for code in list(all_holdings.keys()):
-        h_sorted = sorted(all_holdings[code], key=lambda h: h.get("weight", 0), reverse=True)
-        all_holdings[code] = h_sorted[:_TOP_N]
 
     _NON_US_SUFFIX = (".HK", ".SS", ".SZ", ".TW", ".KS", ".T", ".L", ".PA", ".DE")
 
@@ -3394,7 +3421,8 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     all_symbols = list({
         h["symbol"]
         for holdings in all_holdings.values()
-        for h in holdings if h.get("symbol")
+        for h in sorted(holdings, key=lambda x: x.get("weight", 0), reverse=True)[:_TOP_N]
+        if h.get("symbol")
     })
     us_symbols  = [s for s in all_symbols if _is_us(s)]
     non_us_syms = [s for s in all_symbols if not _is_us(s)]

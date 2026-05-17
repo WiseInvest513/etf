@@ -50,7 +50,7 @@ const SESSION_INFO = {
   pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
   us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"实时股价加权估值，10分钟刷新",         color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
   post_market: { label:"美股盘后", valLabel:"盘后估值", desc:"盘后涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(124,58,237,0.85)",  dot:"#c4b5fd" },
-  weekend:     { label:"周末休市", valLabel:"最新估值", desc:"数据已固定，周一美股开盘前不变",        color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
+  weekend:     { label:"周末休市", valLabel:"收盘估值", desc:"周五收盘数据，周一美股开盘前保持不变", color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
 };
 
 // ─── 颜色 ─────────────────────────────────────────────────────────────────────
@@ -419,8 +419,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
 
           {/* 持仓圆环图 */}
           {holdings.length > 0 && (() => {
-            const sorted = [...holdings].sort((a, b) => b.weight - a.weight);
-            const top10 = sorted.slice(0, 10);
+            const top10 = holdings.slice(0, 10);
             const top10Weight = top10.reduce((s, h) => s + h.weight, 0);
             const otherWeight = Math.max(0, 100 - top10Weight);
             const pieData = [
@@ -483,8 +482,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     const priceLabel  = session === "us_open" ? "实时价" : "收盘价";
                     const changeLabel = { pre_market:"盘前", us_open:"盘中", post_market:"盘后", a_share:"昨涨跌", weekend:"昨涨跌" }[session] ?? "涨跌";
                     const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
-                    const sortedAll = [...holdings].sort((a, b) => b.weight - a.weight);
-                    const displayed = showAll ? sortedAll : sortedAll.slice(0, 10);
+                    const displayed = showAll ? holdings : holdings.slice(0, 10);
                     const tdP = isMobile ? "8px 6px" : "13px 14px";
                     const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
                       padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
