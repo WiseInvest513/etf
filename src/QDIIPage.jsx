@@ -561,7 +561,13 @@ function DetailPanel({ fund, onClose, cc, session }) {
                 </div>
               )}
               <div style={{ padding:"10px 14px", fontSize:11, color:cc.textDim, borderTop:`1px solid ${cc.border}`, background:cc.bg, display:"flex", justifyContent:"space-between" }}>
-                <span>数据来源：基金最新季报</span>
+                <span>
+                  数据来源：基金季报
+                  {fund.holdings_date ? `（截至 ${fund.holdings_date}）` : ""}
+                  {fund.holdings_source && fund.holdings_source !== "quarterly" && fund.holdings_source !== "quarterly+annual"
+                    ? <span style={{ color:"#ef4444", marginLeft:4 }}>⚠️ 季报拉取失败，数据仅供参考</span>
+                    : ""}
+                </span>
                 <span>「—」表示非美股或暂无报价，不计入估值</span>
               </div>
             </div>
@@ -747,8 +753,10 @@ export default function QDIIPage() {
         buy_status:  ua.buy_status  ?? f.buy_status,
         valuation:     api.valuation     ?? null,
         coverage:      api.coverage      ?? null,
-        holdings:      api.holdings      ?? null,
-        nav:           api.nav           ?? null,
+        holdings:        api.holdings        ?? null,
+        holdings_date:   api.holdings_date   ?? null,
+        holdings_source: api.holdings_source ?? null,
+        nav:             api.nav             ?? null,
         nav_date:      api.nav_date      ?? null,
         nav_published: api.nav_published ?? false,
         data_source:   api.data_source   ?? null,

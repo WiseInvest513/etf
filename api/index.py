@@ -2700,8 +2700,10 @@ def _parse_em_holdings_table(html: str) -> list:
     return holdings
 
 
-def _fetch_em_holdings_for_period(code: str, year: str, month: str) -> list:
-    """调用东方财富 FundArchivesDatas 接口获取指定报告期持仓"""
+def _fetch_em_holdings_for_period(code: str, year: str, month: str) -> tuple:
+    """调用东方财富 FundArchivesDatas 接口获取指定报告期持仓。
+    返回 (holdings: list, report_date: str)，失败时返回 ([], "")。
+    """
     url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
     params = {
         "type":    "jjcc",
@@ -2718,15 +2720,18 @@ def _fetch_em_holdings_for_period(code: str, year: str, month: str) -> list:
     try:
         resp = _get(url, params=params, headers=headers, timeout=(6, 15))
         if not (resp and resp.ok):
-            return []
+            return [], ""
         m = re.search(r'content:"(.*?)"(?:,|\s*})', resp.text, re.DOTALL)
         if not m:
-            return []
+            return [], ""
         html = _html_mod.unescape(m.group(1))
-        return _parse_em_holdings_table(html)
+        # 提取报告期日期（如 "2026-03-31"）
+        dm = re.search(r'截止至[：:]\s*<font[^>]*>(\d{4}-\d{2}-\d{2})</font>', html)
+        report_date = dm.group(1) if dm else ""
+        return _parse_em_holdings_table(html), report_date
     except Exception as e:
         logger.warning(f"[em_holdings] {code} y={year} m={month}: {e}")
-        return []
+        return [], ""
 
 
 def _fetch_holdings_from_annual_pdf(code: str) -> list:
@@ -2838,15 +2843,7 @@ def _fetch_holdings_from_annual_pdf(code: str) -> list:
 
 
 def fetch_qdii_holdings(code: str) -> list:
-    """
-    持仓获取策略：
-    1. C 类基金重定向到对应 A 类，确保 A/C 持仓数据完全一致，避免缓存时序差异。
-    2. 最新季报（3.31 披露，前十大持仓，绝对准确，保持原顺序在前）。
-    3. 仅用 2025年12月年报 补充季报没有的品种（按剩余空间缩放后按权重排序追加）。
-       - 不回溯 2025年6月、2024年、2023年等更早数据。
-       - 若 2025年12月数据异常或缺失，仅返回季报前十，不补充。
-    """
-    # Step 0: C 类重定向 → A 类（同一投资组合，共享持仓缓存）
+    """返回持仓列表。元数据（报告期等）存在 qdii_hmeta_{code} 缓存中。"""
     master_code = _C_TO_A_HOLDINGS_MAP.get(code, code)
     if master_code != code:
         logger.info(f"[qdii_holdings] {code} → redirect to A class {master_code}")
@@ -2857,61 +2854,95 @@ def fetch_qdii_holdings(code: str) -> list:
     if cached:
         return cached
 
-    # Step 1: 最新季报（前十大持仓，权重准确，保持原顺序）
-    latest_q = _fetch_em_holdings_for_period(code, "", "")
-    logger.info(f"[qdii_holdings] {code} latest quarterly: {len(latest_q)} holdings")
+    return _do_fetch_qdii_holdings(code)
 
-    # Step 2: 仅取 2025年12月年报（不回溯）
+
+def _do_fetch_qdii_holdings(code: str) -> list:
+    """
+    实际拉取逻辑，不走缓存。
+    持仓获取策略：
+    1. 最新季报（year="",month=""，东方财富返回最新一期），前十大持仓，保持原顺序。
+       - 验证报告期：必须是季末（03-31 / 06-30 / 09-30 / 12-31），否则视为异常。
+       - 季报失败 → 缓存30分钟（短TTL），让下次请求重试，而不是将年报数据缓存24小时。
+    2. 仅用 2025年12月年报 补充季报没有的品种。
+       - 不回溯更早数据；若年报异常或缺失，仅返回季报前十。
+    3. 季报+年报均失败 → 尝试 PDF 年报。
+    """
+    cache_key = f"qdii_h_{code}"
+    meta_key  = f"qdii_hmeta_{code}"
+
+    # Step 1: 最新季报
+    latest_q, q_date = _fetch_em_holdings_for_period(code, "", "")
+    logger.info(f"[qdii_holdings] {code} latest: {len(latest_q)} holdings, date={q_date!r}")
+
+    # 验证：季报日期必须是季末
+    _QUARTER_ENDS = {"-03-31", "-06-30", "-09-30", "-12-31"}
+    q_is_valid = bool(latest_q) and any(q_date.endswith(e) for e in _QUARTER_ENDS)
+    if latest_q and not q_is_valid:
+        logger.warning(f"[qdii_holdings] {code}: quarterly date={q_date!r} 不是季末，忽略")
+        latest_q = []
+
+    # Step 2: 2025年12月年报（补充用）
     complete_h: list = []
-    h = _fetch_em_holdings_for_period(code, "2025", "12")
+    ann_date = ""
+    h, ann_date = _fetch_em_holdings_for_period(code, "2025", "12")
     if h:
         total_w = sum(x["weight"] for x in h)
-        logger.info(f"[qdii_holdings] {code} y=2025 m=12: {len(h)} holdings, total_w={total_w:.1f}%")
+        logger.info(f"[qdii_holdings] {code} 2025-12年报: {len(h)} holdings, total_w={total_w:.1f}%, date={ann_date!r}")
         if total_w > 120 or len(h) > 200:
-            logger.warning(f"[qdii_holdings] {code} y=2025 m=12: 异常(weight={total_w:.1f}%,count={len(h)})，不使用年报补充")
+            logger.warning(f"[qdii_holdings] {code} 2025-12年报异常(weight={total_w:.1f}%,count={len(h)})，跳过")
         elif len(h) > 10:
             complete_h = h
     else:
-        logger.warning(f"[qdii_holdings] {code}: 未找到2025年12月年报，仅使用季报前十")
+        logger.warning(f"[qdii_holdings] {code}: 未找到2025年12月年报")
 
-    # Step 3: 合并（季报保持原顺序在前，年报补充按权重排序追加）
+    # Step 3: 合并
+    report_date = q_date  # 优先用季报日期
+    source = "quarterly"
+
     if latest_q and complete_h:
-        q_symbols = {h["symbol"] for h in latest_q}
-        q_weight_total = sum(h["weight"] for h in latest_q)
-
-        supplemental = [h for h in complete_h if h["symbol"] not in q_symbols]
-        sup_weight_total = sum(h["weight"] for h in supplemental)
-
+        q_symbols      = {x["symbol"] for x in latest_q}
+        q_weight_total = sum(x["weight"] for x in latest_q)
+        supplemental   = [x for x in complete_h if x["symbol"] not in q_symbols]
+        sup_weight_total = sum(x["weight"] for x in supplemental)
         remaining = max(0.0, 100.0 - q_weight_total)
         if sup_weight_total > 0 and remaining > 1.0:
             scale = remaining / sup_weight_total
-            supplemental = [{**h, "weight": round(h["weight"] * scale, 4)} for h in supplemental]
+            supplemental = [{**x, "weight": round(x["weight"] * scale, 4)} for x in supplemental]
             supplemental.sort(key=lambda x: x["weight"], reverse=True)
             best_holdings = latest_q + supplemental
         else:
             best_holdings = latest_q
-
+        source = "quarterly+annual"
         logger.info(f"[qdii_holdings] {code}: merged={len(best_holdings)} (q={len(latest_q)}+sup={len(supplemental)})")
-
     elif latest_q:
         best_holdings = latest_q
     elif complete_h:
         complete_h.sort(key=lambda x: x["weight"], reverse=True)
         best_holdings = complete_h
+        report_date = ann_date
+        source = "annual_only"
+        logger.warning(f"[qdii_holdings] {code}: 季报失败，仅使用年报数据 date={ann_date!r}")
     else:
         best_holdings = []
 
-    # Step 4: 若仍为空，尝试 PDF 年报
+    # Step 4: PDF 兜底
     if not best_holdings:
-        pdf_holdings = _fetch_holdings_from_annual_pdf(code)
-        if pdf_holdings:
-            logger.info(f"[qdii_holdings] {code}: using PDF ({len(pdf_holdings)} positions)")
-            best_holdings = pdf_holdings
+        pdf_h = _fetch_holdings_from_annual_pdf(code)
+        if pdf_h:
+            best_holdings = pdf_h
+            source = "pdf"
+            logger.info(f"[qdii_holdings] {code}: PDF兜底 ({len(pdf_h)} positions)")
 
     if best_holdings:
-        _cache_set(cache_key, best_holdings, _HOLDINGS_TTL)
+        # 季报成功 → 正常TTL；仅年报/PDF兜底 → 短TTL，让下次请求尽快重试季报
+        ttl = _HOLDINGS_TTL if source in ("quarterly", "quarterly+annual") else 1800
+        _cache_set(cache_key, best_holdings, ttl)
+        _cache_set(meta_key, {"report_date": report_date, "source": source}, ttl)
+        if source not in ("quarterly", "quarterly+annual"):
+            logger.warning(f"[qdii_holdings] {code}: 使用{source}兜底，TTL=30min，等待季报重试")
     else:
-        logger.warning(f"[qdii_holdings] {code}: all sources failed")
+        logger.warning(f"[qdii_holdings] {code}: 所有来源均失败")
 
     return best_holdings
 
@@ -3317,13 +3348,24 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
 # ─── API 端点 ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/qdii/holdings/{code}")
-def api_qdii_holdings(code: str, response: Response):
-    """返回单只基金季报前十大持仓（含持仓权重）"""
+def api_qdii_holdings(code: str, response: Response, force: bool = False):
+    """返回单只基金季报前十大持仓（含持仓权重和报告期）"""
     response.headers["Cache-Control"] = "public, max-age=3600"
+    master_code = _C_TO_A_HOLDINGS_MAP.get(code, code)
+    if force:
+        _cache_delete(f"qdii_h_{master_code}")
+        _cache_delete(f"qdii_hmeta_{master_code}")
+        logger.info(f"[qdii_holdings] force cleared cache for {master_code}")
     holdings = fetch_qdii_holdings(code)
+    meta = _cache_get(f"qdii_hmeta_{master_code}") or {}
     if not holdings:
         return {"code": code, "holdings": [], "error": "fetch_failed"}
-    return {"code": code, "holdings": holdings}
+    return {
+        "code":        code,
+        "holdings":    holdings,
+        "report_date": meta.get("report_date", ""),
+        "source":      meta.get("source", ""),
+    }
 
 
 @app.get("/api/qdii/valuations")
@@ -3628,6 +3670,11 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         )
         r["scale"]      = meta.get("scale")
         r["ytd_return"] = meta.get("ytd_return")
+        # 持仓报告期
+        master = _C_TO_A_HOLDINGS_MAP.get(code, code)
+        hmeta = _cache_get(f"qdii_hmeta_{master}") or {}
+        r["holdings_date"]   = hmeta.get("report_date", "")
+        r["holdings_source"] = hmeta.get("source", "")
         results.append(r)
 
     today      = datetime.utcnow().strftime("%Y-%m-%d")
@@ -3638,7 +3685,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         _db_save_stock_prices(stock_cache, today)
         for r in results:
             if r.get("holdings"):
-                _db_save_holdings(r["code"], r["holdings"], report_date="")
+                _db_save_holdings(r["code"], r["holdings"], report_date=r.get("holdings_date", ""))
         _db_save_valuations(results, today)
         logger.info(f"[qdii] saved: {len(results)} funds, {len(stock_cache)} stocks, session={session}")
     except Exception as e:
