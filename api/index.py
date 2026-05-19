@@ -3081,7 +3081,7 @@ def fetch_stock_price_fields(symbol: str) -> dict:
                 _cache_set(last_post_key, {
                     "pct":         snap_pct,
                     "close_price": out.get("close_price"),
-                }, 48 * 3600)
+                }, 72 * 3600)  # 72h：确保周五盘后快照能撑过周末到周一A股时段
         _cache_set(cache_key, out, ttl)
         _cache_set(stale_cache_key, out, 7 * 24 * 3600)
         return out
@@ -3406,7 +3406,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         if cached:
             cached_session = cached.get("session", "weekend")
             # 估值来源发生根本性切换时必须失效，否则旧 session 数据会持续到 TTL 到期
-            # a_share  → gszzl 全仓估值
+            # a_share  → 持仓×昨日盘后涨跌加权（last_post_pct）
             # pre/us/post → Yahoo 实时/盘前/盘后加权
             # weekend  → 缓存收盘价
             _SOURCE_CHANGED = (
@@ -3619,30 +3619,20 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         is_fresh = g.get("is_fresh", False)
         nav_date = g.get("nav_date")
 
-        if session == "a_share" and is_fresh and gszzl_v is not None:
-            # A股时段且 gszzl 今日有效 → 直接使用全仓估值，覆盖率100%
-            # 持仓填入昨日盘后涨跌（last_post_pct > post_pct > regular_pct），用于详情面板"昨日涨跌"
-            raw_h = all_holdings.get(code, [])
-            enriched_h = [
-                {**h,
-                 "change": (
-                     (stock_cache.get(h["symbol"]) or {}).get("last_post_pct") or
-                     (stock_cache.get(h["symbol"]) or {}).get("post_pct") or
-                     (stock_cache.get(h["symbol"]) or {}).get("regular_pct")
-                 ),
-                 "price":       (stock_cache.get(h["symbol"]) or {}).get("price"),
-                 "close_price": (stock_cache.get(h["symbol"]) or {}).get("close_price")}
-                for h in raw_h
-            ]
-            r = {
-                "code":        code,
-                "valuation":   gszzl_v,
-                "holdings":    enriched_h,
-                "coverage":    100,
-                "fx_change":   fx_change,
-                "data_source": "gszzl",
-                "gszzl_time":  gztime,
-            }
+        if session == "a_share":
+            # A股时段：用持仓×昨日盘后涨跌加权计算，得到真实的"昨日美股表现"。
+            # 不能直接用 fundgz 的 gszzl：当基金公司已公布最新净值（如周五）时，
+            # gszzl = (今日A股估值 - 最新净值) / 最新净值，实际只反映汇率等微小变化，
+            # 与昨日美股表现无关，方向可能完全相反。
+            r = calc_valuation_for_fund(code, stock_cache, fx_change, "a_share",
+                                        prefetched_holdings=all_holdings.get(code, []))
+            r["gszzl_time"] = gztime
+            if r["valuation"] is None and gszzl_v is not None:
+                # 持仓数据完全缺失时才用 gszzl 兜底
+                r["valuation"]   = gszzl_v
+                r["data_source"] = "gszzl_fallback"
+            else:
+                r["data_source"] = "a_share_post_calc"
         else:
             # 其他时段 → 持仓加权计算（session决定价格字段）
             r = calc_valuation_for_fund(code, stock_cache, fx_change, session,
@@ -3655,7 +3645,6 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                     "pre_market":  "pre_market_calc",
                     "us_open":     "us_open_calc",
                     "post_market": "post_market_calc",
-                    "a_share":     "a_share_post_calc",
                     "weekend":     "cached_post",
                 }
                 r["data_source"] = src_map.get(session, "cached_post")

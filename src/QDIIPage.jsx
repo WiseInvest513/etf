@@ -903,7 +903,7 @@ export default function QDIIPage() {
           <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: isMobile ? 10 : 20 }}>
             {[
               { icon:"⏰", title:"提前决策", desc:"官方净值 T+1/T+2 才公布，估值帮你在 3PM 截止前做判断" },
-              { icon:"🧮", title:"双源估算", desc:"A股时段用 fundgz 全仓实时估值；美股时段用 Yahoo 实时股价加权" },
+              { icon:"🧮", title:"双源估算", desc:"A股时段用昨日盘后涨跌加权估算；美股时段用 Yahoo 实时股价加权" },
               { icon:"💱", title:"含汇率", desc:"人民币/美元汇率变动同步纳入计算，影响约 ±0.3%" },
               { icon:"⚠️", title:"仅供参考", desc:"持仓数据滞后 1-2 个月，实际净值以基金公司公告为准" },
             ].map(item => (
@@ -1211,7 +1211,7 @@ export default function QDIIPage() {
             <div style={{ padding:"12px 16px", borderTop:`1px solid ${CC.border}`, fontSize:12, color:CC.textDim, display:"flex", justifyContent:"space-between", alignItems:"center", background:CC.card }}>
               <span>共 {filtered.length} 只{loading ? " · 估值加载中…" : ""}</span>
               <span>
-                {session === "a_share"    ? "fundgz 全仓估值" :
+                {session === "a_share"    ? "昨日盘后涨跌加权" :
                  session === "us_open"    ? "Yahoo 实时股价加权" :
                  session === "pre_market" ? "Yahoo 盘前价格加权" :
                  session === "post_market"? "Yahoo 盘后价格加权" :
