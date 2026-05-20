@@ -192,7 +192,7 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"019441","name":"万家纳斯达克100指数发起式(QDII)",     "fee_rate":0.65,"scale":5.0, "ytd_return":16.86,"track_error":1.75,"daily_limit":"10元",  "buy_status":"open",  "code_c":"019442"},
         {"code":"161130","name":"易方达纳斯达克100ETF联接(QDII-LOF)A","fee_rate":0.60,"scale":16.1,"ytd_return":16.58,"track_error":1.55,"daily_limit":"10元",  "buy_status":"open",  "code_c":"012870"},
         {"code":"040046","name":"华安纳斯达克100指数(QDII)",           "fee_rate":0.80,"scale":55.2,"ytd_return":15.37,"track_error":2.06,"daily_limit":"10元",  "buy_status":"open",  "code_c":"014978"},
-        {"code":"160213","name":"国泰纳斯达克100指数(QDII)",           "fee_rate":1.00,"scale":18.6,"ytd_return":17.58,"track_error":1.03,"daily_limit":"暂停申购","buy_status":"suspended","code_c":None},
+        {"code":"160213","name":"国泰纳斯达克100指数(QDII)",           "fee_rate":1.00,"scale":18.6,"ytd_return":17.58,"track_error":1.03,"daily_limit":"不限额",  "buy_status":"open",     "code_c":None},
         {"code":"016055","name":"博时纳斯达克100ETF联接(QDII)A",       "fee_rate":0.65,"scale":15.6,"ytd_return":17.32,"track_error":1.52,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"016057"},
         {"code":"018043","name":"天弘纳斯达克100指数(QDII)A",          "fee_rate":0.60,"scale":26.2,"ytd_return":17.49,"track_error":1.55,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"018044"},
         {"code":"019736","name":"宝盈纳斯达克100指数(QDII)A",          "fee_rate":0.65,"scale":6.8, "ytd_return":17.19,"track_error":1.55,"daily_limit":"2000元","buy_status":"open",  "code_c":"019737"},
@@ -228,19 +228,19 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
         {"code":"002891","name":"华夏移动互联灵活配置混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":120.50,"daily_limit":"5000元","buy_status":"open"},
         {"code":"457001","name":"国富亚洲机会股票(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":143.79,"daily_limit":"200元","buy_status":"open"},
         # ── 新增主题型主动 QDII ──
-        {"code":"004877","name":"汇添富全球医疗混合(QDII)人民币","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"006308","name":"汇添富全球消费混合(QDII)人民币A","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"006309","name":"汇添富全球消费混合(QDII)人民币C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"018155","name":"创金合信全球医药生物股票发起式(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"018156","name":"创金合信全球医药生物股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"004877","name":"汇添富全球医疗混合(QDII)人民币","fee_rate":1.40,"scale":0.0,"ytd_return":27.85,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"006308","name":"汇添富全球消费混合(QDII)人民币A","fee_rate":1.40,"scale":0.0,"ytd_return":11.6,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"006309","name":"汇添富全球消费混合(QDII)人民币C","fee_rate":1.40,"scale":0.0,"ytd_return":10.5,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"018155","name":"创金合信全球医药生物股票发起式(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":89.49,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"018156","name":"创金合信全球医药生物股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":88.8,"daily_limit":"不限额","buy_status":"open"},
         # ── C 类份额补全 ──
-        {"code":"017437","name":"华宝纳斯达克精选股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"017731","name":"嘉实全球产业升级股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"022184","name":"富国全球科技互联网股票(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"016702","name":"银华海外数字经济量化选股混合(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"016823","name":"天弘全球新能源汽车股票(QDII-LOF)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"018036","name":"长城全球新能源车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"017145","name":"华宝海外新能源汽车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":0,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"017437","name":"华宝纳斯达克精选股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":16.7,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"017731","name":"嘉实全球产业升级股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":53.78,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"022184","name":"富国全球科技互联网股票(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":43.99,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"016702","name":"银华海外数字经济量化选股混合(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":23.74,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"016823","name":"天弘全球新能源汽车股票(QDII-LOF)C","fee_rate":1.40,"scale":0.0,"ytd_return":35.54,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"018036","name":"长城全球新能源车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":29.8,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"017145","name":"华宝海外新能源汽车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":26.14,"daily_limit":"不限额","buy_status":"open"},
     ],
 }
 
@@ -571,7 +571,9 @@ def fetch_fund_performance(code: str) -> list:
 
 
 # 只包含会变动的字段（fee_rate/track_error 不变；scale 季度更新；daily_limit/buy_status 每日可能变化）
-_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "ytd_return", "daily_limit", "scale"}
+# ⚠️  ytd_return（25年涨幅）已从此集合移除，永远使用 STATIC_FUNDS 中的写死值，禁止动态覆盖。
+# ⚠️  如需修改 ytd_return 数据，必须直接编辑 STATIC_FUNDS / FALLBACK，并征得用户同意后才能改动。
+_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "daily_limit", "scale"}
 
 
 def fetch_one_fund(code: str, category: str) -> Optional[dict]:
@@ -580,24 +582,11 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
     if not name:
         return None
 
-    perf = fetch_fund_performance(code)
-    ytd_return = 0.0
-    for p in (perf if isinstance(perf, list) else []):
-        if p.get("title") in ("近1年", "1N"):
-            try:
-                ytd_return = float(p.get("syl", 0))
-            except Exception:
-                pass
-            break
-
     result: dict = {
         "code":     code,
         "nav":      float(realtime.get("dwjz", 0)),
         "nav_date": realtime.get("jzrq", ""),
     }
-    # ytd_return = 0 说明接口未返回，不覆盖静态保底值
-    if ytd_return != 0:
-        result["ytd_return"] = ytd_return
 
     # 实时申购状态 & 每日限额（SGZT/MAXSG）
     try:
@@ -627,25 +616,18 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
                             result["daily_limit"] = "不限额" if int(float(maxsg)) >= 100_000_000 else f"{int(float(maxsg))}元"
                         except (ValueError, TypeError):
                             result["daily_limit"] = f"{maxsg}元"
-                # SYL_1N 作为 ytd_return 兜底（当 FundMNPeriodIncrease 未能匹配标题时）
-                if "ytd_return" not in result:
-                    syl1n = d.get("SYL_1N", "")
-                    if syl1n not in ("", "--", None):
-                        try:
-                            result["ytd_return"] = float(syl1n)
-                        except (ValueError, TypeError):
-                            pass
     except Exception:
         pass
 
-    # us_active: 补充实时规模（pingzhongdata，缓存 12h）
-    if category == "us_active":
-        try:
-            meta = fetch_fund_meta(code)
-            if meta.get("scale") is not None:
-                result["scale"] = meta["scale"]
-        except Exception:
-            pass
+    # 从 pingzhongdata 获取：2025全年收益率（与近1年滚动区分）+ us_active规模（缓存 12h）
+    try:
+        meta = fetch_fund_meta(code)
+        if meta.get("ytd_return") is not None:
+            result["ytd_return"] = meta["ytd_return"]
+        if category == "us_active" and meta.get("scale") is not None:
+            result["scale"] = meta["scale"]
+    except Exception:
+        pass
 
     return result
 
@@ -1743,7 +1725,7 @@ def cron_refresh():
     r = _get_redis()
     if r:
         try:
-            old_keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs"]
+            old_keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data"]
             r.delete(*old_keys)
             logger.info(f"[cron] cleared {len(old_keys)} stale cache keys")
         except Exception as e:
@@ -1852,8 +1834,9 @@ _MOBILE_HEADERS = {
 
 
 def _fetch_live_one(code: str) -> tuple:
-    """单次调用 FundMNBasicInformation 同时获取 RZDF（各基金实际日涨幅）和 SYL_1N（近1年）"""
-    day_change, rolling_1y, buy_status, daily_limit = None, None, None, None
+    """单次调用 FundMNBasicInformation 获取 RZDF（昨日涨幅）和 SYL_1N（近1年滚动）
+    注：buy_status/daily_limit 由 fetch_one_fund（每日 cron）管理，此处不重复拉取"""
+    day_change, rolling_1y = None, None
     for attempt in range(2):
         try:
             resp = requests.get(
@@ -1871,29 +1854,11 @@ def _fetch_live_one(code: str) -> tuple:
                     syl1n = data.get("SYL_1N", "")
                     if syl1n not in ("", "--", None):
                         rolling_1y = float(syl1n)
-                    # 申购状态 & 申购上限（每日可能变化）
-                    sgzt = data.get("SGZT", "")
-                    maxsg = data.get("MAXSG", "")
-                    has_limit = maxsg and maxsg not in ("", "--", "0", None)
-                    is_limit_mode = "限大额" in sgzt
-                    truly_suspended = "暂停" in sgzt and not is_limit_mode
-                    buy_status = "suspended" if truly_suspended else "open"
-                    if truly_suspended:
-                        daily_limit = "暂停申购"
-                    elif not has_limit:
-                        daily_limit = "不限额"
-                    else:
-                        try:
-                            v = int(float(maxsg))
-                            daily_limit = "不限额" if v >= 100_000_000 else f"{v}元"
-                        except (ValueError, TypeError):
-                            daily_limit = f"{maxsg}元"
             break
         except Exception:
             if attempt == 0:
                 time.sleep(0.5)
-    return code, {"day_change": day_change, "rolling_1y": rolling_1y,
-                  "buy_status": buy_status, "daily_limit": daily_limit}
+    return code, {"day_change": day_change, "rolling_1y": rolling_1y}
 
 
 # ─── ETF 溢价率历史 ──────────────────────────────────────────────────────────────
@@ -3223,7 +3188,7 @@ def fetch_fund_meta(code: str) -> dict:
     """
     从 eastmoney pingzhongdata 获取：
       - scale:      最新季度净资产(亿)，来自 Data_assetAllocation["净资产"][-1]
-      - ytd_return: 2025全年收益率(%)，由 Data_netWorthTrend 计算
+      - ytd_return: 2025全年收益率(%)，由 Data_ACWorthTrend 计算（累计净值，处理份额折算）
     缓存 12h。
     """
     cache_key = f"qdii_meta_{code}"
@@ -3252,21 +3217,28 @@ def fetch_fund_meta(code: str) -> dict:
             except Exception:
                 pass
 
-        # ── Data_netWorthTrend：最新净值 + 2025全年收益率 ─────────────────────
+        # ── Data_netWorthTrend：最新净值 ──────────────────────────────────────
         m = re.search(r'Data_netWorthTrend\s*=\s*(\[.*?\]);', text, re.DOTALL)
         if m:
             try:
                 trend = json.loads(m.group(1))
                 if trend:
-                    # 最新净值：序列最后一个有效点
                     last_nav = next((p["y"] for p in reversed(trend) if p.get("y")), None)
                     if last_nav and last_nav > 0:
                         result["nav_latest"] = round(float(last_nav), 4)
-                    # 2025全年收益率
+            except Exception:
+                pass
+
+        # ── Data_ACWorthTrend：2025全年收益率（累计净值，天然处理份额折算/分红）──
+        m_ac = re.search(r'Data_ACWorthTrend\s*=\s*(\[.*?\]);', text, re.DOTALL)
+        if m_ac:
+            try:
+                ac_trend = json.loads(m_ac.group(1))   # [[ts, val], ...]
+                if ac_trend:
                     START_2025 = 1735689600000   # 2025-01-01 UTC
                     END_2025   = 1767225600000   # 2025-12-31 UTC
-                    start_nav = next((p["y"] for p in trend if p["x"] >= START_2025), None)
-                    end_nav   = next((p["y"] for p in reversed(trend) if p["x"] <= END_2025), None)
+                    start_nav = next((p[1] for p in ac_trend if p[0] >= START_2025), None)
+                    end_nav   = next((p[1] for p in reversed(ac_trend) if p[0] <= END_2025), None)
                     if start_nav and end_nav and start_nav > 0:
                         result["ytd_return"] = round((end_nav - start_nav) / start_nav * 100, 2)
             except Exception:

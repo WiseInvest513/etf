@@ -12,6 +12,8 @@ async function apiFetch(path) {
 }
 
 // ─── Static Data ──────────────────────────────────────────────────────────────
+// ⚠️  FALLBACK 中的 ytd_return（25年涨幅）为写死的 2025 全年收益率，禁止动态覆盖。
+// ⚠️  如需修改 ytd_return，必须直接编辑此处，并征得用户同意后才能改动。
 const FALLBACK = {
   nasdaq_passive: [
     { code:"019524",name:"华泰柏瑞纳斯达克100ETF联接(QDII)A",  fee_rate:0.65,scale:6.8,  ytd_return:16.66,track_error:1.65,daily_limit:"100元",  buy_status:"open",     code_c:"019525"},
@@ -25,7 +27,7 @@ const FALLBACK = {
     { code:"019441",name:"万家纳斯达克100指数发起式(QDII)",     fee_rate:0.65,scale:5.0,  ytd_return:16.86,track_error:1.75,daily_limit:"10元",   buy_status:"open",     code_c:"019442"},
     { code:"161130",name:"易方达纳斯达克100ETF联接(QDII-LOF)A",fee_rate:0.60,scale:16.1, ytd_return:16.58,track_error:1.55,daily_limit:"10元",   buy_status:"open",     code_c:"012870"},
     { code:"040046",name:"华安纳斯达克100指数(QDII)",           fee_rate:0.80,scale:55.2, ytd_return:15.37,track_error:2.06,daily_limit:"10元",   buy_status:"open",     code_c:"014978"},
-    { code:"160213",name:"国泰纳斯达克100指数(QDII)",           fee_rate:1.00,scale:18.6, ytd_return:17.58,track_error:1.03,daily_limit:"暂停申购",buy_status:"suspended",code_c:null},
+    { code:"160213",name:"国泰纳斯达克100指数(QDII)",           fee_rate:1.00,scale:18.6, ytd_return:17.58,track_error:1.03,daily_limit:"不限额",  buy_status:"open",     code_c:null},
     { code:"016055",name:"博时纳斯达克100ETF联接(QDII)A",       fee_rate:0.65,scale:15.6, ytd_return:17.32,track_error:1.52,daily_limit:"暂停申购",buy_status:"suspended",code_c:"016057"},
     { code:"018043",name:"天弘纳斯达克100指数(QDII)A",          fee_rate:0.60,scale:26.2, ytd_return:17.49,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended",code_c:"018044"},
     { code:"019736",name:"宝盈纳斯达克100指数(QDII)A",          fee_rate:0.65,scale:6.8,  ytd_return:17.19,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended",code_c:"019737"},
@@ -59,10 +61,22 @@ const FALLBACK = {
     { code:"000043",name:"嘉实美国成长股票(QDII)",fee_rate:1.40,scale:50.1,ytd_return:20.01,daily_limit:"100元",buy_status:"open"},
     { code:"012920",name:"易方达全球成长精选混合(QDII)A",fee_rate:1.40,scale:28.3,ytd_return:107.95,daily_limit:"50元",buy_status:"open"},
     { code:"539002",name:"建信新兴市场优选混合(QDII)A",fee_rate:1.40,scale:4.6,ytd_return:92.11,daily_limit:"50元",buy_status:"open"},
-    { code:"001668",name:"汇添富全球移动互联混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
+    { code:"001668",name:"汇添富全球移动互联混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:43.29,daily_limit:"不限额",buy_status:"open"},
     { code:"016664",name:"天弘全球高端制造混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
-    { code:"002891",name:"华夏移动互联灵活配置混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
-    { code:"457001",name:"国富亚洲机会股票(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:0,daily_limit:"不限额",buy_status:"open"},
+    { code:"002891",name:"华夏移动互联灵活配置混合(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:120.50,daily_limit:"不限额",buy_status:"open"},
+    { code:"457001",name:"国富亚洲机会股票(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:143.79,daily_limit:"不限额",buy_status:"open"},
+    { code:"004877",name:"汇添富全球医疗混合(QDII)人民币",fee_rate:1.40,scale:0.0,ytd_return:27.85,daily_limit:"不限额",buy_status:"open"},
+    { code:"006308",name:"汇添富全球消费混合(QDII)人民币A",fee_rate:1.40,scale:0.0,ytd_return:11.6,daily_limit:"不限额",buy_status:"open"},
+    { code:"006309",name:"汇添富全球消费混合(QDII)人民币C",fee_rate:1.40,scale:0.0,ytd_return:10.5,daily_limit:"不限额",buy_status:"open"},
+    { code:"018155",name:"创金合信全球医药生物股票发起式(QDII)A",fee_rate:1.40,scale:0.0,ytd_return:89.49,daily_limit:"不限额",buy_status:"open"},
+    { code:"018156",name:"创金合信全球医药生物股票发起式(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:88.8,daily_limit:"不限额",buy_status:"open"},
+    { code:"017437",name:"华宝纳斯达克精选股票发起式(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:16.7,daily_limit:"不限额",buy_status:"open"},
+    { code:"017731",name:"嘉实全球产业升级股票发起式(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:53.78,daily_limit:"不限额",buy_status:"open"},
+    { code:"022184",name:"富国全球科技互联网股票(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:43.99,daily_limit:"不限额",buy_status:"open"},
+    { code:"016702",name:"银华海外数字经济量化选股混合(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:23.74,daily_limit:"不限额",buy_status:"open"},
+    { code:"016823",name:"天弘全球新能源汽车股票(QDII-LOF)C",fee_rate:1.40,scale:0.0,ytd_return:35.54,daily_limit:"不限额",buy_status:"open"},
+    { code:"018036",name:"长城全球新能源车股票发起式(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:29.8,daily_limit:"不限额",buy_status:"open"},
+    { code:"017145",name:"华宝海外新能源汽车股票发起式(QDII)C",fee_rate:1.40,scale:0.0,ytd_return:26.14,daily_limit:"不限额",buy_status:"open"},
   ],
   // 场内ETF — 名称经 fundgz 实测验证，premium 为实际市场水平
   etfs: [
@@ -85,9 +99,8 @@ const FALLBACK = {
   ],
 };
 
-// 过去12个月月度收益（来源：Yahoo Finance，2025-04 ~ 2026-03，美元口径，NDX/GSPC 月收盘价计算）
+// 过去12个月月度收益（来源：Yahoo Finance，2025-05 ~ 2026-04，美元口径，NDX/GSPC 月收盘价计算）
 const MONTHLY_12M = [
-  {month:"4月",  nasdaq: 1.52, sp500:-0.76},
   {month:"5月",  nasdaq: 9.04, sp500: 6.15},
   {month:"6月",  nasdaq: 6.27, sp500: 4.96},
   {month:"7月",  nasdaq: 2.38, sp500: 2.17},
@@ -99,6 +112,7 @@ const MONTHLY_12M = [
   {month:"1月",  nasdaq: 1.20, sp500: 1.37},
   {month:"2月",  nasdaq:-2.32, sp500:-0.87},
   {month:"3月",  nasdaq:-4.89, sp500:-5.09},
+  {month:"4月",  nasdaq:15.60, sp500:10.40},
 ];
 
 // ─── FX / Index Historical Data ───────────────────────────────────────────────
@@ -3138,15 +3152,18 @@ function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
           c.fillText(v!=null?`${v}%`:'—',tx,tyR);break;
         case 'scale':
           c.font=`bold ${fs(18)} ${F}`;c.fillStyle='#1e3a5f';c.fillText(v??'—',tx,tyR);break;
-        case 'rolling_1y':{
+        case 'rolling_1y':
+        case 'ytd_return':{
           const n=v!=null?parseFloat(v):null;
           c.font=`bold ${fs(19)} ${F}`;
           c.fillStyle=n!=null?(n>0?'#15803d':'#b91c1c'):'#9ca3af';
           c.fillText(n!=null?`${n>0?'+':''}${n.toFixed(1)}%`:'—',tx,tyR);break;}
         case 'day_change':
+        case 'change_pct':{
+          const cp=v!=null?parseFloat(v):null;
           c.font=`bold ${fs(18)} ${F}`;
-          c.fillStyle=v>0?'#15803d':v<0?'#b91c1c':'#475569';
-          c.fillText(v!=null?`${v>0?'+':''}${v}%`:'—',tx,tyR);break;
+          c.fillStyle=cp==null?'#9ca3af':cp>0?'#15803d':cp<0?'#b91c1c':'#475569';
+          c.fillText(cp!=null?`${cp>0?'+':''}${cp.toFixed(2)}%`:'—',tx,tyR);break;}
         case 'daily_limit':
           c.font=`${fs(17)} ${F}`;c.fillStyle='#334155';
           c.fillText(_fit(c,v??'—',col.w-14),tx,tyR);break;
@@ -3285,7 +3302,7 @@ function drawEtfExportCanvas(rows,logoImg=null){
       {key:'name',          label:'ETF名称',  w:280, align:'left'},
       {key:'tracking_index',label:'跟踪指数', w:180, align:'left'},
       {key:'scale',         label:'规模(亿)', w:90,  align:'right'},
-      {key:'rolling_1y',    label:'近1年涨幅',w:114, align:'right'},
+      {key:'ytd_return',    label:'25年涨幅',  w:114, align:'right'},
       {key:'day_change',    label:'昨日涨跌', w:100, align:'right'},
       {key:'fee_rate',      label:'费率',     w:72,  align:'right'},
       {key:'track_error',   label:'跟踪误差', w:90,  align:'right'},
@@ -3554,7 +3571,7 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
 
   c.fillStyle=L.blue;c.fillRect(PX,charty+18,3,16);
   c.font=`bold 14px ${F}`;c.fillStyle=L.dark;c.fillText('纳指 vs 标普 · 近12月收益率',PX+10,charty+30);
-  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('美元口径（2025.04 – 2026.03）',PX+10,charty+48);
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('美元口径（2025.05 – 2026.04）',PX+10,charty+48);
   c.textAlign='right';
   c.fillStyle=L.blue;c.fillRect(W-PX-126,charty+18,12,12);
   c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('纳斯达克100',W-PX,charty+29);
@@ -3783,7 +3800,8 @@ function ReportPage() {
   const mergeLive=(arr)=>arr.map(f=>{
     const live=liveData[f.code];
     if(!live) return f;
-    const patch=Object.fromEntries(Object.entries(live).filter(([,v])=>v!=null));
+    // ytd_return（25年涨幅）写死，禁止被 live_data 覆盖
+    const patch=Object.fromEntries(Object.entries(live).filter(([k,v])=>v!=null&&k!=="ytd_return"));
     return {...f,...patch};
   });
 
@@ -3806,7 +3824,7 @@ function ReportPage() {
         const nasdaqMerged=mergeLive(FALLBACK.nasdaq_passive);
         const sp500Merged=mergeLive(FALLBACK.sp500_passive);
         const activeMerged=mergeLive(FALLBACK.us_active);
-        const etfsSorted=[...etfs].sort((a,b)=>(b.scale||0)-(a.scale||0));
+        const etfsSorted=mergeLive([...etfs]).sort((a,b)=>(b.scale||0)-(a.scale||0));
         const imgs=[
           {title:'场外纳指被动基金',   url:drawNasdaqExportCanvas(byLimit(nasdaqMerged),logoImg).toDataURL('image/png'), filename:`wise-etf-nasdaq-${ds}.png`},
           {title:'场外标普500被动基金', url:drawSp500ExportCanvas(byLimit(sp500Merged),logoImg).toDataURL('image/png'),  filename:`wise-etf-sp500-${ds}.png`},
@@ -4181,7 +4199,10 @@ export default function App() {
   const mergeLive = useCallback((arr)=>arr.map(f=>{
     const live=liveData[f.code];
     if(!live) return f;
-    const patch=Object.fromEntries(Object.entries(live).filter(([,v])=>v!=null));
+    // buy_status/daily_limit 由每日 cron 刷新的 funds 端点管理，不被 live_data 覆盖
+    // ytd_return（25年涨幅）写死，禁止被 live_data 覆盖
+    const SKIP=new Set(["buy_status","daily_limit","ytd_return"]);
+    const patch=Object.fromEntries(Object.entries(live).filter(([k,v])=>v!=null&&!SKIP.has(k)));
     return {...f,...patch};
   }),[liveData]);
   const nasdaqM = useMemo(()=>mergeLive(nasdaq),[nasdaq,mergeLive]);
@@ -4242,7 +4263,7 @@ export default function App() {
      render:v=>v?<span style={{fontFamily:"monospace",fontSize:11,color:C.cyan,background:C.cyan+"18",padding:"2px 7px",borderRadius:4,fontWeight:700,letterSpacing:"0.5px"}}>{v}</span>:<span style={{color:C.textDim,fontSize:11}}>—</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），不含申购赎回费，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"近1年滚动涨幅（API实时数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（pingzhongdata实时计算）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据，每5分钟更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小越紧密",align:"right",render:v=>v!=null?<span style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
@@ -4255,7 +4276,7 @@ export default function App() {
     {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12}}>{v}</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），主动型普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
     {key:"scale",  label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"近1年滚动涨幅（API实时数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（pingzhongdata实时计算）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
@@ -4267,7 +4288,7 @@ export default function App() {
     {key:"name",  label:"ETF名称"},
     {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
     {key:"scale", label:"规模(亿)",tip:"基金总规模，越大流动性越好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"近1年滚动涨幅（API实时数据）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
+    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（pingzhongdata实时计算）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
@@ -4481,7 +4502,7 @@ export default function App() {
               <Reveal delay={0.05}>
                 <Card style={{padding:"24px 26px"}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
-                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>2025年4月 — 2026年3月（美元口径）</div>
+                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>2025年5月 — 2026年4月（美元口径）</div>
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={MONTHLY_12M} barGap={3} barCategoryGap="25%">
                       <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
