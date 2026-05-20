@@ -494,9 +494,20 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
 
 def _nasdaq_fetch(symbol: str) -> dict:
     """
-    Nasdaq.com API：返回 {pct, price}，均可缺失。
-      pct  — 当日涨跌幅%（盘前/盘中/盘后均为从上一收盘价计算的总变动，无需认证，实时）
-      price — lastSalePrice（盘前时通常为上一收盘价，盘中/盘后为最新成交价）
+    Nasdaq.com API：返回 {pct, price, prev_close}，均可缺失。
+
+    数据结构（2026-05-20 确认）：
+      primaryData   — 当前活跃时段数据
+                      盘前/盘后：当前盘前/盘后最新成交价 + 相对昨收的涨跌幅%（直接字段，非计算）
+                      盘中：实时成交价 + 当日涨跌幅%
+      secondaryData — 上一个常规收盘数据（固定不变）
+                      lastSalePrice = 昨日美股4PM ET收盘价
+                      percentageChange = 昨日常规收盘涨跌幅
+
+    字段说明：
+      pct        — primaryData.percentageChange：盘前/盘后/盘中涨跌幅（直接字段，Nasdaq给的）
+      price      — primaryData.lastSalePrice：当前时段最新价（盘前/盘后为动态盘前价）
+      prev_close — secondaryData.lastSalePrice：昨日4PM ET固定收盘价（不随盘前/盘后变化）
     """
     try:
         url  = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
@@ -507,18 +518,41 @@ def _nasdaq_fetch(symbol: str) -> dict:
         }, timeout=(4, 10))
         if not (resp and resp.ok):
             return {}
-        primary = (resp.json().get("data") or {}).get("primaryData") or {}
+        data      = resp.json().get("data") or {}
+        primary   = data.get("primaryData")   or {}
+        secondary = data.get("secondaryData") or {}
         result: dict = {}
-        # 涨跌幅
-        pct_str = primary.get("percentageChange", "").replace("%", "").replace("+", "").strip()
-        if pct_str and pct_str not in ("--", "N/A"):
-            try:   result["pct"] = round(float(pct_str), 2)
-            except (ValueError, TypeError): pass
-        # 价格
-        price_str = primary.get("lastSalePrice", "").replace("$", "").replace(",", "").strip()
-        if price_str and price_str not in ("--", "N/A"):
-            try:   result["price"] = round(float(price_str), 2)
-            except (ValueError, TypeError): pass
+
+        def _parse_pct(s: str) -> Optional[float]:
+            s = s.replace("%", "").replace("+", "").strip()
+            if s and s not in ("--", "N/A"):
+                try: return round(float(s), 2)
+                except (ValueError, TypeError): pass
+            return None
+
+        def _parse_price(s: str) -> Optional[float]:
+            s = s.replace("$", "").replace(",", "").strip()
+            if s and s not in ("--", "N/A"):
+                try: return round(float(s), 2)
+                except (ValueError, TypeError): pass
+            return None
+
+        # 盘前/盘后涨跌幅：primaryData 直接给的字段，相对昨收的变动
+        pct = _parse_pct(primary.get("percentageChange", ""))
+        if pct is not None:
+            result["pct"] = pct
+
+        # 当前时段最新价（盘前/盘后为动态价，仅供参考，不作为"收盘价"展示）
+        price = _parse_price(primary.get("lastSalePrice", ""))
+        if price is not None:
+            result["price"] = price
+
+        # 昨日4PM ET固定收盘价：secondaryData.lastSalePrice
+        # 盘前/盘后/A股时段"收盘价"列展示此值，固定不随盘前盘后变动
+        prev_close = _parse_price(secondary.get("lastSalePrice", ""))
+        if prev_close is not None:
+            result["prev_close"] = prev_close
+
         return result
     except Exception as e:
         logger.debug(f"[nasdaq_api] {symbol}: {e}")
@@ -3513,11 +3547,14 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
 
                 def _nasdaq_pf(sym: str) -> dict:
                     r = _nasdaq_fetch(sym)
-                    pct   = r.get("pct")
-                    price = r.get("price")
+                    pct        = r.get("pct")
+                    prev_close = r.get("prev_close")  # 昨日4PM ET固定收盘价
+                    # 收盘价统一用 secondaryData.lastSalePrice（昨日固定收盘价）
+                    # 盘前/盘后涨跌幅用 primaryData.percentageChange（直接字段，非计算）
+                    # price 和 close_price 均展示固定收盘价，盘中才变为实时价（由 stooq 处理）
                     if pct is not None:
                         return {"pre_pct": pct, "regular_pct": pct, "post_pct": pct,
-                                "price": price, "close_price": price}
+                                "price": prev_close, "close_price": prev_close}
                     return dict(_EMPTY_PF)
 
                 nq_ex = ThreadPoolExecutor(max_workers=min(32, len(fresh_us)))
