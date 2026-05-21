@@ -592,6 +592,187 @@ function SectionTitle({ icon, children, cc }) {
   );
 }
 
+// ─── Canvas 辅助函数 ──────────────────────────────────────────────────────────
+const _QDII_F = '"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif';
+function _qdiiRR(c,x,y,w,h,r=8){
+  c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.arcTo(x+w,y,x+w,y+r,r);
+  c.lineTo(x+w,y+h-r);c.arcTo(x+w,y+h,x+w-r,y+h,r);c.lineTo(x+r,y+h);
+  c.arcTo(x,y+h,x,y+h-r,r);c.lineTo(x,y+r);c.arcTo(x,y,x+r,y,r);c.closePath();
+}
+function _qdiiFit(c,v,maxW){
+  if(v==null)return'—';const s=String(v);
+  if(c.measureText(s).width<=maxW)return s;
+  let t=s;while(t.length>1&&c.measureText(t+'…').width>maxW)t=t.slice(0,-1);
+  return t+'…';
+}
+
+function drawQDIIExportCanvas(rows, session, logoImg=null){
+  const W=1200, SC=2, PX=32;
+  const F=_QDII_F;
+  const BRAND_H=82, TITLE_H=132, CH=66, FH=148;
+  const RH=70;
+  const H=BRAND_H+TITLE_H+CH+rows.length*RH+FH;
+
+  const cvs=document.createElement('canvas');
+  cvs.width=W*SC; cvs.height=H*SC;
+  const c=cvs.getContext('2d'); c.scale(SC,SC);
+
+  c.fillStyle='#f0f4ff'; c.fillRect(0,0,W,H);
+
+  // Top accent bar
+  const ag=c.createLinearGradient(0,0,W,0);
+  ag.addColorStop(0,'#1a56db'); ag.addColorStop(0.5,'#7c3aed'); ag.addColorStop(1,'#4f46e5');
+  c.fillStyle=ag; c.fillRect(0,0,W,14);
+
+  // Brand header
+  c.fillStyle='#e8eeff'; c.fillRect(0,14,W,BRAND_H-14);
+  const brandY=Math.round((14+BRAND_H)/2+28*0.38);
+  c.font=`bold 30px ${F}`; c.fillStyle='#1a56db'; c.fillText('Wise',PX,brandY);
+  const wW=c.measureText('Wise').width;
+  c.font=`bold 30px ${F}`; c.fillStyle='#7c3aed'; c.fillText('ETF',PX+wW,brandY);
+  const eW=c.measureText('ETF').width;
+  c.font=`18px ${F}`; c.fillStyle='#475569'; c.fillText('  @WiseInvest 整理',PX+wW+eW,brandY);
+  c.textAlign='right';
+  c.font=`bold 18px ${F}`; c.fillStyle='#1a56db'; c.fillText('wise-etf.com',W-PX,brandY);
+  c.textAlign='left';
+
+  // Title section
+  c.fillStyle='#ffffff'; c.fillRect(0,BRAND_H,W,TITLE_H);
+  const lsg=c.createLinearGradient(0,BRAND_H,0,BRAND_H+TITLE_H);
+  lsg.addColorStop(0,'#1a56db'); lsg.addColorStop(1,'#7c3aed');
+  c.fillStyle=lsg; c.fillRect(0,BRAND_H,7,TITLE_H);
+  const TY=BRAND_H+70;
+  c.font=`bold 50px ${F}`; c.fillStyle='#111827'; c.fillText('主动型 ',PX+18,TY);
+  const t1w=c.measureText('主动型 ').width;
+  c.font=`bold 50px ${F}`; c.fillStyle='#1a56db'; c.fillText('QDII',PX+18+t1w,TY);
+  const t2w=c.measureText('QDII').width;
+  c.font=`bold 50px ${F}`; c.fillStyle='#7c3aed'; c.fillText(' 基金',PX+18+t1w+t2w,TY);
+  const t3w=c.measureText(' 基金').width;
+  // session label
+  const si=SESSION_INFO[session]||SESSION_INFO.weekend;
+  c.font=`bold 32px ${F}`; c.fillStyle='#7c3aed';
+  c.fillText(`  ·  ${si.valLabel}`,PX+18+t1w+t2w+t3w,TY);
+  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+  const dd=today.replace(/\//g,'.');
+  c.font=`17px ${F}`; c.fillStyle='#64748b';
+  c.fillText('数据仅供参考，不构成投资建议',PX+18,BRAND_H+106);
+  c.textAlign='right';
+  c.font=`bold 17px ${F}`; c.fillStyle='#7c3aed';
+  c.fillText('wise-etf.com 查看实时数据 →',W-PX,BRAND_H+106);
+  c.textAlign='left';
+
+  // Table cols
+  const cols=[
+    {key:'code',      label:'代码',     w:80,  align:'left'},
+    {key:'name',      label:'基金名称', w:330, align:'left'},
+    {key:'scale',     label:'规模(亿)', w:90,  align:'right'},
+    {key:'ytd_return',label:'25年涨幅', w:110, align:'right'},
+    {key:'daily_limit',label:'每日限额',w:120, align:'center'},
+    {key:'valuation', label: si.valLabel, w:160, align:'center'},
+  ];
+  const totalColW=cols.reduce((s,col)=>s+col.w,0);
+  const colSc=(W-PX*2)/totalColW;
+  const sCols=cols.map(col=>({...col,w:col.w*colSc}));
+  const xp=[]; let cx2=PX; sCols.forEach(col=>{xp.push(cx2);cx2+=col.w;});
+
+  const tableY=BRAND_H+TITLE_H;
+
+  // Table header
+  const hg=c.createLinearGradient(0,tableY,W,tableY);
+  hg.addColorStop(0,'#102099'); hg.addColorStop(1,'#1a56db');
+  c.fillStyle=hg; c.fillRect(0,tableY,W,CH);
+  c.font=`bold 17px ${F}`;
+  sCols.forEach((col,i)=>{
+    c.fillStyle='#e8f0ff'; c.textAlign=col.align;
+    const tx=col.align==='right'?xp[i]+col.w-12:col.align==='center'?xp[i]+col.w/2:xp[i]+12;
+    c.fillText(col.label,tx,tableY+CH/2+6);
+  }); c.textAlign='left';
+
+  // Table rows
+  rows.forEach((row,ri)=>{
+    const ry=tableY+CH+ri*RH;
+    c.fillStyle=ri%2===0?'#ffffff':'#dde8ff'; c.fillRect(0,ry,W,RH);
+    c.fillStyle=ri%2===0?'#c5d8ff':'#a8c4f8'; c.fillRect(0,ry,5,RH);
+    c.strokeStyle='#b8c8f0'; c.lineWidth=0.7;
+    c.beginPath(); c.moveTo(0,ry+RH); c.lineTo(W,ry+RH); c.stroke();
+    const tyR=ry+RH/2+7;
+    sCols.forEach((col,ci)=>{
+      const v=row[col.key];
+      c.textAlign=col.align;
+      const tx=col.align==='right'?xp[ci]+col.w-12:col.align==='center'?xp[ci]+col.w/2:xp[ci]+12;
+      switch(col.key){
+        case 'code':
+          c.font=`bold 19px ${F}`; c.fillStyle='#1a56db'; c.fillText(v??'—',tx,tyR); break;
+        case 'name':
+          c.font=`18px ${F}`; c.fillStyle='#111827'; c.fillText(_qdiiFit(c,v??'—',col.w-16),tx,tyR); break;
+        case 'scale':
+          c.font=`bold 18px ${F}`; c.fillStyle='#1e3a5f';
+          c.fillText(v!=null&&v>0?`${parseFloat(v).toFixed(1)}`:'—',tx,tyR); break;
+        case 'ytd_return':{
+          const n=v!=null?parseFloat(v):null;
+          c.font=`bold 19px ${F}`;
+          c.fillStyle=n!=null?(n>0?'#b91c1c':'#15803d'):'#9ca3af';
+          c.fillText(n!=null?`${n>0?'+':''}${n.toFixed(1)}%`:'—',tx,tyR); break;}
+        case 'daily_limit':
+          c.font=`17px ${F}`; c.fillStyle='#334155';
+          c.fillText(_qdiiFit(c,v??'—',col.w-14),tx,tyR); break;
+        case 'valuation':{
+          const val=v!=null?parseFloat(v):null;
+          if(val==null){
+            c.font=`17px ${F}`; c.fillStyle='#a5b4fc'; c.fillText('计算中…',tx,tyR);
+          } else {
+            const pW=Math.round(110), pH=Math.round(36);
+            const px2=xp[ci]+(col.w-pW)/2, py2=ry+(RH-pH)/2;
+            _qdiiRR(c,px2,py2,pW,pH,pH/2);
+            c.fillStyle=val>0?'#fee2e2':val<0?'#dcfce7':'#f1f5f9'; c.fill();
+            c.strokeStyle=val>0?'#dc2626':val<0?'#16a34a':'#d1d5db'; c.lineWidth=1.5;
+            _qdiiRR(c,px2,py2,pW,pH,pH/2); c.stroke();
+            c.font=`bold 19px ${F}`;
+            c.fillStyle=val>0?'#b91c1c':val<0?'#15803d':'#475569';
+            c.textAlign='center'; c.fillText(`${val>0?'+':''}${val.toFixed(2)}%`,px2+pW/2,py2+24);
+          }
+          break;}
+        default:
+          c.font=`16px ${F}`; c.fillStyle='#374151';
+          c.fillText(v!=null?String(v):'—',tx,tyR);
+      }
+      c.textAlign='left';
+    });
+  });
+
+  // Footer
+  const fy=tableY+CH+rows.length*RH;
+  const fg=c.createLinearGradient(0,0,W,0);
+  fg.addColorStop(0,'#1a56db'); fg.addColorStop(1,'#7c3aed');
+  c.fillStyle=fg; c.fillRect(0,fy,W,FH);
+
+  const midY=fy+FH/2;
+  if(logoImg){
+    const logoH=Math.round(FH*0.32);
+    const logoW=Math.round(logoImg.naturalWidth/logoImg.naturalHeight*logoH);
+    c.textAlign='center';
+    c.font=`bold 28px ${F}`; c.fillStyle='#ffffff';
+    const blockTop=midY-28-3-logoH/2;
+    c.fillText('@WiseInvest',W/2,blockTop+28);
+    c.drawImage(logoImg,(W-logoW)/2,blockTop+28+6,logoW,logoH);
+    c.font=`bold 17px ${F}`; c.fillStyle='rgba(255,255,255,0.85)';
+    c.fillText('以上平台同名',W/2,blockTop+28+6+logoH+17+2);
+    c.font=`13px ${F}`; c.fillStyle='rgba(255,255,255,0.55)';
+    c.fillText('数据仅供参考，不构成投资建议',W/2,blockTop+28+6+logoH+17+2+6+13);
+    c.font=`bold 22px ${F}`; c.fillStyle='#ffffff';
+    c.textAlign='left'; c.fillText('wise-etf.com',PX,midY+22*0.35);
+    c.textAlign='right'; c.fillText(dd,W-PX,midY+22*0.35);
+  } else {
+    c.textAlign='center';
+    c.font=`bold 20px ${F}`; c.fillStyle='#ffffff';
+    c.fillText(`wise-etf.com  ·  @WiseInvest 整理  ·  ${dd}`,W/2,midY);
+    c.font=`14px ${F}`; c.fillStyle='rgba(255,255,255,0.6)';
+    c.fillText('数据仅供参考，不构成投资建议',W/2,midY+24);
+  }
+  c.textAlign='left';
+  return cvs;
+}
+
 // ─── 主页面 ───────────────────────────────────────────────────────────────────
 export default function QDIIPage() {
   const isMobile = useIsMobile();
@@ -634,6 +815,8 @@ export default function QDIIPage() {
   });
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "open" | "suspended"
   const [showDonate, setShowDonate] = useState(false);
+  const [exportImg, setExportImg] = useState(null);   // { url, filename } | null
+  const [exporting, setExporting] = useState(false);
 
   function toggleWatch(code, e) {
     e.stopPropagation();
@@ -657,6 +840,24 @@ export default function QDIIPage() {
   function toggleSort(key) {
     if (sortKey === key) setSortDir(d => d === "desc" ? "asc" : "desc");
     else { setSortKey(key); setSortDir("desc"); }
+  }
+
+  function handleExport() {
+    setExporting(true);
+    const rows = filtered;
+    const today = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'-');
+    const logoImg = new Image();
+    const proceed = (logo) => {
+      try {
+        const cvs = drawQDIIExportCanvas(rows, session, logo);
+        setExportImg({ url: cvs.toDataURL('image/png'), filename: `wise-etf-qdii-${today}.png` });
+      } finally {
+        setExporting(false);
+      }
+    };
+    logoImg.onload = () => proceed(logoImg);
+    logoImg.onerror = () => proceed(null);
+    logoImg.src = encodeURI('/@Wise 投资有术 (2).png');
   }
 
   // 拉估值数据（可被自动刷新复用）
@@ -963,6 +1164,24 @@ export default function QDIIPage() {
             )}
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:"auto" }}>
+            {/* 导出按钮 */}
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              title="导出估值图片"
+              style={{
+                height:34, borderRadius:10,
+                border:"1.5px solid #1a56db",
+                background: exporting ? "#e8eeff" : "linear-gradient(135deg,#e8eeff,#ede9fe)",
+                color:"#1a56db", fontSize:12, fontWeight:700,
+                cursor: exporting ? "not-allowed" : "pointer",
+                display:"flex", alignItems:"center",
+                gap:4, padding:"0 12px", whiteSpace:"nowrap", flexShrink:0,
+                opacity: exporting ? 0.7 : 1,
+              }}
+            >
+              {exporting ? "生成中…" : "↓ 导出"}
+            </button>
             {/* 搜索框 */}
             <div style={{ position:"relative" }}>
               <input
@@ -1224,6 +1443,82 @@ export default function QDIIPage() {
 
       {/* 详情面板 */}
       {selected && <DetailPanel fund={selected} onClose={() => setSelected(null)} cc={CC} session={session} />}
+
+      {/* 导出弹窗 */}
+      {exportImg && createPortal(
+        <div
+          onClick={() => setExportImg(null)}
+          style={{
+            position:"fixed", inset:0, zIndex:9999,
+            background:"rgba(0,0,0,0.65)", backdropFilter:"blur(6px)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            padding:"20px",
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background:"#fff", borderRadius:20, padding:"20px",
+              maxWidth:680, width:"100%",
+              boxShadow:"0 24px 60px rgba(0,0,0,0.3)",
+              position:"relative", display:"flex", flexDirection:"column", gap:14,
+              maxHeight:"90vh", overflow:"auto",
+            }}
+          >
+            <button
+              onClick={() => setExportImg(null)}
+              style={{
+                position:"absolute", top:12, right:12,
+                width:28, height:28, borderRadius:"50%", border:"none",
+                background:"#f3f4f6", color:"#6b7280",
+                fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+              }}
+            >×</button>
+            <div style={{ fontSize:15, fontWeight:800, color:"#1d1d1f", paddingRight:36 }}>估值导出图片</div>
+            <img
+              src={exportImg.url}
+              alt="估值导出图"
+              style={{ width:"100%", borderRadius:12, display:"block", border:"1px solid #e5e7eb" }}
+            />
+            <div style={{ display:"flex", gap:10 }}>
+              <a
+                href={exportImg.url}
+                download={exportImg.filename}
+                style={{
+                  flex:1, height:40, borderRadius:10,
+                  background:"linear-gradient(135deg,#1a56db,#7c3aed)",
+                  color:"#fff", fontSize:13, fontWeight:700,
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  textDecoration:"none", gap:6,
+                }}
+              >
+                ↓ 下载图片
+              </a>
+              <button
+                onClick={() => {
+                  fetch(exportImg.url)
+                    .then(r => r.blob())
+                    .then(blob => {
+                      const item = new ClipboardItem({ "image/png": blob });
+                      navigator.clipboard.write([item]).catch(() => {});
+                    })
+                    .catch(() => {});
+                }}
+                style={{
+                  flex:1, height:40, borderRadius:10,
+                  border:"1.5px solid #1a56db",
+                  background:"#fff", color:"#1a56db",
+                  fontSize:13, fontWeight:700, cursor:"pointer", gap:6,
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                }}
+              >
+                复制图片
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* 赞赏弹窗 */}
       {showDonate && createPortal(

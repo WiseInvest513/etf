@@ -647,7 +647,7 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
                     else:
                         try:
                             # 用 float() 先转换，避免 "1e11" 或 "100000.00" 等格式导致 int() 抛 ValueError
-                            result["daily_limit"] = "不限额" if int(float(maxsg)) >= 100_000_000 else f"{int(float(maxsg))}元"
+                            result["daily_limit"] = "不限额" if int(float(maxsg)) >= 500_000 else f"{int(float(maxsg))}元"
                         except (ValueError, TypeError):
                             result["daily_limit"] = f"{maxsg}元"
     except Exception:
@@ -1841,7 +1841,7 @@ def cron_clear():
     r = _get_redis()
     if not r:
         return {"ok": False, "msg": "Redis unavailable"}
-    keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs"]
+    keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data"]
     try:
         r.delete(*keys)
         return {"ok": True, "cleared": keys}
@@ -1868,9 +1868,8 @@ _MOBILE_HEADERS = {
 
 
 def _fetch_live_one(code: str) -> tuple:
-    """单次调用 FundMNBasicInformation 获取 RZDF（昨日涨幅）和 SYL_1N（近1年滚动）
-    注：buy_status/daily_limit 由 fetch_one_fund（每日 cron）管理，此处不重复拉取"""
-    day_change, rolling_1y = None, None
+    """单次调用 FundMNBasicInformation 获取 RZDF/SYL_1N/SGZT/MAXSG"""
+    day_change, rolling_1y, buy_status, daily_limit = None, None, None, None
     for attempt in range(2):
         try:
             resp = requests.get(
@@ -1888,11 +1887,28 @@ def _fetch_live_one(code: str) -> tuple:
                     syl1n = data.get("SYL_1N", "")
                     if syl1n not in ("", "--", None):
                         rolling_1y = float(syl1n)
+                    sgzt  = data.get("SGZT", "")
+                    maxsg = data.get("MAXSG", "")
+                    if sgzt:
+                        is_limit_mode  = "限大额" in sgzt
+                        truly_suspended = "暂停" in sgzt and not is_limit_mode
+                        buy_status = "suspended" if truly_suspended else "open"
+                        if truly_suspended:
+                            daily_limit = "暂停申购"
+                        elif not maxsg or maxsg in ("", "--", "0"):
+                            daily_limit = "不限额"
+                        else:
+                            try:
+                                val = int(float(maxsg))
+                                daily_limit = "不限额" if val >= 500_000 else f"{val}元"
+                            except (ValueError, TypeError):
+                                daily_limit = f"{maxsg}元"
             break
         except Exception:
             if attempt == 0:
                 time.sleep(0.5)
-    return code, {"day_change": day_change, "rolling_1y": rolling_1y}
+    return code, {"day_change": day_change, "rolling_1y": rolling_1y,
+                  "buy_status": buy_status, "daily_limit": daily_limit}
 
 
 # ─── ETF 溢价率历史 ──────────────────────────────────────────────────────────────

@@ -20,14 +20,14 @@ const FALLBACK = {
     { code:"019547",name:"招商纳斯达克100ETF联接(QDII)A",      fee_rate:0.65,scale:15.8, ytd_return:16.22,track_error:1.72,daily_limit:"100元",  buy_status:"open",     code_c:"019548"},
     { code:"539001",name:"建信纳斯达克100指数QDIIA",            fee_rate:1.00,scale:13.2, ytd_return:16.21,track_error:2.17,daily_limit:"100元",  buy_status:"open",     code_c:"012752"},
     { code:"018966",name:"汇添富纳斯达克100ETF联接(QDII)A",    fee_rate:0.65,scale:11.3, ytd_return:15.49,track_error:2.08,daily_limit:"100元",  buy_status:"open",     code_c:"018967"},
-    { code:"016452",name:"南方纳斯达克100指数(QDII)A",          fee_rate:0.65,scale:33.3, ytd_return:17.26,track_error:1.64,daily_limit:"50元",   buy_status:"open",     code_c:"016453"},
+    { code:"016452",name:"南方纳斯达克100指数(QDII)A",          fee_rate:0.65,scale:33.3, ytd_return:17.26,track_error:1.64,daily_limit:"200元",  buy_status:"open",     code_c:"016453"},
     { code:"000834",name:"大成纳斯达克100指数(QDII)A",          fee_rate:1.00,scale:38.8, ytd_return:16.76,track_error:1.51,daily_limit:"50元",   buy_status:"open",     code_c:"008971"},
     { code:"019172",name:"摩根纳斯达克100指数(QDII)A",          fee_rate:0.60,scale:26.1, ytd_return:17.66,track_error:2.15,daily_limit:"10元",   buy_status:"open",     code_c:"019173"},
     { code:"270042",name:"广发纳斯达克100ETF联接(QDII)",        fee_rate:1.00,scale:108.4,ytd_return:17.04,track_error:1.10,daily_limit:"10元",   buy_status:"open",     code_c:"006479"},
     { code:"019441",name:"万家纳斯达克100指数发起式(QDII)",     fee_rate:0.65,scale:5.0,  ytd_return:16.86,track_error:1.75,daily_limit:"10元",   buy_status:"open",     code_c:"019442"},
     { code:"161130",name:"易方达纳斯达克100ETF联接(QDII-LOF)A",fee_rate:0.60,scale:16.1, ytd_return:16.58,track_error:1.55,daily_limit:"10元",   buy_status:"open",     code_c:"012870"},
     { code:"040046",name:"华安纳斯达克100指数(QDII)",           fee_rate:0.80,scale:55.2, ytd_return:15.37,track_error:2.06,daily_limit:"10元",   buy_status:"open",     code_c:"014978"},
-    { code:"160213",name:"国泰纳斯达克100指数(QDII)",           fee_rate:1.00,scale:18.6, ytd_return:17.58,track_error:1.03,daily_limit:"不限额",  buy_status:"open",     code_c:null},
+    { code:"160213",name:"国泰纳斯达克100指数(QDII)",           fee_rate:1.00,scale:18.6, ytd_return:17.58,track_error:1.03,daily_limit:"300元",   buy_status:"open",     code_c:null},
     { code:"016055",name:"博时纳斯达克100ETF联接(QDII)A",       fee_rate:0.65,scale:15.6, ytd_return:17.32,track_error:1.52,daily_limit:"暂停申购",buy_status:"suspended",code_c:"016057"},
     { code:"018043",name:"天弘纳斯达克100指数(QDII)A",          fee_rate:0.60,scale:26.2, ytd_return:17.49,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended",code_c:"018044"},
     { code:"019736",name:"宝盈纳斯达克100指数(QDII)A",          fee_rate:0.65,scale:6.8,  ytd_return:17.19,track_error:1.55,daily_limit:"暂停申购",buy_status:"suspended",code_c:"019737"},
@@ -3779,69 +3779,86 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
 
 // ─── Report Page ──────────────────────────────────────────────────────────────
 function ReportPage() {
-  const [sentiment, setSentiment] = useState(null);
-  const [peHistory, setPeHistory] = useState({sp500:[],nasdaq100:[]});
-  const [etfs, setEtfs] = useState(FALLBACK.etfs);
-  const [liveData, setLiveData] = useState(()=>{
-    try{ const c=localStorage.getItem("wise_etf_live_v2"); return c?JSON.parse(c).data||{}:{}; }catch{return {};}
-  });
-  const [images, setImages] = useState([]); // [{title, url, filename}]
-  const [generating, setGenerating] = useState(false);
-  const [toast, setToast] = useState(null); // {msg, ok}
+  // ⚠️ 导出数据规范（禁止修改，如需变更请征得用户同意）：
+  // 1. 导出图片的数据必须与界面展示数据完全一致
+  // 2. 数据来源：/api/funds/* + /api/etfs + /api/live_data（Redis 缓存，由 cron 每日更新）
+  // 3. 严禁使用 FALLBACK 静态数据或 localStorage 作为基础数据源
+  // 4. 必须等所有 API 返回后再生成图片，不允许提前用空数据生成
+
+  const [images, setImages] = useState([]);
+  const [generating, setGenerating] = useState(true);
+  const [toast, setToast] = useState(null);
   const isMobile = typeof window!=="undefined" && window.innerWidth<=768;
-
-  useEffect(()=>{
-    apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
-    apiFetch("/pe-history").then(d=>{ if(d?.data) setPeHistory(d.data); });
-    apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
-  },[]);
-
-
-  const mergeLive=(arr)=>arr.map(f=>{
-    const live=liveData[f.code];
-    if(!live) return f;
-    // ytd_return（25年涨幅）写死，禁止被 live_data 覆盖
-    const patch=Object.fromEntries(Object.entries(live).filter(([k,v])=>v!=null&&k!=="ytd_return"));
-    return {...f,...patch};
-  });
 
   const showToast=(msg,ok=true)=>{
     setToast({msg,ok});
     setTimeout(()=>setToast(null),2000);
   };
 
+  // 申购上限排序：高→低，暂停垫底（-1 确保暂停永远在所有有效限额之下）
   const byLimit=(arr)=>{
-    const parse=s=>{if(!s||s==='暂停申购')return 0;if(s==='不限额')return 9999999;return parseFloat(s)||0;};
+    const parse=s=>{if(!s||s==='暂停申购')return -1;if(s==='不限额')return 9999999;return parseFloat(s)||0;};
     return [...arr].sort((a,b)=>parse(b.daily_limit)-parse(a.daily_limit));
   };
 
-  const handleGenerate=()=>{
-    setGenerating(true);
-    const proceed=(logoImg)=>{
+  useEffect(()=>{
+    // ⚠️ 此处数据获取逻辑禁止修改 ⚠️
+    // 并发拉取所有分类数据，等全部返回后再生成图片
+    // /api/funds/* 和 /api/etfs 读取 Redis 缓存（cron 每日写入），不重复调外部接口
+    // /api/live_data 提供 day_change / rolling_1y（昨日涨跌 + 近1年滚动）
+    Promise.all([
+      apiFetch("/funds/nasdaq_passive"),
+      apiFetch("/funds/sp500_passive"),
+      apiFetch("/funds/us_active"),
+      apiFetch("/etfs"),
+      apiFetch("/live_data"),
+    ]).then(([nasdaqRes, sp500Res, activeRes, etfsRes, liveRes])=>{
+      const nasdaq = nasdaqRes?.data || [];
+      const sp500  = sp500Res?.data  || [];
+      const active = activeRes?.data || [];
+      const etfs   = etfsRes?.data   || [];
+      const liveMap= liveRes?.data   || {};
+
+      // live_data 只补充 day_change / rolling_1y
+      // buy_status / daily_limit 已由 /api/funds/* 提供，不允许被 live_data 覆盖
+      // ytd_return（25年涨幅）永远不覆盖
+      // 此逻辑与主页面 mergeLive 保持完全一致，禁止修改
+      const LIVE_SKIP = new Set(["buy_status","daily_limit","ytd_return"]);
+      const merge = arr => arr.map(f=>{
+        const live = liveMap[f.code];
+        if(!live) return f;
+        const patch = Object.fromEntries(
+          Object.entries(live).filter(([k,v])=>v!=null && !LIVE_SKIP.has(k))
+        );
+        return {...f,...patch};
+      });
+
+      const nasdaqData = merge(nasdaq);
+      const sp500Data  = merge(sp500);
+      const activeData = merge(active);
+      // 场内ETF：按跟踪误差从低到高排序
+      const etfsData   = merge(etfs).sort((a,b)=>(a.track_error||99)-(b.track_error||99));
+
       const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
       const ds=today.replace(/\//g,'-');
-      try{
-        const nasdaqMerged=mergeLive(FALLBACK.nasdaq_passive);
-        const sp500Merged=mergeLive(FALLBACK.sp500_passive);
-        const activeMerged=mergeLive(FALLBACK.us_active);
-        const etfsSorted=mergeLive([...etfs]).sort((a,b)=>(b.scale||0)-(a.scale||0));
-        const imgs=[
-          {title:'场外纳指被动基金',   url:drawNasdaqExportCanvas(byLimit(nasdaqMerged),logoImg).toDataURL('image/png'), filename:`wise-etf-nasdaq-${ds}.png`},
-          {title:'场外标普500被动基金', url:drawSp500ExportCanvas(byLimit(sp500Merged),logoImg).toDataURL('image/png'),  filename:`wise-etf-sp500-${ds}.png`},
-          {title:'场内ETF对比',         url:drawEtfExportCanvas(etfsSorted,logoImg).toDataURL('image/png'),               filename:`wise-etf-etf-${ds}.png`},
-          {title:'美股主动型基金',      url:drawActiveExportCanvas(byLimit(activeMerged),logoImg).toDataURL('image/png'), filename:`wise-etf-active-${ds}.png`},
-        ];
-        setImages(imgs);
-      }finally{setGenerating(false);}
-    };
-    const img=new Image();
-    img.onload=()=>proceed(img);
-    img.onerror=()=>proceed(null);
-    img.src=encodeURI('/@Wise 投资有术 (2).png');
-  };
 
-  // liveData 已从 localStorage 同步读取，直接生成
-  useEffect(()=>{ handleGenerate(); },[]);
+      const logoImg=new Image();
+      const proceed=(logo)=>{
+        try{
+          const imgs=[
+            {title:'场外纳指被动基金',   url:drawNasdaqExportCanvas(byLimit(nasdaqData),logo).toDataURL('image/png'), filename:`wise-etf-nasdaq-${ds}.png`},
+            {title:'场外标普500被动基金', url:drawSp500ExportCanvas(byLimit(sp500Data),logo).toDataURL('image/png'),  filename:`wise-etf-sp500-${ds}.png`},
+            {title:'场内ETF对比',         url:drawEtfExportCanvas(etfsData,logo).toDataURL('image/png'),              filename:`wise-etf-etf-${ds}.png`},
+            {title:'美股主动型基金',      url:drawActiveExportCanvas(byLimit(activeData),logo).toDataURL('image/png'),filename:`wise-etf-active-${ds}.png`},
+          ];
+          setImages(imgs);
+        }finally{setGenerating(false);}
+      };
+      logoImg.onload=()=>proceed(logoImg);
+      logoImg.onerror=()=>proceed(null);
+      logoImg.src=encodeURI('/@Wise 投资有术 (2).png');
+    }).catch(()=>setGenerating(false));
+  },[]);
 
   /* ── 旧版生成逻辑（已暂停，后续优化时恢复） ──────────────────────────────
   const handleGenerateLegacy=()=>{
