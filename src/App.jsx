@@ -1193,13 +1193,6 @@ function EmptyResult({query}) {
   );
 }
 
-function TipBox({color,text}) {  const [h,hProps] = useHover();
-  return (
-    <div {...hProps} style={{marginTop:20,padding:"16px 20px",borderRadius:14,background:color+"0a",border:`1px solid ${color}1a`,borderLeft:`3px solid ${color}`,fontSize:13,color:C.textMuted,lineHeight:1.8,transition:"all 0.25s",boxShadow:h?`0 4px 20px ${color}12`:"none",transform:h?"translateX(3px)":"translateX(0)"}}>
-      <strong style={{color}}>提示：</strong>{text}
-    </div>
-  );
-}
 
 // ─── A/C 类说明框 ─────────────────────────────────────────────────────────────
 function AcInfoBox() {
@@ -4662,7 +4655,6 @@ export default function App() {
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
             </div>
             {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
-            <TipBox color={C.accent} text="综合费率最低的有天弘(018043, 0.70%)和嘉实(016532, 0.70%)，但目前均暂停申购。可申购中费率较低的是摩根(019172, 0.72%)和易方达(161130, 0.72%)。广发(270042)规模最大(108亿)，跟踪误差最小(1.10%)。"/>
             <AcInfoBox/>
           </Reveal>
         )}
@@ -4676,7 +4668,6 @@ export default function App() {
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
             </div>
             {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
-            <TipBox color={C.cyan} text="博时(050025)规模最大(67.56亿)、跟踪误差最小(1.31%)，但暂停申购。可申购推荐摩根(017641, 0.77%)和易方达(161125)。注意161128跟踪标普信息科技指数，波动更大。"/>
             <AcInfoBox/>
           </Reveal>
         )}
@@ -4690,7 +4681,6 @@ export default function App() {
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
             </div>
             {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
-            <TipBox color={C.purple} text="主动型管理费较高(~1.55%)，但优秀经理可带来超额收益。易方达全球成长(012920)近一年+100.44%，但限额仅50元/日。申购限额越低说明额度越紧张。"/>
           </Reveal>
         )}
 
@@ -4747,7 +4737,6 @@ export default function App() {
               </ResponsiveContainer>
               )}
             </Card>
-            <TipBox color={C.orange} text="溢价 < 1%：正常，可正常买入。溢价 1~2%：注意，考虑申购场外联接替代。溢价 2~3%：偏高，建议等待收窄。溢价 > 3%：极高，强烈建议避开或改买场外联接基金。"/>
           </Reveal>
         )}
 

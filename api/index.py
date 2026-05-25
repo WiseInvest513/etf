@@ -50,8 +50,8 @@ _redis: Optional[Redis] = None
 def _get_redis() -> Optional[Redis]:
     global _redis
     if _redis is None:
-        url   = os.environ.get("KV_REST_API_URL")
-        token = os.environ.get("KV_REST_API_TOKEN")
+        url   = os.environ.get("KV3_KV_REST_API_URL") or os.environ.get("KV_REST_API_URL")
+        token = os.environ.get("KV3_KV_REST_API_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
         if url and token:
             try:
                 _redis = Redis(url=url, token=token)
@@ -181,66 +181,66 @@ def kind_of(key: str) -> str:
 # 静态基金数据 — 2026-04-09 更新
 STATIC_FUNDS: Dict[str, List[dict]] = {
     "nasdaq_passive": [
-        {"code":"019524","name":"华泰柏瑞纳斯达克100ETF联接(QDII)A","fee_rate":0.65,"scale":6.8,"ytd_return":16.66,"track_error":1.65,"daily_limit":"100元","buy_status":"open",  "code_c":"019525"},
+        {"code":"019524","name":"华泰柏瑞纳斯达克100ETF联接(QDII)A","fee_rate":0.65,"scale":6.8,"ytd_return":16.66,"track_error":1.65,"daily_limit":"10元", "buy_status":"open",  "code_c":"019525"},
         {"code":"019547","name":"招商纳斯达克100ETF联接(QDII)A",      "fee_rate":0.65,"scale":15.8,"ytd_return":16.22,"track_error":1.72,"daily_limit":"100元","buy_status":"open",  "code_c":"019548"},
-        {"code":"539001","name":"建信纳斯达克100指数QDIIA",            "fee_rate":1.00,"scale":13.2,"ytd_return":16.21,"track_error":2.17,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"012752"},
-        {"code":"018966","name":"汇添富纳斯达克100ETF联接(QDII)A",    "fee_rate":0.65,"scale":11.3,"ytd_return":15.49,"track_error":2.08,"daily_limit":"50000元","buy_status":"open",  "code_c":"018967"},
-        {"code":"016452","name":"南方纳斯达克100指数(QDII)A",          "fee_rate":0.65,"scale":33.3,"ytd_return":17.26,"track_error":1.64,"daily_limit":"50元",  "buy_status":"open",  "code_c":"016453"},
-        {"code":"000834","name":"大成纳斯达克100指数(QDII)A",          "fee_rate":1.00,"scale":38.8,"ytd_return":16.76,"track_error":1.51,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"008971"},
-        {"code":"019172","name":"摩根纳斯达克100指数(QDII)A",          "fee_rate":0.60,"scale":26.1,"ytd_return":17.66,"track_error":2.15,"daily_limit":"10元",  "buy_status":"open",  "code_c":"019173"},
+        {"code":"539001","name":"建信纳斯达克100指数QDIIA",            "fee_rate":1.00,"scale":13.2,"ytd_return":16.21,"track_error":2.17,"daily_limit":"100元",  "buy_status":"open",  "code_c":"012752"},
+        {"code":"018966","name":"汇添富纳斯达克100ETF联接(QDII)A",    "fee_rate":0.65,"scale":11.3,"ytd_return":15.49,"track_error":2.08,"daily_limit":"100元", "buy_status":"open",  "code_c":"018967"},
+        {"code":"016452","name":"南方纳斯达克100指数(QDII)A",          "fee_rate":0.65,"scale":33.3,"ytd_return":17.26,"track_error":1.64,"daily_limit":"200元", "buy_status":"open",  "code_c":"016453"},
+        {"code":"000834","name":"大成纳斯达克100指数(QDII)A",          "fee_rate":1.00,"scale":38.8,"ytd_return":16.76,"track_error":1.51,"daily_limit":"100元",  "buy_status":"open",  "code_c":"008971"},
+        {"code":"019172","name":"摩根纳斯达克100指数(QDII)A",          "fee_rate":0.60,"scale":26.1,"ytd_return":17.66,"track_error":2.15,"daily_limit":"100元", "buy_status":"open",  "code_c":"019173"},
         {"code":"270042","name":"广发纳斯达克100ETF联接(QDII)",        "fee_rate":1.00,"scale":108.4,"ytd_return":17.04,"track_error":1.10,"daily_limit":"10元",  "buy_status":"open",  "code_c":"006479"},
-        {"code":"019441","name":"万家纳斯达克100指数发起式(QDII)",     "fee_rate":0.65,"scale":5.0, "ytd_return":16.86,"track_error":1.75,"daily_limit":"10元",  "buy_status":"open",  "code_c":"019442"},
-        {"code":"161130","name":"易方达纳斯达克100ETF联接(QDII-LOF)A","fee_rate":0.60,"scale":16.1,"ytd_return":16.58,"track_error":1.55,"daily_limit":"10元",  "buy_status":"open",  "code_c":"012870"},
+        {"code":"019441","name":"万家纳斯达克100指数发起式(QDII)",     "fee_rate":0.65,"scale":5.0, "ytd_return":16.86,"track_error":1.75,"daily_limit":"50元",  "buy_status":"open",  "code_c":"019442"},
+        {"code":"161130","name":"易方达纳斯达克100ETF联接(QDII-LOF)A","fee_rate":0.60,"scale":16.1,"ytd_return":16.58,"track_error":1.55,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"012870"},
         {"code":"040046","name":"华安纳斯达克100指数(QDII)",           "fee_rate":0.80,"scale":55.2,"ytd_return":15.37,"track_error":2.06,"daily_limit":"10元",  "buy_status":"open",  "code_c":"014978"},
-        {"code":"160213","name":"国泰纳斯达克100指数(QDII)",           "fee_rate":1.00,"scale":18.6,"ytd_return":17.58,"track_error":1.03,"daily_limit":"不限额",  "buy_status":"open",     "code_c":None},
+        {"code":"160213","name":"国泰纳斯达克100指数(QDII)",           "fee_rate":1.00,"scale":18.6,"ytd_return":17.58,"track_error":1.03,"daily_limit":"暂停申购","buy_status":"suspended","code_c":None},
         {"code":"016055","name":"博时纳斯达克100ETF联接(QDII)A",       "fee_rate":0.65,"scale":15.6,"ytd_return":17.32,"track_error":1.52,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"016057"},
         {"code":"018043","name":"天弘纳斯达克100指数(QDII)A",          "fee_rate":0.60,"scale":26.2,"ytd_return":17.49,"track_error":1.55,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"018044"},
-        {"code":"019736","name":"宝盈纳斯达克100指数(QDII)A",          "fee_rate":0.65,"scale":6.8, "ytd_return":17.19,"track_error":1.55,"daily_limit":"2000元","buy_status":"open",  "code_c":"019737"},
+        {"code":"019736","name":"宝盈纳斯达克100指数(QDII)A",          "fee_rate":0.65,"scale":6.8, "ytd_return":17.19,"track_error":1.55,"daily_limit":"100元",  "buy_status":"open",  "code_c":"019737"},
         {"code":"016532","name":"嘉实纳斯达克100联接(QDII)A",          "fee_rate":0.60,"scale":21.1,"ytd_return":16.4, "track_error":1.60,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"016533"},
         {"code":"015299","name":"华夏纳斯达克100ETF联接(QDII)A",       "fee_rate":0.80,"scale":3.8, "ytd_return":15.74,"track_error":2.69,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"015300"},
-        {"code":"017091","name":"景顺长城纳斯达克科技市值加权ETF联接A","fee_rate":1.00,"scale":25.8,"ytd_return":24.22,"track_error":3.11,"daily_limit":"100元","buy_status":"open",  "code_c":"017093"},
+        {"code":"017091","name":"景顺长城纳斯达克科技市值加权ETF联接A","fee_rate":1.00,"scale":25.8,"ytd_return":24.22,"track_error":3.11,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"017093"},
     ],
     "sp500_passive": [
         {"code":"017641","name":"摩根标普500指数(QDII)A",           "fee_rate":0.65,"scale":31.6,"ytd_return":11.75,"track_error":2.57, "daily_limit":"100元",  "buy_status":"open",     "code_c":"019305"},
         {"code":"161125","name":"易方达标普500指数(QDII-LOF)A",     "fee_rate":1.00,"scale":14.7,"ytd_return":11.74,"track_error":2.39, "daily_limit":"暂停申购","buy_status":"suspended","code_c":"012860"},
         {"code":"017028","name":"国泰标普500ETF联接(QDII)A",        "fee_rate":0.75,"scale":1.6, "ytd_return":11.71,"track_error":1.87, "daily_limit":"暂停申购","buy_status":"suspended","code_c":"017030"},
         {"code":"050025","name":"博时标普500ETF联接(QDII)A",        "fee_rate":0.80,"scale":67.6,"ytd_return":12.14,"track_error":1.31, "daily_limit":"暂停申购","buy_status":"suspended","code_c":"006075"},
-        {"code":"007721","name":"天弘标普500(QDII-FOF)A",           "fee_rate":0.80,"scale":26.5,"ytd_return":11.16,"track_error":None,"daily_limit":"1000元",  "buy_status":"open",     "code_c":"007722"},
+        {"code":"007721","name":"天弘标普500(QDII-FOF)A",           "fee_rate":0.80,"scale":26.5,"ytd_return":11.16,"track_error":None,"daily_limit":"暂停申购","buy_status":"suspended","code_c":"007722"},
         {"code":"018064","name":"华夏标普500ETF联接(QDII)A",        "fee_rate":0.75,"scale":4.1, "ytd_return":10.38,"track_error":1.10, "daily_limit":"暂停申购","buy_status":"suspended","code_c":"018065"},
-        {"code":"096001","name":"大成标普500等权重指数(QDII)A",     "fee_rate":1.20,"scale":6.1, "ytd_return":7.17, "track_error":1.69, "daily_limit":"暂停申购","buy_status":"suspended","code_c":"008401"},
+        {"code":"096001","name":"大成标普500等权重指数(QDII)A",     "fee_rate":1.20,"scale":6.1, "ytd_return":7.17, "track_error":1.69, "daily_limit":"50元",    "buy_status":"open",     "code_c":"008401"},
         {"code":"161128","name":"易方达标普信息科技指数(QDII-FOF)A","fee_rate":1.00,"scale":36.8,"ytd_return":22.13,"track_error":10.85,"daily_limit":"暂停申购","buy_status":"suspended","code_c":None},
     ],
     "us_active": [
-        {"code":"100055","name":"富国全球科技互联网股票(QDII)A","fee_rate":1.40,"scale":10.2,"ytd_return":37.81,"daily_limit":"暂停申购","buy_status":"suspended"},
-        {"code":"016701","name":"银华海外数字经济量化选股混合(QDII)A","fee_rate":1.40,"scale":11.2,"ytd_return":27.21,"daily_limit":"暂停申购","buy_status":"suspended"},
-        {"code":"005698","name":"华夏全球科技先锋混合(QDII)","fee_rate":1.40,"scale":26.3,"ytd_return":52.49,"daily_limit":"暂停申购","buy_status":"suspended"},
+        {"code":"100055","name":"富国全球科技互联网股票(QDII)A","fee_rate":1.40,"scale":10.2,"ytd_return":37.81,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"016701","name":"银华海外数字经济量化选股混合(QDII)A","fee_rate":1.40,"scale":11.2,"ytd_return":27.21,"daily_limit":"100000元","buy_status":"open"},
+        {"code":"005698","name":"华夏全球科技先锋混合(QDII)","fee_rate":1.40,"scale":26.3,"ytd_return":52.49,"daily_limit":"5000元","buy_status":"open"},
         {"code":"017144","name":"华宝海外新能源汽车股票(QDII)A","fee_rate":1.40,"scale":2.6,"ytd_return":24.08,"daily_limit":"10000元","buy_status":"open"},
-        {"code":"270023","name":"广发全球精选股票(QDII)A","fee_rate":1.40,"scale":104.5,"ytd_return":32.39,"daily_limit":"5000元","buy_status":"open"},
-        {"code":"008253","name":"华宝致远混合(QDII)A","fee_rate":1.40,"scale":1.7,"ytd_return":47.82,"daily_limit":"3000元","buy_status":"open"},
-        {"code":"017436","name":"华宝纳斯达克精选股票(QDII)A","fee_rate":1.40,"scale":46.2,"ytd_return":26.08,"daily_limit":"3000元","buy_status":"open"},
-        {"code":"501226","name":"长城全球新能源汽车股票(QDII-LOF)A","fee_rate":1.40,"scale":4.7,"ytd_return":48.21,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"006555","name":"浦银安盛全球智能科技股票(QDII)A","fee_rate":1.40,"scale":8.7,"ytd_return":43.81,"daily_limit":"3000元","buy_status":"open"},
+        {"code":"270023","name":"广发全球精选股票(QDII)A","fee_rate":1.40,"scale":104.5,"ytd_return":32.39,"daily_limit":"2000元","buy_status":"open"},
+        {"code":"008253","name":"华宝致远混合(QDII)A","fee_rate":1.40,"scale":1.7,"ytd_return":47.82,"daily_limit":"5000元","buy_status":"open"},
+        {"code":"017436","name":"华宝纳斯达克精选股票(QDII)A","fee_rate":1.40,"scale":46.2,"ytd_return":26.08,"daily_limit":"5000元","buy_status":"open"},
+        {"code":"501226","name":"长城全球新能源汽车股票(QDII-LOF)A","fee_rate":1.40,"scale":4.7,"ytd_return":48.21,"daily_limit":"100元","buy_status":"open"},
+        {"code":"006555","name":"浦银安盛全球智能科技股票(QDII)A","fee_rate":1.40,"scale":8.7,"ytd_return":43.81,"daily_limit":"暂停申购","buy_status":"suspended"},
         {"code":"017730","name":"嘉实全球产业升级股票(QDII)A","fee_rate":1.40,"scale":7.2,"ytd_return":75.36,"daily_limit":"100元","buy_status":"open"},
         {"code":"006373","name":"国富全球科技互联混合(QDII)人民币A","fee_rate":1.40,"scale":24.3,"ytd_return":53.48,"daily_limit":"100元","buy_status":"open"},
-        {"code":"012920","name":"易方达全球成长精选混合(QDII)A","fee_rate":1.40,"scale":28.3,"ytd_return":107.95,"daily_limit":"50元","buy_status":"open"},
-        {"code":"539002","name":"建信新兴市场优选混合(QDII)A","fee_rate":1.40,"scale":4.6,"ytd_return":92.11,"daily_limit":"暂停申购","buy_status":"suspended"},
+        {"code":"012920","name":"易方达全球成长精选混合(QDII)A","fee_rate":1.40,"scale":28.3,"ytd_return":107.95,"daily_limit":"20元","buy_status":"open"},
+        {"code":"539002","name":"建信新兴市场优选混合(QDII)A","fee_rate":1.40,"scale":4.6,"ytd_return":92.11,"daily_limit":"20元","buy_status":"open"},
         {"code":"001668","name":"汇添富全球移动互联混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":43.29,"daily_limit":"5000元","buy_status":"open"},
-        {"code":"002891","name":"华夏移动互联灵活配置混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":120.50,"daily_limit":"5000元","buy_status":"open"},
+        {"code":"002891","name":"华夏移动互联灵活配置混合(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":120.50,"daily_limit":"1000元","buy_status":"open"},
         {"code":"457001","name":"国富亚洲机会股票(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":143.79,"daily_limit":"200元","buy_status":"open"},
         # ── 新增主题型主动 QDII ──
-        {"code":"004877","name":"汇添富全球医疗混合(QDII)人民币","fee_rate":1.40,"scale":0.0,"ytd_return":27.85,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"006308","name":"汇添富全球消费混合(QDII)人民币A","fee_rate":1.40,"scale":0.0,"ytd_return":11.6,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"006309","name":"汇添富全球消费混合(QDII)人民币C","fee_rate":1.40,"scale":0.0,"ytd_return":10.5,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"004877","name":"汇添富全球医疗混合(QDII)人民币","fee_rate":1.40,"scale":0.0,"ytd_return":27.85,"daily_limit":"10000元","buy_status":"open"},
+        {"code":"006308","name":"汇添富全球消费混合(QDII)人民币A","fee_rate":1.40,"scale":0.0,"ytd_return":11.6,"daily_limit":"1000元","buy_status":"open"},
+        {"code":"006309","name":"汇添富全球消费混合(QDII)人民币C","fee_rate":1.40,"scale":0.0,"ytd_return":10.5,"daily_limit":"1000元","buy_status":"open"},
         {"code":"018155","name":"创金合信全球医药生物股票发起式(QDII)A","fee_rate":1.40,"scale":0.0,"ytd_return":89.49,"daily_limit":"不限额","buy_status":"open"},
         {"code":"018156","name":"创金合信全球医药生物股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":88.8,"daily_limit":"不限额","buy_status":"open"},
         # ── C 类份额补全 ──
-        {"code":"017437","name":"华宝纳斯达克精选股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":16.7,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"017731","name":"嘉实全球产业升级股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":53.78,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"017437","name":"华宝纳斯达克精选股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":16.7,"daily_limit":"5000元","buy_status":"open"},
+        {"code":"017731","name":"嘉实全球产业升级股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":53.78,"daily_limit":"100元","buy_status":"open"},
         {"code":"022184","name":"富国全球科技互联网股票(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":43.99,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"016702","name":"银华海外数字经济量化选股混合(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":23.74,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"016823","name":"天弘全球新能源汽车股票(QDII-LOF)C","fee_rate":1.40,"scale":0.0,"ytd_return":35.54,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"018036","name":"长城全球新能源车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":29.8,"daily_limit":"不限额","buy_status":"open"},
-        {"code":"017145","name":"华宝海外新能源汽车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":26.14,"daily_limit":"不限额","buy_status":"open"},
+        {"code":"016702","name":"银华海外数字经济量化选股混合(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":23.74,"daily_limit":"100000元","buy_status":"open"},
+        {"code":"016823","name":"天弘全球新能源汽车股票(QDII-LOF)C","fee_rate":1.40,"scale":0.0,"ytd_return":35.54,"daily_limit":"10000元","buy_status":"open"},
+        {"code":"018036","name":"长城全球新能源车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":29.8,"daily_limit":"100元","buy_status":"open"},
+        {"code":"017145","name":"华宝海外新能源汽车股票发起式(QDII)C","fee_rate":1.40,"scale":0.0,"ytd_return":26.14,"daily_limit":"10000元","buy_status":"open"},
     ],
 }
 
@@ -610,17 +610,19 @@ def fetch_fund_performance(code: str) -> list:
 _VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "daily_limit", "scale"}
 
 
-def fetch_one_fund(code: str, category: str) -> Optional[dict]:
+def fetch_one_fund(code: str, category: str, _meta_cached=None) -> Optional[dict]:
     realtime = fetch_fund_realtime(code)
     name     = realtime.get("name", "")
-    if not name:
-        return None
 
-    result: dict = {
-        "code":     code,
-        "nav":      float(realtime.get("dwjz", 0)),
-        "nav_date": realtime.get("jzrq", ""),
-    }
+    # FOF/部分QDII基金 fundgz 接口无数据，不 early-return，仍继续拉申购状态
+    if name:
+        result: dict = {
+            "code":     code,
+            "nav":      float(realtime.get("dwjz", 0)),
+            "nav_date": realtime.get("jzrq", ""),
+        }
+    else:
+        result: dict = {"code": code}
 
     # 实时申购状态 & 每日限额（SGZT/MAXSG）
     try:
@@ -635,27 +637,30 @@ def fetch_one_fund(code: str, category: str) -> Optional[dict]:
                 sgzt = d.get("SGZT", "")
                 maxsg = d.get("MAXSG", "")
                 if sgzt:
-                    # 只有 SGZT 明确含"限大额"时才视为限额开放；"暂停申购"即使有 MAXSG 也是暂停
-                    has_limit = maxsg and maxsg not in ("", "--", "0", None)
-                    is_limit_mode = "限大额" in sgzt
-                    truly_suspended = "暂停" in sgzt and not is_limit_mode
-                    result["buy_status"] = "suspended" if truly_suspended else "open"
-                    if truly_suspended:
+                    # 特殊基金：160213 的 SGZT 显示暂停但 MAXSG 有实际数据，以 MAXSG 为准
+                    _force_maxsg = code in ("160213",)
+                    has_limit = maxsg and str(maxsg) not in ("", "--", "0", "None")
+                    # SGZT 优先：含"暂停"直接短路，MAXSG 残留值不干扰判断（特殊基金除外）
+                    if "暂停" in sgzt and not (_force_maxsg and has_limit):
+                        result["buy_status"] = "suspended"
                         result["daily_limit"] = "暂停申购"
-                    elif not has_limit or "开放" in sgzt:
-                        result["daily_limit"] = "不限额"
                     else:
-                        try:
-                            # 用 float() 先转换，避免 "1e11" 或 "100000.00" 等格式导致 int() 抛 ValueError
-                            result["daily_limit"] = "不限额" if int(float(maxsg)) >= 500_000 else f"{int(float(maxsg))}元"
-                        except (ValueError, TypeError):
-                            result["daily_limit"] = f"{maxsg}元"
+                        if has_limit:
+                            try:
+                                val = int(float(maxsg))
+                                result["daily_limit"] = "不限额" if val >= 500_000 else f"{val}元"
+                            except (ValueError, TypeError):
+                                result["daily_limit"] = f"{maxsg}元"
+                            result["buy_status"] = "open"
+                        else:
+                            result["buy_status"] = "open"
+                            result["daily_limit"] = "不限额"
     except Exception:
         pass
 
     # 从 pingzhongdata 获取：2025全年收益率（与近1年滚动区分）+ us_active规模（缓存 12h）
     try:
-        meta = fetch_fund_meta(code)
+        meta = fetch_fund_meta(code, _meta_cached)
         if meta.get("ytd_return") is not None:
             result["ytd_return"] = meta["ytd_return"]
         if category == "us_active" and meta.get("scale") is not None:
@@ -1365,9 +1370,12 @@ def _build_funds(category: str) -> tuple:
     codes = [f["code"] for f in static]
     live_map: Dict[str, dict] = {}
 
+    # 批量预读 qdii_meta（1 次 RTT 替代 N 次串行读）
+    _meta_pre = _cache_mget([f"qdii_meta_{c}" for c in codes])
+
     ex = ThreadPoolExecutor(max_workers=10)
     try:
-        fs = {ex.submit(fetch_one_fund, code, category): code for code in codes}
+        fs = {ex.submit(fetch_one_fund, code, category, _meta_pre.get(code)): code for code in codes}
         done, not_done = wait(fs, timeout=18)   # 每只基金 3 个串行接口，最多等 18 秒
         for fut in not_done:
             fut.cancel()
@@ -1890,19 +1898,20 @@ def _fetch_live_one(code: str) -> tuple:
                     sgzt  = data.get("SGZT", "")
                     maxsg = data.get("MAXSG", "")
                     if sgzt:
-                        is_limit_mode  = "限大额" in sgzt
-                        truly_suspended = "暂停" in sgzt and not is_limit_mode
-                        buy_status = "suspended" if truly_suspended else "open"
-                        if truly_suspended:
-                            daily_limit = "暂停申购"
-                        elif not maxsg or maxsg in ("", "--", "0"):
-                            daily_limit = "不限额"
-                        else:
+                        has_limit = maxsg and str(maxsg) not in ("", "--", "0", "None")
+                        if has_limit:
                             try:
                                 val = int(float(maxsg))
                                 daily_limit = "不限额" if val >= 500_000 else f"{val}元"
                             except (ValueError, TypeError):
                                 daily_limit = f"{maxsg}元"
+                            buy_status = "open"
+                        elif "暂停" in sgzt:
+                            buy_status = "suspended"
+                            daily_limit = "暂停申购"
+                        else:
+                            buy_status = "open"
+                            daily_limit = "不限额"
             break
         except Exception:
             if attempt == 0:
@@ -2857,8 +2866,10 @@ def _fetch_holdings_from_annual_pdf(code: str) -> list:
         return []
 
 
-def fetch_qdii_holdings(code: str) -> list:
+def fetch_qdii_holdings(code: str, _cached=None) -> list:
     """返回持仓列表。元数据（报告期等）存在 qdii_hmeta_{code} 缓存中。"""
+    if _cached is not None:
+        return _cached
     master_code = _C_TO_A_HOLDINGS_MAP.get(code, code)
     if master_code != code:
         logger.info(f"[qdii_holdings] {code} → redirect to A class {master_code}")
@@ -3174,13 +3185,15 @@ def fetch_fund_nav(code: str) -> Optional[float]:
     return None
 
 
-def fetch_fund_gszzl(code: str) -> dict:
+def fetch_fund_gszzl(code: str, _cached=None) -> dict:
     """
     从天天基金 fundgz 接口一次性获取：dwjz(净值) + gszzl(估值涨幅) + gsz + gztime。
     合并原 fetch_fund_nav，避免对同一 URL 的重复请求。
     返回: {gszzl, gsz, gztime, is_fresh, nav}
     开盘时段 TTL=15min，其他时段 TTL=30min。
     """
+    if _cached is not None:
+        return _cached
     cache_key = f"qdii_gszzl_{code}"
     cached = _cache_get(cache_key)
     if cached:
@@ -3234,13 +3247,15 @@ def fetch_fund_gszzl(code: str) -> dict:
     return result
 
 
-def fetch_fund_meta(code: str) -> dict:
+def fetch_fund_meta(code: str, _cached=None) -> dict:
     """
     从 eastmoney pingzhongdata 获取：
       - scale:      最新季度净资产(亿)，来自 Data_assetAllocation["净资产"][-1]
       - ytd_return: 2025全年收益率(%)，由 Data_ACWorthTrend 计算（累计净值，处理份额折算）
     缓存 12h。
     """
+    if _cached is not None:
+        return _cached
     cache_key = f"qdii_meta_{code}"
     cached = _cache_get(cache_key)
     if cached:
@@ -3455,10 +3470,20 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     all_holdings: dict[str, list] = {}
     meta_cache:   dict[str, dict] = {}
 
+    # 批量预读三类 per-fund key（3 次 RTT 替代 84 次串行读）
+    _pre = _cache_mget(
+        [f"qdii_gszzl_{c}" for c in QDII_CODES] +
+        [f"qdii_h_{c}"     for c in QDII_CODES] +
+        [f"qdii_meta_{c}"  for c in QDII_CODES]
+    )
+    _pre_gszzl = {c: _pre.get(f"qdii_gszzl_{c}") for c in QDII_CODES}
+    _pre_h     = {c: _pre.get(f"qdii_h_{c}")     for c in QDII_CODES}
+    _pre_meta  = {c: _pre.get(f"qdii_meta_{c}")  for c in QDII_CODES}
+
     with ThreadPoolExecutor(max_workers=20) as ex:
-        gf = {ex.submit(fetch_fund_gszzl,   code): ("gszzl", code) for code in QDII_CODES}
-        hf = {ex.submit(fetch_qdii_holdings, code): ("h",     code) for code in QDII_CODES}
-        mf = {ex.submit(fetch_fund_meta,     code): ("meta",  code) for code in QDII_CODES}
+        gf = {ex.submit(fetch_fund_gszzl,   code, _pre_gszzl.get(code)): ("gszzl", code) for code in QDII_CODES}
+        hf = {ex.submit(fetch_qdii_holdings, code, _pre_h.get(code)):     ("h",     code) for code in QDII_CODES}
+        mf = {ex.submit(fetch_fund_meta,     code, _pre_meta.get(code)):  ("meta",  code) for code in QDII_CODES}
         for bucket in (gf, hf, mf):
             for fut, (kind, code) in bucket.items():
                 try:
