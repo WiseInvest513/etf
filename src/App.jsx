@@ -5,6 +5,11 @@ import { Analytics } from "@vercel/analytics/react";
 import LazyPage from "./LazyPage.jsx";
 import QDIIPage from "./QDIIPage.jsx";
 
+// ─── Community Mode ───────────────────────────────────────────────────────────
+// "telegram" → 弹窗显示电报图片 + 点击加入群聊按钮
+// "wechat"   → 弹窗显示微信群聊二维码（原有逻辑）
+const COMMUNITY_MODE = "telegram";
+
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 async function apiFetch(path) {
   try { const r = await fetch(`${API_BASE}${path}`); if (r.ok) return await r.json(); } catch {}
@@ -1257,6 +1262,56 @@ function ChartTooltip({active,payload,label,unit="%"}) {
 
 // ─── Disclaimer Modal ─────────────────────────────────────────────────────────
 // ─── Daily Briefing Modal ─────────────────────────────────────────────────────
+function TelegramGroupChatModal({onClose}) {
+  const handleClose = () => {
+    localStorage.setItem("group_chat_last_shown", String(Date.now()));
+    onClose();
+  };
+  const handleNoShow = () => {
+    localStorage.setItem("group_chat_no_show", new Date().toDateString());
+    onClose();
+  };
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:1100,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={e=>e.target===e.currentTarget&&handleClose()}>
+      <div style={{background:"#fff",borderRadius:22,width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,0.2)",animation:"fadeInUp 0.3s ease both",overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{padding:"22px 24px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${C.borderLight}`}}>
+          <div>
+            <div style={{fontSize:11,color:"#229ED9",fontWeight:700,letterSpacing:0.5,marginBottom:3}}>WISEINVEST 社区</div>
+            <div style={{fontSize:17,fontWeight:800,color:C.text,letterSpacing:-0.4}}>欢迎加入电报群聊</div>
+          </div>
+          <button onClick={handleClose}
+            style={{width:32,height:32,borderRadius:"50%",border:"none",background:C.bg,color:C.textMuted,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
+        </div>
+        {/* Image */}
+        <div style={{padding:"24px 24px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
+          <div style={{borderRadius:16,overflow:"hidden",border:`1px solid ${C.borderLight}`,width:"100%"}}>
+            <img src="/电报图片.png" alt="WiseInvest Telegram 群聊"
+              style={{width:"100%",height:"auto",display:"block"}}
+              onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
+          </div>
+          <div style={{fontSize:13,color:C.textDim,textAlign:"center",lineHeight:1.7}}>
+            加入 Telegram 群聊，与志同道合的投资者一起交流
+          </div>
+        </div>
+        {/* Footer */}
+        <div style={{padding:"12px 24px 24px",display:"flex",flexDirection:"column",gap:10}}>
+          <a href="https://t.me/WiseInvest513Chat" target="_blank" rel="noopener noreferrer"
+            style={{display:"block",width:"100%",padding:"12px 0",borderRadius:12,border:"none",background:"#229ED9",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",letterSpacing:0.2,textAlign:"center",textDecoration:"none",boxSizing:"border-box"}}
+            onClick={handleClose}>
+            点击加入群聊
+          </a>
+          <button onClick={handleNoShow}
+            style={{background:"none",border:"none",fontSize:12,color:C.textDim,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted",textUnderlineOffset:3}}>
+            今日不再提示
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GroupChatModal({onClose}) {
   const handleClose = () => {
     localStorage.setItem("group_chat_last_shown", String(Date.now()));
@@ -4344,7 +4399,9 @@ export default function App() {
         </div>
       )}
       {showBriefing&&!showDisclaimer&&(
-        <GroupChatModal onClose={()=>setShowBriefing(false)}/>
+        COMMUNITY_MODE==="telegram"
+          ? <TelegramGroupChatModal onClose={()=>setShowBriefing(false)}/>
+          : <GroupChatModal onClose={()=>setShowBriefing(false)}/>
       )}
 
       {/* ── Header ── */}
@@ -4439,6 +4496,10 @@ export default function App() {
                     {tab.label}
                   </button>
             ))}
+            <button onClick={()=>{setShowBriefing(true);setMobileMenuOpen(false);}}
+              style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"14px 24px",textAlign:"left",background:"none",border:"none",color:COMMUNITY_MODE==="telegram"?"#229ED9":"#07c160",fontWeight:600,fontSize:15,cursor:"pointer",boxSizing:"border-box"}}>
+              <span style={{fontSize:15}}>💬</span> 加入群聊
+            </button>
           </div>
         )}
       </header>
