@@ -21,14 +21,14 @@ function clockCountdown(session) {
   const totalSec = hkt.getHours() * 3600 + hkt.getMinutes() * 60 + hkt.getSeconds();
   const DAY = 24 * 3600;
   // 盘中 10 分钟一格，其他时段 15 分钟
-  const INTERVAL = session === "us_open" ? 10 * 60 : 15 * 60;
+  const INTERVAL = session === "us_open" ? 5 * 60 : 15 * 60;
   const anchor = { pre_market: 16 * 3600, us_open: 21 * 3600 + 30 * 60, post_market: 4 * 3600 }[session] ?? 0;
   const elapsed = (totalSec - anchor + DAY) % DAY;
   return INTERVAL - (elapsed % INTERVAL); // 距离下一个格的秒数
 }
 
 function sessionInterval(session) {
-  return session === "us_open" ? 10 * 60 : 15 * 60;
+  return session === "us_open" ? 5 * 60 : 15 * 60;
 }
 
 // 判断当前市场时段（与后端 _current_session() 保持一致，基于 HKT）
@@ -36,19 +36,31 @@ function getMarketSession() {
   const now = new Date();
   // 转为 HKT（UTC+8）
   const hkt = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
-  const day = hkt.getDay(); // 0=Sun, 6=Sat in HKT
-  if (day === 0 || day === 6) return "weekend";
-  const h = hkt.getHours() + hkt.getMinutes() / 60;
-  if (h >= 8  && h < 16)  return "a_share";    // HKT 08:00-16:00
-  if (h >= 16 && h < 21.5) return "pre_market"; // HKT 16:00-21:30
-  if (h >= 21.5 || h < 4)  return "us_open";    // HKT 21:30-04:00
-  return "post_market";                          // HKT 04:00-08:00
+  const day = hkt.getDay(); // 0=Sun, 1=Mon … 5=Fri, 6=Sat
+  const h   = hkt.getHours() + hkt.getMinutes() / 60;
+
+  // 周六：前半段美股周五仍在交易，后半段盘后，08:00+ 才是真正休市
+  if (day === 6) {
+    if (h < 4)  return "us_open";      // Fri 12:00-16:00 ET
+    if (h < 8)  return "post_market";  // Fri 16:00-20:00 ET
+    return "weekend";
+  }
+  // 周日：全天休市
+  if (day === 0) return "weekend";
+  // 周一 00:00-08:00：美股周日未交易，仍是休市
+  if (day === 1 && h < 8) return "weekend";
+
+  // 正常工作日逻辑（周一 08:00 至周五 24:00）
+  if (h >= 8   && h < 16)  return "a_share";    // HKT 08:00-16:00
+  if (h >= 16  && h < 21.5) return "pre_market"; // HKT 16:00-21:30
+  if (h >= 21.5 || h < 4)   return "us_open";    // HKT 21:30-04:00
+  return "post_market";                           // HKT 04:00-08:00
 }
 
 const SESSION_INFO = {
   a_share:     { label:"A股时段",  valLabel:"昨日估值", desc:"昨日盘后涨跌幅加权，数据已固定",      color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
   pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
-  us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"实时股价加权估值，10分钟刷新",         color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
+  us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"实时股价加权估值，5分钟刷新",          color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
   post_market: { label:"美股盘后", valLabel:"盘后估值", desc:"盘后涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(124,58,237,0.85)",  dot:"#c4b5fd" },
   weekend:     { label:"周末休市", valLabel:"收盘估值", desc:"周五收盘数据，周一美股开盘前保持不变", color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
 };

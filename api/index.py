@@ -474,7 +474,8 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
             reg_p    = _f("regularMarketPrice")
             pre_p    = _f("preMarketPrice")
             post_p   = _f("postMarketPrice")
-            close_price = round(reg_p, 2) if reg_p else None
+            prev_close = _f("regularMarketPreviousClose")
+            close_price = round(prev_close, 2) if prev_close else (round(reg_p, 2) if reg_p else None)
             if s == "pre_market":
                 price = round(pre_p, 2) if pre_p else close_price
             elif s == "post_market":
@@ -2605,9 +2606,9 @@ def _current_session() -> str:
     return "post_market"  # HKT 04:00-08:00
 
 def _valuation_ttl() -> int:
-    """us_open 10min，weekend 60min，其余时段 15min。"""
+    """us_open 5min，weekend 60min，其余时段 15min。"""
     s = _current_session()
-    if s == "us_open":  return 10 * 60
+    if s == "us_open":  return 5 * 60
     if s == "weekend":  return 60 * 60
     return 15 * 60
 
@@ -3567,65 +3568,57 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                 fresh_us.append(sym)
 
         if fresh_us:
-            if session == "us_open":
-                # ─── 盘中：stooq 批量，一次请求搞定所有美股 ───────────────────
-                logger.info(f"[qdii/stock] stooq batch: {len(fresh_us)} US symbols")
-                stooq_result = _stooq_batch(fresh_us)
-                # 批量写回 Redis（pipeline 一次 RTT 代替 N 次串行 SET）
-                pf_batch    = {f"stock_pf_{sym}":       pf for sym, pf in stooq_result.items()}
-                stale_batch = {f"stock_pf_stale_{sym}": pf for sym, pf in stooq_result.items()}
-                _cache_mset(pf_batch,    _valuation_ttl())
-                _cache_mset(stale_batch, 7 * 24 * 3600)
-                for sym, pf in stooq_result.items():
-                    stock_cache[sym] = pf
-                # stooq 没返回的（非主流美股）：stale 兜底
-                for sym in fresh_us:
-                    if sym not in stock_cache:
-                        stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
-            else:
-                # ─── 盘前/盘后：Nasdaq 并发，有 pre/post 数据 ─────────────────
-                logger.info(f"[qdii/stock] Nasdaq concurrent: {len(fresh_us)} US symbols")
+            # ─── us_open / pre_market / post_market：统一走 Nasdaq 并发 ────────
+            # Nasdaq primaryData 三个时段都提供当期正确涨跌幅：
+            #   盘前/盘后：当期相对昨收的涨跌幅%（直接字段）
+            #   盘中：实时成交价 + 当日涨跌幅%
+            # 已在 pre_market/post_market 验证可用，us_open 同理。
+            logger.info(f"[qdii/stock] Nasdaq concurrent: {len(fresh_us)} US symbols, session={session}")
 
-                def _nasdaq_pf(sym: str) -> dict:
-                    r = _nasdaq_fetch(sym)
-                    pct        = r.get("pct")
-                    prev_close = r.get("prev_close")  # 昨日4PM ET固定收盘价
-                    # 收盘价统一用 secondaryData.lastSalePrice（昨日固定收盘价）
-                    # 盘前/盘后涨跌幅用 primaryData.percentageChange（直接字段，非计算）
-                    # price 和 close_price 均展示固定收盘价，盘中才变为实时价（由 stooq 处理）
-                    if pct is not None:
+            def _nasdaq_pf(sym: str) -> dict:
+                r = _nasdaq_fetch(sym)
+                pct         = r.get("pct")
+                intra_price = r.get("price")       # 当前时段价（盘中=实时价，盘前/后=盘前/后价）
+                prev_close  = r.get("prev_close")  # 昨日4PM ET固定收盘价
+                if pct is not None:
+                    if session == "us_open":
+                        # 盘中：price 展示实时价，close_price 展示昨收，pct 只填 regular
+                        return {"pre_pct": None, "regular_pct": pct, "post_pct": None,
+                                "price": intra_price or prev_close, "close_price": prev_close}
+                    else:
+                        # 盘前/盘后：price 展示昨收（避免展示动态盘前价引起误解）
                         return {"pre_pct": pct, "regular_pct": pct, "post_pct": pct,
                                 "price": prev_close, "close_price": prev_close}
-                    return dict(_EMPTY_PF)
+                return dict(_EMPTY_PF)
 
-                nq_ex = ThreadPoolExecutor(max_workers=min(32, len(fresh_us)))
-                nq_results: Dict[str, dict] = {}
-                try:
-                    nq_futs = {nq_ex.submit(_nasdaq_pf, s): s for s in fresh_us}
-                    done, not_done = wait(list(nq_futs), timeout=12)
-                    for fut in not_done:
-                        fut.cancel()
-                    for fut in done:
-                        sym = nq_futs[fut]
-                        try:
-                            pf = fut.result()
-                            stock_cache[sym] = pf
-                            if any(v is not None for v in pf.values()):
-                                nq_results[sym] = pf
-                        except Exception:
-                            stock_cache[sym] = dict(_EMPTY_PF)
-                finally:
-                    nq_ex.shutdown(wait=False)
+            nq_ex = ThreadPoolExecutor(max_workers=min(32, len(fresh_us)))
+            nq_results: Dict[str, dict] = {}
+            try:
+                nq_futs = {nq_ex.submit(_nasdaq_pf, s): s for s in fresh_us}
+                done, not_done = wait(list(nq_futs), timeout=12)
+                for fut in not_done:
+                    fut.cancel()
+                for fut in done:
+                    sym = nq_futs[fut]
+                    try:
+                        pf = fut.result()
+                        stock_cache[sym] = pf
+                        if any(v is not None for v in pf.values()):
+                            nq_results[sym] = pf
+                    except Exception:
+                        stock_cache[sym] = dict(_EMPTY_PF)
+            finally:
+                nq_ex.shutdown(wait=False)
 
-                # 批量写回 Redis
-                if nq_results:
-                    _cache_mset({f"stock_pf_{s}":       pf for s, pf in nq_results.items()}, _valuation_ttl())
-                    _cache_mset({f"stock_pf_stale_{s}": pf for s, pf in nq_results.items()}, 7 * 24 * 3600)
+            # 批量写回 Redis
+            if nq_results:
+                _cache_mset({f"stock_pf_{s}":       pf for s, pf in nq_results.items()}, _valuation_ttl())
+                _cache_mset({f"stock_pf_stale_{s}": pf for s, pf in nq_results.items()}, 7 * 24 * 3600)
 
-                # Nasdaq 超时/失败的：stale 兜底
-                for sym in fresh_us:
-                    if sym not in stock_cache or not any(v is not None for v in stock_cache[sym].values()):
-                        stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
+            # Nasdaq 超时/失败的：stale 兜底
+            for sym in fresh_us:
+                if sym not in stock_cache or not any(v is not None for v in stock_cache[sym].values()):
+                    stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
     else:
         # a_share / weekend：美股已收盘
         # 1) 读常规 8h 缓存（有就用）
