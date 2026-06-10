@@ -1263,6 +1263,7 @@ function ChartTooltip({active,payload,label,unit="%"}) {
 // ─── Disclaimer Modal ─────────────────────────────────────────────────────────
 // ─── Daily Briefing Modal ─────────────────────────────────────────────────────
 function TelegramGroupChatModal({onClose}) {
+  const [tab, setTab] = useState("telegram");
   const handleClose = () => {
     localStorage.setItem("group_chat_last_shown", String(Date.now()));
     onClose();
@@ -1271,40 +1272,62 @@ function TelegramGroupChatModal({onClose}) {
     localStorage.setItem("group_chat_no_show", new Date().toDateString());
     onClose();
   };
+  const isTelegram = tab === "telegram";
   return (
     <div style={{position:"fixed",inset:0,zIndex:1100,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
       onClick={e=>e.target===e.currentTarget&&handleClose()}>
-      <div style={{background:"#fff",borderRadius:22,width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,0.2)",animation:"fadeInUp 0.3s ease both",overflow:"hidden"}}>
+      <div style={{background:"#fff",borderRadius:22,width:"100%",maxWidth:360,boxShadow:"0 32px 80px rgba(0,0,0,0.2)",animation:"fadeInUp 0.3s ease both",overflow:"hidden"}}>
         {/* Header */}
-        <div style={{padding:"22px 24px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${C.borderLight}`}}>
+        <div style={{padding:"20px 20px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <div style={{fontSize:11,color:"#229ED9",fontWeight:700,letterSpacing:0.5,marginBottom:3}}>WISEINVEST 社区</div>
-            <div style={{fontSize:17,fontWeight:800,color:C.text,letterSpacing:-0.4}}>欢迎加入电报群聊</div>
+            <div style={{fontSize:11,color:isTelegram?"#229ED9":"#07c160",fontWeight:700,letterSpacing:0.5,marginBottom:3}}>WISEINVEST 社区</div>
+            <div style={{fontSize:17,fontWeight:800,color:C.text,letterSpacing:-0.4}}>加入我们的社群</div>
           </div>
           <button onClick={handleClose}
             style={{width:32,height:32,borderRadius:"50%",border:"none",background:C.bg,color:C.textMuted,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
         </div>
-        {/* Image */}
-        <div style={{padding:"24px 24px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
-          <div style={{borderRadius:16,overflow:"hidden",border:`1px solid ${C.borderLight}`,width:"100%"}}>
-            <img src="/电报图片.png" alt="WiseInvest Telegram 群聊"
-              style={{width:"100%",height:"auto",display:"block"}}
-              onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
-          </div>
-          <div style={{fontSize:13,color:C.textDim,textAlign:"center",lineHeight:1.7}}>
-            加入 Telegram 群聊，与志同道合的投资者一起交流
-          </div>
+        {/* Tabs */}
+        <div style={{margin:"0 20px 16px",display:"flex",background:C.bg,borderRadius:12,padding:4,gap:4}}>
+          <button onClick={()=>setTab("telegram")}
+            style={{flex:1,padding:"9px 0",borderRadius:9,border:"none",background:isTelegram?"#229ED9":"transparent",color:isTelegram?"#fff":C.textMuted,fontSize:14,fontWeight:600,cursor:"pointer",transition:"all 0.2s"}}>
+            电报群聊
+          </button>
+          <button onClick={()=>setTab("wechat")}
+            style={{flex:1,padding:"9px 0",borderRadius:9,border:"none",background:!isTelegram?"#07c160":"transparent",color:!isTelegram?"#fff":C.textMuted,fontSize:14,fontWeight:600,cursor:"pointer",transition:"all 0.2s"}}>
+            微信群聊
+          </button>
         </div>
+        {/* Content */}
+        {isTelegram ? (
+          <div style={{padding:"0 20px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
+            <div style={{borderRadius:16,overflow:"hidden",border:`1px solid ${C.borderLight}`,width:"100%"}}>
+              <img src="/电报图片.png" alt="WiseInvest Telegram 群聊"
+                style={{width:"100%",height:"auto",display:"block"}}
+                onError={e=>{e.currentTarget.parentElement.style.display="none";}}/>
+            </div>
+            <div style={{fontSize:13,color:C.textDim,textAlign:"center",lineHeight:1.7}}>
+              扫码或点击按钮加入 Telegram 群，与全球投资者交流
+            </div>
+          </div>
+        ) : (
+          <div style={{margin:"0 16px 8px",border:"2px solid #07c160",borderRadius:14,overflow:"hidden"}}>
+            <img src="/草料图片.png" alt="WiseInvest 微信群聊二维码"
+              style={{width:"100%",height:"auto",display:"block"}}
+              onError={e=>{e.currentTarget.style.display="none";}}/>
+          </div>
+        )}
         {/* Footer */}
-        <div style={{padding:"12px 24px 24px",display:"flex",flexDirection:"column",gap:10}}>
-          <a href="https://t.me/WiseInvest513Chat" target="_blank" rel="noopener noreferrer"
-            style={{display:"block",width:"100%",padding:"12px 0",borderRadius:12,border:"none",background:"#229ED9",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",letterSpacing:0.2,textAlign:"center",textDecoration:"none",boxSizing:"border-box"}}
-            onClick={handleClose}>
-            点击加入群聊
-          </a>
+        <div style={{padding:"12px 20px 20px",display:"flex",flexDirection:"column",gap:10}}>
+          {isTelegram ? (
+            <a href="https://t.me/WiseInvest513Chat" target="_blank" rel="noopener noreferrer"
+              style={{display:"block",width:"100%",padding:"13px 0",borderRadius:12,border:"none",background:"#229ED9",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",letterSpacing:0.2,textAlign:"center",textDecoration:"none",boxSizing:"border-box"}}
+              onClick={handleClose}>
+              点击加入群聊 →
+            </a>
+          ) : null}
           <button onClick={handleNoShow}
-            style={{background:"none",border:"none",fontSize:12,color:C.textDim,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted",textUnderlineOffset:3}}>
-            今日不再提示
+            style={{background:"none",border:"none",fontSize:12,color:C.textDim,cursor:"pointer",textDecoration:"none",textAlign:"center"}}>
+            今天不再展示
           </button>
         </div>
       </div>
