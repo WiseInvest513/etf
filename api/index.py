@@ -637,12 +637,14 @@ def fetch_one_fund(code: str, category: str, _meta_cached=None) -> Optional[dict
             if d:
                 sgzt = d.get("SGZT", "")
                 maxsg = d.get("MAXSG", "")
-                if sgzt:
-                    # 特殊基金：160213 的 SGZT 显示暂停但 MAXSG 有实际数据，以 MAXSG 为准
-                    _force_maxsg = code in ("160213",)
+                # 已限购写死：暂停申购
+                if code in ("160213",):
+                    result["buy_status"] = "suspended"
+                    result["daily_limit"] = "暂停申购"
+                elif sgzt:
                     has_limit = maxsg and str(maxsg) not in ("", "--", "0", "None")
-                    # SGZT 优先：含"暂停"直接短路，MAXSG 残留值不干扰判断（特殊基金除外）
-                    if "暂停" in sgzt and not (_force_maxsg and has_limit):
+                    # SGZT 优先：含"暂停"直接短路，MAXSG 残留值不干扰判断
+                    if "暂停" in sgzt:
                         result["buy_status"] = "suspended"
                         result["daily_limit"] = "暂停申购"
                     else:
