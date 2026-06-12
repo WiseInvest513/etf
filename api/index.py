@@ -3748,24 +3748,18 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
 
                 logger.info(f"[qdii/a_share] snapshot done: {len(daily_snap)}/{len(us_symbols)} symbols")
 
-            # close_price 单独从 stale 缓存读（us_open/post_market 时由 Yahoo 写入，7天 TTL）
-            # 不依赖 Nasdaq price 字段，避免某些股票 Nasdaq 不返回价格导致收盘价空白
-            stale_close = {}
-            stale_data = _cache_mget([f"stock_pf_stale_{s}" for s in us_symbols])
-            for sym in us_symbols:
-                v = stale_data.get(f"stock_pf_stale_{sym}") or {}
-                if v.get("close_price"):
-                    stale_close[sym] = v["close_price"]
+            # close_price 从 stock_last_post_* 读（原有逻辑，72h TTL，post_market 时段写入）
+            last_post_keys = [f"stock_last_post_{s}" for s in us_symbols]
+            bulk_last_post = _cache_mget(last_post_keys)
 
             for sym in us_symbols:
                 pf = _pf_cached(sym) or dict(_EMPTY_PF)
                 snap = daily_snap.get(sym) or {}
                 if snap.get("pct") is not None:
                     pf = {**pf, "last_post_pct": snap["pct"]}
-                # close_price 优先用 stale 缓存，其次用 snap 里的
-                close = stale_close.get(sym) or snap.get("close_price")
-                if close:
-                    pf = {**pf, "close_price": close}
+                last_post = bulk_last_post.get(f"stock_last_post_{sym}") or {}
+                if last_post.get("close_price") and not pf.get("close_price"):
+                    pf = {**pf, "close_price": last_post["close_price"]}
                 stock_cache[sym] = pf
 
             # ── 以下为原来的逻辑，已停用，原因见上方注释 ──────────────────────────
