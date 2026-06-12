@@ -1860,13 +1860,14 @@ def cron_post_snap():
     可在任意时段调用，postMarketChangePercent 是直接字段，A股时段也能获取。
     """
     # 收集所有 US symbols
+    _non_us = (".HK", ".SS", ".SZ", ".TW", ".KS", ".T", ".L", ".PA", ".DE")
     all_syms: set = set()
     for code in QDII_CODES:
         master = _C_TO_A_HOLDINGS_MAP.get(code, code)
         holdings = fetch_qdii_holdings(master) or []
         for h in holdings:
             sym = h.get("symbol", "")
-            if sym and _is_us(sym):
+            if sym and not any(sym.endswith(s) for s in _non_us):
                 all_syms.add(sym)
     us_symbols = list(all_syms)
     if not us_symbols:
