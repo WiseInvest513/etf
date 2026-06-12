@@ -20,15 +20,15 @@ function clockCountdown(session) {
   const hkt = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
   const totalSec = hkt.getHours() * 3600 + hkt.getMinutes() * 60 + hkt.getSeconds();
   const DAY = 24 * 3600;
-  // 盘中 10 分钟一格，其他时段 15 分钟
-  const INTERVAL = session === "us_open" ? 5 * 60 : 15 * 60;
+  // 盘中 / 盘前 5 分钟一格，其他时段 15 分钟
+  const INTERVAL = (session === "us_open" || session === "pre_market") ? 5 * 60 : 15 * 60;
   const anchor = { pre_market: 16 * 3600, us_open: 21 * 3600 + 30 * 60, post_market: 4 * 3600 }[session] ?? 0;
   const elapsed = (totalSec - anchor + DAY) % DAY;
   return INTERVAL - (elapsed % INTERVAL); // 距离下一个格的秒数
 }
 
 function sessionInterval(session) {
-  return session === "us_open" ? 5 * 60 : 15 * 60;
+  return (session === "us_open" || session === "pre_market") ? 5 * 60 : 15 * 60;
 }
 
 // 判断当前市场时段（与后端 _current_session() 保持一致，基于 HKT）
@@ -59,7 +59,7 @@ function getMarketSession() {
 
 const SESSION_INFO = {
   a_share:     { label:"A股时段",  valLabel:"收盘估值", desc:"昨日收盘涨跌幅加权，数据已固定",      color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
-  pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
+  pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，5分钟刷新",        color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
   us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"实时股价加权估值，5分钟刷新",          color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
   post_market: { label:"美股盘后", valLabel:"盘后估值", desc:"盘后涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(124,58,237,0.85)",  dot:"#c4b5fd" },
   weekend:     { label:"周末休市", valLabel:"收盘估值", desc:"周五收盘数据，周一美股开盘前保持不变", color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
@@ -338,7 +338,6 @@ function DetailPanel({ fund, onClose, cc, session }) {
   const ytd = fund.ytd_return;
   const val = fund.valuation;
   const status = getSessionStatus(session || "weekend");
-  const [showAll, setShowAll] = useState(false);
   const isMobile = useIsMobile();
 
   return (
@@ -371,6 +370,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
 
           {val != null && (
             <div style={{ marginTop:16, display:"flex", alignItems:"flex-end", gap:20, flexWrap:"wrap" }}>
+              {/* 盘后估值暂时隐藏
               {session === "a_share" && fund.post_valuation != null && (
                 <div>
                   <div style={{ fontSize:30, fontWeight:900, letterSpacing:-1, color: fund.post_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
@@ -379,6 +379,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                   <div style={{ fontSize:11, opacity:0.65, marginTop:2 }}>盘后估值<br/>盘后涨跌加权</div>
                 </div>
               )}
+              */}
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                 <div style={{ fontSize:36, fontWeight:900, letterSpacing:-1, color: val >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
                   {val >= 0 ? "+" : ""}{val.toFixed(2)}%
@@ -506,7 +507,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
 
           {/* 持仓明细 */}
           <SectionTitle icon="🏢" cc={cc}>
-            {showAll ? `全部持仓明细（${holdings.length}只）` : `前十大持仓`}
+            前十大持仓
           </SectionTitle>
           {holdings.length > 0 ? (
             <div style={{ borderRadius:12, border:`1px solid ${cc.border}`, overflow:"hidden" }}>
@@ -514,7 +515,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                 {(() => {
                     const changeLabel = { pre_market:"盘前", us_open:"盘中", post_market:"盘后", a_share:"昨涨跌", weekend:"昨涨跌" }[session] ?? "涨跌";
                     const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
-                    const displayed = showAll ? holdings : holdings.slice(0, 10);
+                    const displayed = holdings.slice(0, 10);
                     const tdP = isMobile ? "8px 6px" : "13px 14px";
                     const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
                       padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
@@ -569,20 +570,6 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     </>);
                   })()}
               </table>
-              {holdings.length > 10 && (
-                <div style={{ textAlign:"center", padding:"12px 0", borderTop:`1px solid ${cc.borderLight}` }}>
-                  <button
-                    onClick={() => setShowAll(v => !v)}
-                    style={{
-                      padding:"6px 20px", borderRadius:8, border:`1px solid ${cc.border}`,
-                      background:cc.card, color:"#4f46e5", fontSize:12, fontWeight:600,
-                      cursor:"pointer",
-                    }}
-                  >
-                    {showAll ? "收起" : `展示全部 ${holdings.length} 只持仓`}
-                  </button>
-                </div>
-              )}
               <div style={{ padding:"10px 14px", fontSize:11, color:cc.textDim, borderTop:`1px solid ${cc.border}`, background:cc.bg, display:"flex", justifyContent:"space-between" }}>
                 <span>
                   数据来源：基金季报
@@ -1438,7 +1425,7 @@ export default function QDIIPage() {
                     { key:"daily_limit", label:"每日限额", align:"center" },
                     { key:"status",      label:"状态",     align:"center", noSort:true },
                     { key:"nav",         label:"最新净值", align:"center" },
-                    ...(session === "a_share" ? [{ key:"post_valuation", label:"盘后估值", align:"center" }] : []),
+                    // 盘后估值列暂时隐藏：...(session === "a_share" ? [{ key:"post_valuation", label:"盘后估值", align:"center" }] : []),
                     { key:"valuation",   label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
                   ]).map(({ key, label, align, noSort }) => {
                     const active = sortKey === key;

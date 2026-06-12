@@ -2758,7 +2758,6 @@ const TABS=[
   {id:"sp500",     label:"标普500"},
   {id:"etf",       label:"场内ETF"},
   {id:"active",    label:"美股主动"},
-  {id:"watchlist", label:"自选"},
   {id:"lazy",      label:"懒人组合", href:"/lazy"},
   {id:"qdii",      label:"估值",     href:"/qdii"},
   {id:"export",    label:"导出数据", href:"/export"},
@@ -4043,6 +4042,560 @@ function ReportPage() {
   );
 }
 
+// ─── SliderCaptcha ────────────────────────────────────────────────────────────
+function SliderCaptcha({ onVerified }) {
+  const [pos, setPos] = useState(0);
+  const [verified, setVerified] = useState(false);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startPos = useRef(0);
+  const TRACK_W = 260, HANDLE_W = 44, MAX = TRACK_W - HANDLE_W;
+
+  const handleStart = (cx) => {
+    if (verified) return;
+    dragging.current = true;
+    startX.current = cx;
+    startPos.current = pos;
+  };
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragging.current) return;
+      const cx = e.touches ? e.touches[0].clientX : e.clientX;
+      const newPos = Math.max(0, Math.min(MAX, startPos.current + (cx - startX.current)));
+      setPos(newPos);
+      if (newPos >= MAX - 2) {
+        dragging.current = false;
+        setVerified(true);
+        onVerified();
+      }
+    };
+    const onEnd = () => {
+      if (dragging.current) { dragging.current = false; setPos(0); startPos.current = 0; }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onEnd);
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend", onEnd);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onEnd);
+      document.removeEventListener("touchmove", onMove);
+      document.removeEventListener("touchend", onEnd);
+    };
+  }, [verified, onVerified, MAX]);
+
+  return (
+    <div style={{ marginBottom: 16, userSelect: "none" }}>
+      <div style={{ fontSize: 12, color: verified ? "#059669" : "#64748b", marginBottom: 8, fontWeight: verified ? 600 : 400 }}>
+        {verified ? "✅ 验证通过" : "请拖动滑块到最右侧"}
+      </div>
+      <div style={{
+        position: "relative", width: TRACK_W, height: HANDLE_W,
+        background: verified ? "#dcfce7" : "#f1f5f9",
+        borderRadius: HANDLE_W / 2,
+        border: `1.5px solid ${verified ? "#86efac" : "#e2e8f0"}`,
+      }}>
+        <div style={{
+          position: "absolute", left: 0, top: 0, bottom: 0,
+          width: Math.max(pos + HANDLE_W / 2, HANDLE_W / 2),
+          background: verified ? "#86efac" : "#c7d2fe",
+          borderRadius: HANDLE_W / 2,
+        }} />
+        <div
+          onMouseDown={e => { e.preventDefault(); handleStart(e.clientX); }}
+          onTouchStart={e => { handleStart(e.touches[0].clientX); }}
+          style={{
+            position: "absolute", left: pos, top: 0,
+            width: HANDLE_W, height: HANDLE_W,
+            background: "#fff", borderRadius: "50%",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: verified ? "default" : "grab",
+            fontSize: 16, fontWeight: 700, zIndex: 1,
+            color: verified ? "#059669" : "#6366f1",
+          }}
+        >
+          {verified ? "✓" : "›"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AuthModal ────────────────────────────────────────────────────────────────
+function AuthModal({ onClose, onLogin, authRequired }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPwd, setConfirmPwd] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [captchaOk, setCaptchaOk] = useState(false);
+
+  const switchMode = (m) => { setMode(m); setError(""); setCaptchaOk(false); setPassword(""); setConfirmPwd(""); setShowPwd(false); setShowConfirmPwd(false); };
+
+  const validatePwd = (p) => {
+    if (p.length < 8) return "密码至少8位";
+    if (!/[A-Z]/.test(p)) return "需包含大写字母";
+    if (!/[a-z]/.test(p)) return "需包含小写字母";
+    if (!/[0-9]/.test(p)) return "需包含数字";
+    return null;
+  };
+
+  const handleSubmit = async () => {
+    setError("");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError("邮箱格式不正确"); return; }
+    if (!captchaOk) { setError("请完成滑块验证"); return; }
+    if (mode === "register") {
+      const e = validatePwd(password); if (e) { setError(e); return; }
+      if (password !== confirmPwd) { setError("两次密码不一致"); return; }
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        localStorage.setItem("wise_token", data.token);
+        localStorage.setItem("wise_email", data.email);
+        onLogin({ token: data.token, email: data.email });
+      } else {
+        setError(data.msg || "操作失败");
+      }
+    } catch { setError("网络错误，请稍后重试"); }
+    setLoading(false);
+  };
+
+  const inputStyle = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+  const EyeIcon = ({ show }) => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {show ? (<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>) : (<><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>)}
+    </svg>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      onClick={e => { if (!authRequired && e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: "32px", maxWidth: 400, width: "90%", position: "relative", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        {!authRequired && (
+          <button onClick={onClose} style={{ position: "absolute", top: 14, right: 16, background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8", lineHeight: 1 }}>×</button>
+        )}
+        <div style={{ fontSize: 22, fontWeight: 800, color: "#1e293b", marginBottom: 4 }}>
+          {mode === "login" ? "欢迎回来" : "创建账号"}
+        </div>
+        {authRequired && (
+          <div style={{ fontSize: 13, color: "#f59e0b", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", marginBottom: 16, marginTop: 8 }}>
+            请登录后访问此功能
+          </div>
+        )}
+        <div style={{ marginTop: authRequired ? 0 : 20 }}>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 }}>邮箱</div>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 }}>密码</div>
+            <div style={{ position: "relative" }}>
+              <input type={showPwd ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder={mode === "register" ? "至少8位，含大小写字母和数字" : "请输入密码"} style={{ ...inputStyle, paddingRight: 42 }} onKeyDown={e => e.key === "Enter" && mode === "login" && handleSubmit()} />
+              <button type="button" onClick={() => setShowPwd(v => !v)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0, display: "flex", alignItems: "center" }}>
+                <EyeIcon show={showPwd} />
+              </button>
+            </div>
+          </div>
+          {mode === "register" && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 }}>确认密码</div>
+              <div style={{ position: "relative" }}>
+                <input type={showConfirmPwd ? "text" : "password"} value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)} placeholder="再次输入密码" style={{ ...inputStyle, paddingRight: 42 }} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+                <button type="button" onClick={() => setShowConfirmPwd(v => !v)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0, display: "flex", alignItems: "center" }}>
+                  <EyeIcon show={showConfirmPwd} />
+                </button>
+              </div>
+            </div>
+          )}
+          <SliderCaptcha key={mode} onVerified={() => setCaptchaOk(true)} />
+          {error && <div style={{ fontSize: 13, color: "#ef4444", marginBottom: 12, background: "#fef2f2", padding: "8px 12px", borderRadius: 8, border: "1px solid #fecaca" }}>{error}</div>}
+          <button onClick={handleSubmit} disabled={loading}
+            style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: loading ? "#a5b4fc" : "linear-gradient(135deg,#4f46e5,#7c3aed)", color: "#fff", fontWeight: 700, fontSize: 15, cursor: loading ? "default" : "pointer" }}>
+            {loading ? "处理中…" : (mode === "login" ? "登录" : "注册")}
+          </button>
+          <div style={{ textAlign: "center", marginTop: 16, fontSize: 13, color: "#64748b" }}>
+            {mode === "login" ? <>还没有账号？<button onClick={() => switchMode("register")} style={{ color: "#4f46e5", background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, padding: 0 }}>立即注册</button></> : <>已有账号？<button onClick={() => switchMode("login")} style={{ color: "#4f46e5", background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, padding: 0 }}>去登录</button></>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── UserCenter ───────────────────────────────────────────────────────────────
+function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
+  const [expandedCode, setExpandedCode] = useState(null);
+  const [compareList, setCompareList] = useState([]);
+  const [rightPanel, setRightPanel] = useState("account"); // "account" | "compare"
+  const [showChangePwd, setShowChangePwd] = useState(false);
+  const [pwdForm, setPwdForm] = useState({ old: "", new1: "", new2: "", showOld: false, showNew: false });
+  const [pwdMsg, setPwdMsg] = useState(null); // { ok, text }
+  const [pwdLoading, setPwdLoading] = useState(false);
+
+  const openChangePwd = () => { setPwdForm({ old: "", new1: "", new2: "", showOld: false, showNew: false }); setPwdMsg(null); setShowChangePwd(true); };
+
+  const handleChangePwd = async () => {
+    setPwdMsg(null);
+    if (!pwdForm.old) { setPwdMsg({ ok: false, text: "请输入当前密码" }); return; }
+    if (pwdForm.new1 !== pwdForm.new2) { setPwdMsg({ ok: false, text: "两次新密码不一致" }); return; }
+    setPwdLoading(true);
+    try {
+      const token = localStorage.getItem("wise_token") || "";
+      const res = await fetch("/api/auth/change_password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ old_password: pwdForm.old, new_password: pwdForm.new1 }),
+      });
+      const data = await res.json();
+      setPwdMsg({ ok: data.ok, text: data.msg || (data.ok ? "修改成功" : "修改失败") });
+      if (data.ok) { setTimeout(() => setShowChangePwd(false), 1200); }
+    } catch { setPwdMsg({ ok: false, text: "网络错误，请稍后重试" }); }
+    setPwdLoading(false);
+  };
+
+  const GROUPS = [
+    { label: "纳指被动", color: "#4f46e5", funds: allFunds.nasdaq },
+    { label: "标普500",  color: "#06b6d4", funds: allFunds.sp500  },
+    { label: "美股主动", color: "#a855f7", funds: allFunds.active  },
+    { label: "场内ETF",  color: "#f97316", funds: allFunds.etfs   },
+  ];
+  const allFlatFunds = GROUPS.flatMap(g => g.funds || []);
+  const myGroups = GROUPS.map(g => ({ ...g, funds: (g.funds || []).filter(f => favorites.includes(f.code)) })).filter(g => g.funds.length > 0);
+  const avatarUrl = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email || "user")}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+
+  const toggleCompare = (code) => {
+    setCompareList(prev => {
+      if (prev.includes(code)) return prev.filter(c => c !== code);
+      if (prev.length >= 4) return prev;
+      return [...prev, code];
+    });
+    setRightPanel("compare");
+  };
+
+  // 评分算法：在自选基金范围内标准化
+  const scoreFunds = (funds) => {
+    if (!funds.length) return {};
+    const get = (f, k) => f[k] ?? null;
+    const normalize = (vals, higherBetter) => {
+      const valid = vals.filter(v => v != null);
+      if (!valid.length) return vals.map(() => null);
+      const mn = Math.min(...valid), mx = Math.max(...valid);
+      return vals.map(v => v == null ? null : mx === mn ? 50 : higherBetter ? (v - mn) / (mx - mn) * 100 : (mx - v) / (mx - mn) * 100);
+    };
+    const ytdScores    = normalize(funds.map(f => get(f,"ytd_return")),  true);
+    const feeScores    = normalize(funds.map(f => get(f,"fee_rate")),     false);
+    const teScores     = normalize(funds.map(f => get(f,"track_error")),  false);
+    const scaleScores  = normalize(funds.map(f => get(f,"scale")),        true);
+    return Object.fromEntries(funds.map((f, i) => {
+      const parts = [
+        [ytdScores[i],   0.40],
+        [feeScores[i],   0.30],
+        [teScores[i],    0.20],
+        [scaleScores[i], 0.10],
+      ];
+      const validParts = parts.filter(([v]) => v != null);
+      const totalW = validParts.reduce((s,[,w]) => s+w, 0);
+      const raw = totalW > 0 ? validParts.reduce((s,[v,w]) => s + v*(w/totalW), 0) : 50;
+      const bonus = f.buy_status === "open" ? 3 : -3;
+      return [f.code, Math.min(100, Math.max(0, Math.round(raw + bonus)))];
+    }));
+  };
+
+  const compareScores = (() => {
+    if (compareList.length < 2) return {};
+    const funds = compareList.map(c => allFlatFunds.find(f => f.code === c)).filter(Boolean);
+    return scoreFunds(funds);
+  })();
+
+  const scoreColor = (s) => s >= 70 ? "#16a34a" : s >= 45 ? "#f59e0b" : "#dc2626";
+  const scoreBg    = (s) => s >= 70 ? "#f0fdf4" : s >= 45 ? "#fffbeb" : "#fef2f2";
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 500, background: "rgba(15,23,42,0.6)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ width: "100%", maxWidth: 1080, height: "88vh", background: "#f8fafc", borderRadius: 24, boxShadow: "0 40px 100px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
+        {/* ── Header ── */}
+        <div style={{ background: "linear-gradient(135deg,#312e81 0%,#4f46e5 55%,#7c3aed 100%)", padding: "24px 32px", color: "#fff", display: "flex", alignItems: "center", gap: 20, flexShrink: 0 }}>
+          <img src={avatarUrl} alt="avatar" style={{ width: 52, height: 52, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.5)", flexShrink: 0, background: "rgba(255,255,255,0.15)" }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+            <div style={{ marginTop: 4, display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 20, padding: "2px 10px" }}>免费版</span>
+              <span style={{ fontSize: 11, opacity: 0.6 }}>自选 {favorites.length} 只</span>
+              {compareList.length > 0 && <span style={{ fontSize: 11, background: "rgba(251,191,36,0.3)", border: "1px solid rgba(251,191,36,0.5)", borderRadius: 20, padding: "2px 10px", color: "#fde68a" }}>已选 {compareList.length} 只对比</span>}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 8, padding: "6px 14px", whiteSpace: "nowrap", opacity: 0.8 }}>Pro · 即将开放</div>
+            <button onClick={onClose} style={{ width: 34, height: 34, borderRadius: "50%", border: "none", background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+          </div>
+        </div>
+
+        {/* ── Body ── */}
+        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+
+          {/* ── Left: 我的自选 ── */}
+          <div style={{ width: 380, flexShrink: 0, borderRight: "1px solid #e2e8f0", display: "flex", flexDirection: "column", background: "#fff" }}>
+            <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid #f1f5f9", flexShrink: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b" }}>我的自选</div>
+              {compareList.length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: "#64748b" }}>对比中：</span>
+                  {compareList.map(c => {
+                    const f = allFlatFunds.find(x => x.code === c);
+                    return f ? <span key={c} onClick={() => toggleCompare(c)} style={{ fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>{f.code} ×</span> : null;
+                  })}
+                  <span onClick={() => { setCompareList([]); setRightPanel("account"); }} style={{ fontSize: 11, color: "#94a3b8", cursor: "pointer", marginLeft: 4 }}>清除</span>
+                </div>
+              )}
+            </div>
+            <div style={{ overflowY: "auto", flex: 1, padding: "12px 16px 24px" }}>
+              {myGroups.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>⭐</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#64748b", marginBottom: 4 }}>暂无自选基金</div>
+                  <div style={{ fontSize: 12 }}>在各板块点击 ☆ 加入自选</div>
+                </div>
+              ) : myGroups.map(g => (
+                <div key={g.label} style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: g.color, marginBottom: 8, display: "flex", alignItems: "center", gap: 5, letterSpacing: 0.8, textTransform: "uppercase" }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.color, display: "inline-block" }} />{g.label}
+                  </div>
+                  {g.funds.map(f => {
+                    const isExpanded = expandedCode === f.code;
+                    const inCompare  = compareList.includes(f.code);
+                    return (
+                      <div key={f.code} style={{ borderRadius: 12, border: `1.5px solid ${inCompare ? "#a5b4fc" : "#f1f5f9"}`, background: inCompare ? "#f5f3ff" : "#fafafa", marginBottom: 8, overflow: "hidden", transition: "border-color .15s" }}>
+                        {/* Fund row */}
+                        <div style={{ padding: "11px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setExpandedCode(isExpanded ? null : f.code)}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>
+                            <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace", marginTop: 2 }}>{f.code}</div>
+                          </div>
+                          <div style={{ textAlign: "right", flexShrink: 0 }}>
+                            {f.ytd_return != null && <div style={{ fontSize: 13, fontWeight: 700, color: f.ytd_return >= 0 ? "#dc2626" : "#16a34a" }}>{f.ytd_return >= 0 ? "+" : ""}{f.ytd_return.toFixed(2)}%</div>}
+                            <div style={{ fontSize: 10, color: f.buy_status === "open" ? "#16a34a" : "#94a3b8", marginTop: 1 }}>{f.buy_status === "open" ? "开放申购" : "暂停申购"}</div>
+                          </div>
+                          <div style={{ fontSize: 12, color: "#94a3b8", flexShrink: 0 }}>{isExpanded ? "▲" : "▼"}</div>
+                        </div>
+                        {/* Expanded detail */}
+                        {isExpanded && (
+                          <div style={{ borderTop: "1px solid #f1f5f9", padding: "12px 14px", background: "#fff" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
+                              {[
+                                ["年化费率", f.fee_rate != null ? `${f.fee_rate}%` : "—"],
+                                ["基金规模", f.scale != null ? `${f.scale} 亿` : "—"],
+                                ["跟踪误差", f.track_error != null ? `${f.track_error}%` : "—"],
+                                ["每日限额", f.daily_limit || "—"],
+                              ].map(([k, v]) => (
+                                <div key={k}>
+                                  <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>{k}</div>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{v}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <button onClick={() => toggleCompare(f.code)} style={{ width: "100%", padding: "7px", borderRadius: 8, border: `1.5px solid ${inCompare ? "#a5b4fc" : "#e2e8f0"}`, background: inCompare ? "#ede9fe" : "#f8fafc", color: inCompare ? "#7c3aed" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                              {inCompare ? "✓ 已加入对比  点击移除" : "+ 加入对比"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Right Panel ── */}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflowY: "auto" }}>
+
+            {/* Right tabs */}
+            <div style={{ display: "flex", borderBottom: "1px solid #e2e8f0", padding: "0 24px", background: "#fff", flexShrink: 0 }}>
+              {[["account","账户信息"],["compare","基金对比"]].map(([key, label]) => (
+                <button key={key} onClick={() => setRightPanel(key)} style={{ padding: "14px 16px", border: "none", background: "none", cursor: "pointer", fontSize: 13, fontWeight: rightPanel === key ? 700 : 400, color: rightPanel === key ? "#4f46e5" : "#64748b", borderBottom: rightPanel === key ? "2px solid #4f46e5" : "2px solid transparent", marginBottom: -1, fontFamily: "inherit" }}>
+                  {label}{key === "compare" && compareList.length > 0 && <span style={{ marginLeft: 6, fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 10, padding: "1px 6px" }}>{compareList.length}</span>}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ padding: "24px 28px 32px", flex: 1 }}>
+
+              {/* ── Account tab ── */}
+              {rightPanel === "account" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 560 }}>
+                  <div style={{ borderRadius: 14, border: "1px solid #f1f5f9", overflow: "hidden", background: "#fff" }}>
+                    <div style={{ background: "#f8fafc", padding: "11px 16px", fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: 0.8, textTransform: "uppercase" }}>账户信息</div>
+                    {[["邮箱", user.email],["当前套餐","免费版"],["账户状态","正常"]].map(([k,v]) => (
+                      <div key={k} style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", borderTop: "1px solid #f1f5f9" }}>
+                        <span style={{ fontSize: 13, color: "#64748b" }}>{k}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{v}</span>
+                      </div>
+                    ))}
+                    <div style={{ padding: "13px 16px", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 13, color: "#64748b" }}>登录密码</span>
+                      <button onClick={openChangePwd} style={{ fontSize: 13, fontWeight: 600, color: "#4f46e5", background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit" }}>修改密码</button>
+                    </div>
+                  </div>
+                  <div style={{ borderRadius: 14, border: "1.5px solid #e0e7ff", background: "linear-gradient(135deg,#f5f3ff,#ede9fe)", padding: "20px 22px" }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#4f46e5", marginBottom: 6 }}>Pro 计划 · 即将开放</div>
+                    <div style={{ fontSize: 13, color: "#6366f1", lineHeight: 1.7 }}>解锁全部板块访问权限、溢价率历史、估值详情及优先支持。敬请期待。</div>
+                  </div>
+                  <button onClick={onLogout} style={{ padding: "12px", borderRadius: 12, border: "1.5px solid #fecaca", background: "#fff", color: "#ef4444", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}
+                    onMouseEnter={e => e.currentTarget.style.background="#fef2f2"}
+                    onMouseLeave={e => e.currentTarget.style.background="#fff"}>
+                    退出登录
+                  </button>
+                </div>
+              )}
+
+              {/* ── Compare tab ── */}
+              {rightPanel === "compare" && (
+                <>
+                  {compareList.length < 2 ? (
+                    <div style={{ textAlign: "center", padding: "80px 0", color: "#94a3b8" }}>
+                      <div style={{ fontSize: 40, marginBottom: 16 }}>⚖️</div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>请从左侧选择 2~4 只基金进行对比</div>
+                      <div style={{ fontSize: 13 }}>展开基金 → 点击「加入对比」</div>
+                    </div>
+                  ) : (() => {
+                    const funds = compareList.map(c => allFlatFunds.find(f => f.code === c)).filter(Boolean);
+                    const METRICS = [
+                      { key: "ytd_return",  label: "今年以来收益", fmt: v => v != null ? `+${v.toFixed(2)}%` : "—", higher: true },
+                      { key: "fee_rate",    label: "年化费率",     fmt: v => v != null ? `${v}%`            : "—", higher: false },
+                      { key: "track_error", label: "跟踪误差",     fmt: v => v != null ? `${v}%`            : "—", higher: false },
+                      { key: "scale",       label: "基金规模",     fmt: v => v != null ? `${v} 亿`          : "—", higher: true  },
+                      { key: "daily_limit", label: "每日限额",     fmt: v => v || "—",                              higher: null  },
+                      { key: "buy_status",  label: "申购状态",     fmt: v => v === "open" ? "开放申购" : "暂停申购", higher: null  },
+                    ];
+                    // best value per metric
+                    const best = {};
+                    METRICS.forEach(m => {
+                      if (m.higher == null) return;
+                      const vals = funds.map(f => f[m.key]).filter(v => v != null);
+                      if (!vals.length) return;
+                      best[m.key] = m.higher ? Math.max(...vals) : Math.min(...vals);
+                    });
+                    return (
+                      <div>
+                        {/* Score cards */}
+                        <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
+                          {funds.map(f => {
+                            const s = compareScores[f.code] ?? 50;
+                            return (
+                              <div key={f.code} style={{ flex: "1 1 140px", borderRadius: 14, border: `1.5px solid ${scoreColor(s)}33`, background: scoreBg(s), padding: "16px 18px", textAlign: "center" }}>
+                                <div style={{ fontSize: 28, fontWeight: 900, color: scoreColor(s), lineHeight: 1 }}>{s}</div>
+                                <div style={{ fontSize: 10, color: scoreColor(s), fontWeight: 700, marginTop: 2, marginBottom: 8 }}>综合评分</div>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b", lineHeight: 1.4 }}>{f.name}</div>
+                                <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "monospace", marginTop: 3 }}>{f.code}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* Comparison table */}
+                        <div style={{ borderRadius: 14, border: "1px solid #f1f5f9", overflow: "hidden", background: "#fff" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                            <thead>
+                              <tr style={{ background: "#f8fafc" }}>
+                                <th style={{ padding: "11px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: 0.6, textTransform: "uppercase", width: 110 }}>指标</th>
+                                {funds.map(f => <th key={f.code} style={{ padding: "11px 12px", fontSize: 12, fontWeight: 700, color: "#1e293b", textAlign: "center", borderLeft: "1px solid #f1f5f9", minWidth: 110 }}>{f.code}</th>)}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {METRICS.map((m, i) => (
+                                <tr key={m.key} style={{ borderTop: "1px solid #f1f5f9", background: i % 2 ? "#fafafa" : "#fff" }}>
+                                  <td style={{ padding: "12px 16px", fontSize: 12, color: "#64748b", fontWeight: 500 }}>{m.label}</td>
+                                  {funds.map(f => {
+                                    const v = f[m.key];
+                                    const isBest = m.higher != null && v != null && v === best[m.key];
+                                    return (
+                                      <td key={f.code} style={{ padding: "12px 12px", textAlign: "center", borderLeft: "1px solid #f1f5f9" }}>
+                                        <span style={{ fontSize: 13, fontWeight: isBest ? 700 : 500, color: m.key === "buy_status" ? (v === "open" ? "#16a34a" : "#94a3b8") : (isBest ? scoreColor(80) : "#1e293b"), background: isBest ? scoreBg(80) : "transparent", padding: isBest ? "2px 8px" : "0", borderRadius: 6 }}>
+                                          {m.fmt(v)}
+                                        </span>
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8" }}>※ 综合评分基于今年收益（40%）、费率（30%）、跟踪误差（20%）、规模（10%）加权计算，绿色高亮为各项最优值。</div>
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── 修改密码弹窗 ── */}
+      {showChangePwd && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 600, background: "rgba(15,23,42,0.5)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => e.target === e.currentTarget && setShowChangePwd(false)}>
+          <div style={{ background: "#fff", borderRadius: 20, padding: "32px", width: "min(420px,90%)", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", position: "relative" }}>
+            <button onClick={() => setShowChangePwd(false)} style={{ position: "absolute", top: 14, right: 16, background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8", lineHeight: 1 }}>×</button>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#1e293b", marginBottom: 20 }}>修改密码</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {[
+                { label: "当前密码",   key: "old",  showKey: "showOld", placeholder: "请输入当前密码" },
+                { label: "新密码",     key: "new1", showKey: "showNew", placeholder: "至少8位，含大小写字母和数字" },
+                { label: "确认新密码", key: "new2", showKey: "showNew", placeholder: "再次输入新密码" },
+              ].map(({ label, key, showKey, placeholder }) => (
+                <div key={key}>
+                  <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 }}>{label}</div>
+                  <div style={{ position: "relative" }}>
+                    <input
+                      type={pwdForm[showKey] ? "text" : "password"}
+                      value={pwdForm[key]}
+                      onChange={e => { setPwdForm(p => ({ ...p, [key]: e.target.value })); setPwdMsg(null); }}
+                      placeholder={placeholder}
+                      style={{ width: "100%", padding: "10px 40px 10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+                    />
+                    <button type="button" onClick={() => setPwdForm(p => ({ ...p, [showKey]: !p[showKey] }))}
+                      style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0, display: "flex", alignItems: "center" }}>
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        {pwdForm[showKey] ? (<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>) : (<><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>)}
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {pwdMsg && (
+                <div style={{ fontSize: 13, padding: "9px 13px", borderRadius: 8, background: pwdMsg.ok ? "#f0fdf4" : "#fef2f2", color: pwdMsg.ok ? "#16a34a" : "#ef4444", border: `1px solid ${pwdMsg.ok ? "#bbf7d0" : "#fecaca"}` }}>
+                  {pwdMsg.ok ? "✓ " : "✕ "}{pwdMsg.text}
+                </div>
+              )}
+              <button onClick={handleChangePwd} disabled={pwdLoading}
+                style={{ padding: "12px", borderRadius: 12, border: "none", background: pwdLoading ? "#a5b4fc" : "linear-gradient(135deg,#4f46e5,#7c3aed)", color: "#fff", fontWeight: 700, fontSize: 15, cursor: pwdLoading ? "default" : "pointer", fontFamily: "inherit", marginTop: 2 }}>
+                {pwdLoading ? "处理中…" : "确认修改"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   if(window.location.pathname==="/admin") return <AdminPage/>;
@@ -4079,6 +4632,10 @@ export default function App() {
     return Date.now()-parseInt(last)>3*60*60*1000;
   });
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
+  const [user,setUser]=useState(()=>{try{const t=localStorage.getItem("wise_token"),e=localStorage.getItem("wise_email");return t&&e?{token:t,email:e}:null;}catch{return null;}});
+  const [showAuth,setShowAuth]=useState(false);
+  const [authRequired,setAuthRequired]=useState(false);
+  const [showUserCenter,setShowUserCenter]=useState(false);
   const [lastUpdate,setLastUpdate]=useState(null);
   const [dataLoading,setDataLoading]=useState(false);
   const [usdcny,setUsdcny]=useState(null);
@@ -4230,7 +4787,13 @@ export default function App() {
       return sortDir==="asc"?String(av||"").localeCompare(String(bv||"")):String(bv||"").localeCompare(String(av||""));
     });
   };
+  const _PROTECTED_TABS = ["nasdaq","sp500","etf","active","watchlist","lazy","qdii","export"];
   const switchTab = id=>{
+    if(_PROTECTED_TABS.includes(id) && !user){
+      setAuthRequired(true);
+      setShowAuth(true);
+      return;
+    }
     setActiveTab(id);
     setSortKey(null);setSearch("");setStatusFilter("all");
     window.history.pushState(null, "", id === "overview" ? "/" : `/${id}`);
@@ -4426,9 +4989,25 @@ export default function App() {
           ? <TelegramGroupChatModal onClose={()=>setShowBriefing(false)}/>
           : <GroupChatModal onClose={()=>setShowBriefing(false)}/>
       )}
+      {showAuth&&(
+        <AuthModal
+          authRequired={authRequired}
+          onClose={()=>{setShowAuth(false);setAuthRequired(false);}}
+          onLogin={u=>{setUser(u);setShowAuth(false);setAuthRequired(false);}}
+        />
+      )}
+      {showUserCenter&&user&&(
+        <UserCenter
+          user={user}
+          onClose={()=>setShowUserCenter(false)}
+          onLogout={()=>{localStorage.removeItem("wise_token");localStorage.removeItem("wise_email");setUser(null);setShowUserCenter(false);}}
+          favorites={favorites}
+          allFunds={{nasdaq:nasdaqM,sp500:sp500M,active:activeM,etfs:etfsM}}
+        />
+      )}
 
-      {/* ── 全站升级弹窗（不可关闭，导航栏可用）── */}
-      <div style={{
+      {/* ── 全站升级弹窗（本地调试已注释，线上保留）── */}
+      {/* <div style={{
         position:"fixed", left:0, right:0, top:72, bottom:0, zIndex:99,
         background:"rgba(0,0,0,0.55)", backdropFilter:"blur(8px)",
         display:"flex", alignItems:"center", justifyContent:"center",
@@ -4446,7 +5025,7 @@ export default function App() {
             更多咨询请点击右上角加入群聊
           </div>
         </div>
-      </div>
+      </div> */}
 
       {/* ── Header ── */}
       <header style={{position:"sticky",top:0,zIndex:100,padding:isMobile?"8px 12px":"10px 24px",pointerEvents:"none"}}>
@@ -4505,19 +5084,15 @@ export default function App() {
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
               <span style={{fontSize:13}}>💬</span> 加入群聊
             </button>}
-            {!isMobile&&<a href="https://x.com/WiseInvest513" target="_blank" rel="noopener noreferrer"
-              style={{display:"flex",alignItems:"center",justifyContent:"center",width:28,height:28,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,textDecoration:"none",transition:"all 0.18s",flexShrink:0}}
-              onMouseEnter={e=>{e.currentTarget.style.background="#000";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#000";}}
-              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
-            </a>}
-            {!isMobile&&<button onClick={()=>setShowWechat(true)}
-              style={{display:"flex",alignItems:"center",justifyContent:"center",width:28,height:28,borderRadius:8,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,cursor:"pointer",transition:"all 0.18s",flexShrink:0}}
-              onMouseEnter={e=>{e.currentTarget.style.background="#07c160";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#07c160";}}
-              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-7.062-6.122zm-3.74 2.632c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983zm5.08 0c.535 0 .969.44.969.983a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.543.434-.983.97-.983z"/></svg>
-            </button>}
-            {!isMobile&&lastUpdate&&<span style={{fontSize:11,color:C.textDim,whiteSpace:"nowrap",borderLeft:`1px solid ${C.borderLight}`,paddingLeft:8,marginLeft:2}}>更新于 {lastUpdate}</span>}
+            <button onClick={()=>user?setShowUserCenter(true):(setAuthRequired(false),setShowAuth(true))}
+              style={{display:"flex",alignItems:"center",padding:0,border:`2px solid ${user?"#a5b4fc":C.borderLight}`,borderRadius:"50%",background:"none",cursor:"pointer",transition:"border-color 0.18s",width:32,height:32,overflow:"hidden",flexShrink:0}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=user?"#6366f1":"#94a3b8";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=user?"#a5b4fc":C.borderLight;}}>
+              {user
+                ? <img src={`https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`} alt="avatar" style={{width:"100%",height:"100%",display:"block"}} />
+                : <span style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+              }
+            </button>
             <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn" aria-label="菜单"
               style={{display:"none",flexDirection:"column",gap:5,background:"none",border:"none",cursor:"pointer",padding:6}}>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(45deg) translateY(7px)":"none"}}/>

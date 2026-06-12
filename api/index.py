@@ -15,6 +15,7 @@ Wise-ETF Serverless API  v4.0
 """
 
 import json, os, re, logging, time, xml.etree.ElementTree as ET
+import hmac, hashlib, secrets, base64
 
 # 加载 .env.local（本地开发环境）
 def _load_env_local():
@@ -31,7 +32,7 @@ def _load_env_local():
 _load_env_local()
 import urllib3; urllib3.disable_warnings()
 from concurrent.futures import ThreadPoolExecutor, wait
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, List
 
@@ -380,73 +381,18 @@ def _yf_chart(symbol: str, interval: str = "1d", range_: str = "5d") -> Optional
     return None
 
 
-def _yf_quote_summary(symbol: str) -> Optional[dict]:
-    """
-    Yahoo Finance v10 quoteSummary price 模块。
-    直接返回 preMarketChangePercent / postMarketChangePercent，
-    比从 chart 推算更可靠（Yahoo 经常在 chart meta 里省略 preMarketPrice）。
-    返回 {pre_pct, post_pct, regular_pct, pre_price, post_price, regular_price, prev_close}，
-    均可为 None。
-    """
-    crumb, cookies = _yf_get_crumb()
-    params = {"modules": "price", "formatted": "false"}
-    if crumb:
-        params["crumb"] = crumb
-    try:
-        resp = _get(
-            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
-            params=params,
-            headers=YF_HEADERS,
-            cookies=cookies or {},
-            timeout=(4, 10),
-        )
-        if not (resp and resp.ok):
-            return None
-        price_data = resp.json()["quoteSummary"]["result"][0]["price"]
-
-        def _raw(field) -> Optional[float]:
-            v = price_data.get(field)
-            if isinstance(v, dict):
-                v = v.get("raw")
-            try:   return float(v) if v is not None else None
-            except (ValueError, TypeError): return None
-
-        def _as_pct(raw_val) -> Optional[float]:
-            """quoteSummary 的 changePercent 字段存的是小数（0.024 = 2.4%），换算为 %。"""
-            return round(raw_val * 100, 2) if raw_val is not None else None
-
-        return {
-            "pre_pct":       _as_pct(_raw("preMarketChangePercent")),
-            "post_pct":      _as_pct(_raw("postMarketChangePercent")),
-            "regular_pct":   _as_pct(_raw("regularMarketChangePercent")),
-            "pre_price":     _raw("preMarketPrice"),
-            "post_price":    _raw("postMarketPrice"),
-            "regular_price": _raw("regularMarketPrice"),
-            "prev_close":    _raw("regularMarketPreviousClose"),
-        }
-    except Exception as e:
-        logger.debug(f"[yf_quote_summary] {symbol}: {e}")
-    return None
-
 
 def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
     """
-    Yahoo Finance v7 批量报价 — 一次请求拿所有股票盘前/盘中/盘后涨跌幅和价格。
+    Yahoo Finance v7 批量报价 — 一次请求拿所有股票盘前/盘中/盘后涨跌幅。
     preMarketChangePercent / regularMarketChangePercent / postMarketChangePercent
-    均为现成字段，直接用，不需要自己用 closes[-2] 手算，不会出现 KLAC +1029% 这类问题。
-
-    ⚠️  未接入主流程原因：Yahoo v7 /quote 单次请求 symbol 数量有上限（约 10-20 个），
-        QDII 美股持仓可达 100+ symbols，需分批切割后合并，改造成本较高。
-        目前主流程仍走 fetch_stock_price_fields（v8 chart 逐只拉取，有四层容灾）。
-        若未来要接入，需在调用侧将 symbols 按 ≤15 个一组分批，再合并结果。
-    返回 {symbol: {pre_pct, regular_pct, post_pct, price, close_price}}
+    均为现成字段，直接用，不需要手算。
+    返回 {symbol: {pre_pct, regular_pct, post_pct}}
     """
     if not symbols:
         return {}
     crumb, cookies = _yf_get_crumb()
-    fields = ("regularMarketPrice,preMarketPrice,postMarketPrice,"
-              "preMarketChangePercent,postMarketChangePercent,"
-              "regularMarketChangePercent,regularMarketPreviousClose")
+    fields = "preMarketChangePercent,postMarketChangePercent,regularMarketChangePercent"
     params = {"symbols": ",".join(symbols), "fields": fields, "formatted": "false"}
     if crumb:
         params["crumb"] = crumb
@@ -463,7 +409,6 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
             logger.warning(f"[yf_batch] HTTP {resp.status_code if resp else 'N/A'}")
             return {}
         results = resp.json().get("quoteResponse", {}).get("result", [])
-        s = _current_session()
         out: Dict[str, dict] = {}
         for q in results:
             sym = q.get("symbol", "")
@@ -477,21 +422,7 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
             pre_pct  = round(_f("preMarketChangePercent"),  2) if _f("preMarketChangePercent")  is not None else None
             post_pct = round(_f("postMarketChangePercent"), 2) if _f("postMarketChangePercent") is not None else None
             reg_pct  = round(_f("regularMarketChangePercent"), 2) if _f("regularMarketChangePercent") is not None else None
-            reg_p    = _f("regularMarketPrice")
-            pre_p    = _f("preMarketPrice")
-            post_p   = _f("postMarketPrice")
-            prev_close = _f("regularMarketPreviousClose")
-            close_price = round(prev_close, 2) if prev_close else (round(reg_p, 2) if reg_p else None)
-            if s == "pre_market":
-                price = round(pre_p, 2) if pre_p else close_price
-            elif s == "post_market":
-                price = round(post_p or reg_p, 2) if (post_p or reg_p) else close_price
-            elif s == "us_open":
-                price = round(reg_p, 2) if reg_p else close_price
-            else:
-                price = close_price
-            out[sym] = {"pre_pct": pre_pct, "regular_pct": reg_pct, "post_pct": post_pct,
-                        "price": price, "close_price": close_price}
+            out[sym] = {"pre_pct": pre_pct, "regular_pct": reg_pct, "post_pct": post_pct}
         logger.info(f"[yf_batch] {len(out)}/{len(symbols)} symbols ok")
         return out
     except Exception as e:
@@ -501,20 +432,8 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
 
 def _nasdaq_fetch(symbol: str) -> dict:
     """
-    Nasdaq.com API：返回 {pct, price, prev_close}，均可缺失。
-
-    数据结构（2026-05-20 确认）：
-      primaryData   — 当前活跃时段数据
-                      盘前/盘后：当前盘前/盘后最新成交价 + 相对昨收的涨跌幅%（直接字段，非计算）
-                      盘中：实时成交价 + 当日涨跌幅%
-      secondaryData — 上一个常规收盘数据（固定不变）
-                      lastSalePrice = 昨日美股4PM ET收盘价
-                      percentageChange = 昨日常规收盘涨跌幅
-
-    字段说明：
-      pct        — primaryData.percentageChange：盘前/盘后/盘中涨跌幅（直接字段，Nasdaq给的）
-      price      — primaryData.lastSalePrice：当前时段最新价（盘前/盘后为动态盘前价）
-      prev_close — secondaryData.lastSalePrice：昨日4PM ET固定收盘价（不随盘前/盘后变化）
+    Nasdaq.com API：返回 {pct}，primaryData.percentageChange 直接字段（相对昨收的涨跌幅%）。
+    盘前/盘后/盘中均有效，不需要手算。
     """
     try:
         url  = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
@@ -525,50 +444,16 @@ def _nasdaq_fetch(symbol: str) -> dict:
         }, timeout=(4, 10))
         if not (resp and resp.ok):
             return {}
-        data      = resp.json().get("data") or {}
-        primary   = data.get("primaryData")   or {}
-        secondary = data.get("secondaryData") or {}
-        result: dict = {}
-
-        def _parse_pct(s: str) -> Optional[float]:
-            s = s.replace("%", "").replace("+", "").strip()
-            if s and s not in ("--", "N/A"):
-                try: return round(float(s), 2)
-                except (ValueError, TypeError): pass
-            return None
-
-        def _parse_price(s: str) -> Optional[float]:
-            s = s.replace("$", "").replace(",", "").strip()
-            if s and s not in ("--", "N/A"):
-                try: return round(float(s), 2)
-                except (ValueError, TypeError): pass
-            return None
-
-        # 盘前/盘后涨跌幅：primaryData 直接给的字段，相对昨收的变动
-        pct = _parse_pct(primary.get("percentageChange", ""))
-        if pct is not None:
-            result["pct"] = pct
-
-        # 当前时段最新价（盘前/盘后为动态价，仅供参考，不作为"收盘价"展示）
-        price = _parse_price(primary.get("lastSalePrice", ""))
-        if price is not None:
-            result["price"] = price
-
-        # 昨日4PM ET固定收盘价：secondaryData.lastSalePrice
-        # 盘前/盘后/A股时段"收盘价"列展示此值，固定不随盘前盘后变动
-        prev_close = _parse_price(secondary.get("lastSalePrice", ""))
-        if prev_close is not None:
-            result["prev_close"] = prev_close
-
-        return result
+        primary = (resp.json().get("data") or {}).get("primaryData") or {}
+        raw = primary.get("percentageChange", "").replace("%", "").replace("+", "").strip()
+        if raw and raw not in ("--", "N/A"):
+            try:
+                return {"pct": round(float(raw), 2)}
+            except (ValueError, TypeError):
+                pass
     except Exception as e:
         logger.debug(f"[nasdaq_api] {symbol}: {e}")
     return {}
-
-
-def _nasdaq_change(symbol: str) -> Optional[float]:
-    """向后兼容包装，返回涨跌幅%。"""
-    return _nasdaq_fetch(symbol).get("pct")
 
 # ─── HTTP 工具 ─────────────────────────────────────────────────────────────────
 
@@ -737,7 +622,7 @@ def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
     """
     新浪财经批量行情 — A股 + 港股（一次请求）。
     输入 Yahoo Finance 格式的 symbol（如 600519.SS / 000001.SZ / 0700.HK）。
-    返回 {yahoo_symbol: {pre_pct, regular_pct, post_pct, price, close_price}}。
+    返回 {yahoo_symbol: {regular_pct}}。
 
     Sina 字段（逗号分隔）：
       [0]名称  [1]今开  [2]昨收  [3]当前价  [4]最高  [5]最低  [9]成交额
@@ -797,87 +682,95 @@ def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
             if prev_close <= 0 or curr_price <= 0:
                 continue
             change_pct = round((curr_price - prev_close) / prev_close * 100, 2)
-            result[yahoo_sym] = {
-                "pre_pct":     change_pct,
-                "regular_pct": change_pct,
-                "post_pct":    change_pct,
-                "price":       curr_price,
-                "close_price": curr_price,
-            }
+            result[yahoo_sym] = {"regular_pct": change_pct}
         except (ValueError, IndexError):
             continue
     logger.info(f"[sina_stock] got {len(result)}/{len(sina_to_yahoo)} symbols")
     return result
 
 
-def _stooq_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
+def _twse_batch(tw_symbols: List[str]) -> Dict[str, float]:
     """
-    Stooq 批量行情 — 美股（us_open 盘中）。
-    一次 HTTP 请求拿所有股票当前价 + 前收盘价，自己算 regular_pct。
-    输入 Yahoo Finance 格式的 symbol（如 AAPL / NVDA / TSM）。
-    返回 {yahoo_symbol: {pre_pct, regular_pct, post_pct, price, close_price}}。
-    注意：stooq 只有盘中数据，pre_pct/post_pct 填 None（由 Nasdaq 补充）。
+    台湾证交所 (TWSE) 批量行情，返回 {symbol.TW: change_pct}。
+    ex_ch 支持管道符批量，如 tse_2330.tw|tse_2454.tw。
     """
-    if not yahoo_symbols:
+    if not tw_symbols:
         return {}
-
-    # stooq symbol 格式：小写 + .us，多个用 + 连接（requests 会编码 +，必须手拼 URL）
-    def _to_stooq(sym: str) -> Optional[str]:
-        # 只处理纯美股（无后缀或 .US），跳过 .HK/.SS/.SZ 等
-        if "." not in sym:
-            return sym.lower() + ".us"
-        return None
-
-    stooq_to_yahoo: Dict[str, str] = {}
-    for sym in yahoo_symbols:
-        s = _to_stooq(sym)
-        if s:
-            stooq_to_yahoo[s] = sym
-
-    if not stooq_to_yahoo:
-        return {}
-
-    # 手动拼 URL 避免 + 被编码为 %2B
-    symbols_str = "+".join(stooq_to_yahoo.keys())
-    url = f"https://stooq.com/q/l/?s={symbols_str}&f=sd2t2cp"
+    codes = [s[:-3] for s in tw_symbols if s.endswith(".TW")]
+    ex_ch = "|".join(f"tse_{c}.tw" for c in codes)
     try:
-        resp = _get(url, timeout=(5, 12))
-        if not (resp and resp.ok):
-            logger.warning(f"[stooq] HTTP {resp.status_code if resp else 'N/A'}")
+        r = _get(
+            "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+            params={"ex_ch": ex_ch, "json": "1", "delay": "0"},
+            timeout=(3, 8),
+        )
+        if not (r and r.ok):
             return {}
-        text = resp.text
+        items = r.json().get("msgArray", [])
+        out: Dict[str, float] = {}
+        for item in items:
+            code = item.get("c", "")
+            z_raw = item.get("z") or item.get("l")   # 当前成交价 / 最近收盘价
+            y_raw = item.get("y")                     # 昨收
+            try:
+                z_f, y_f = float(z_raw), float(y_raw)
+                if y_f > 0:
+                    out[f"{code}.TW"] = round((z_f - y_f) / y_f * 100, 2)
+            except (TypeError, ValueError):
+                continue
+        logger.info(f"[twse] got {len(out)}/{len(codes)} symbols")
+        return out
     except Exception as e:
-        logger.warning(f"[stooq] batch failed: {e}")
+        logger.warning(f"[twse] batch failed: {e}")
         return {}
 
-    result: Dict[str, dict] = {}
-    for line in text.strip().split("\r\n"):
-        if not line or "N/D" in line:
-            continue
-        parts = line.split(",")
-        if len(parts) < 5:
-            continue
-        stooq_sym = parts[0].lower()
-        yahoo_sym = stooq_to_yahoo.get(stooq_sym)
-        if not yahoo_sym:
-            continue
-        try:
-            curr  = float(parts[3])
-            prev  = float(parts[4])
-            if prev <= 0 or curr <= 0:
-                continue
-            pct = round((curr - prev) / prev * 100, 2)
-            result[yahoo_sym] = {
-                "pre_pct":     None,
-                "regular_pct": pct,
-                "post_pct":    None,
-                "price":       round(curr, 4),
-                "close_price": round(prev, 4),
-            }
-        except (ValueError, IndexError):
-            continue
 
-    logger.info(f"[stooq] got {len(result)}/{len(stooq_to_yahoo)} US symbols")
+def _naver_kr_batch(kr_symbols: List[str]) -> Dict[str, float]:
+    """
+    Naver Finance 韩股行情，返回 {symbol.KS: change_pct}。
+    """
+    if not kr_symbols:
+        return {}
+    codes = [s[:-3] for s in kr_symbols if s.endswith(".KS")]
+    out: Dict[str, float] = {}
+    for code in codes:
+        try:
+            r = _get(
+                f"https://polling.finance.naver.com/api/realtime/domestic/stock/{code}",
+                headers={"Referer": "https://finance.naver.com/"},
+                timeout=(3, 6),
+            )
+            if not (r and r.ok):
+                continue
+            datas = r.json().get("datas", [])
+            if not datas:
+                continue
+            pct_raw = datas[0].get("fluctuationsRatioRaw")
+            if pct_raw is not None:
+                out[f"{code}.KS"] = float(pct_raw)
+        except Exception as e:
+            logger.warning(f"[naver_kr] {code}: {e}")
+    logger.info(f"[naver_kr] got {len(out)}/{len(codes)} symbols")
+    return out
+
+
+def _fetch_intl_stocks(symbols: List[str]) -> Dict[str, float]:
+    """台股(.TW)→TWSE，韩股(.KS)→Naver，并发执行，返回 {sym: pct}。"""
+    tw = [s for s in symbols if s.endswith(".TW")]
+    kr = [s for s in symbols if s.endswith(".KS")]
+    result: Dict[str, float] = {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    futs = {}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        if tw:
+            futs[ex.submit(_twse_batch, tw)] = "tw"
+        if kr:
+            futs[ex.submit(_naver_kr_batch, kr)] = "kr"
+        for fut in as_completed(futs):
+            try:
+                result.update(fut.result())
+            except Exception as e:
+                logger.warning(f"[fetch_intl] {futs[fut]} failed: {e}")
     return result
 
 
@@ -1838,7 +1731,7 @@ def cron_qdii():
     logger.info(f"[cron/qdii] pre-warming started, session={session}")
 
     # 清旧缓存（这里主动删是安全的，因为 cron 在窗口开始前5分钟跑，此时用户量极少）
-    _cache_delete("qdii_valuations")
+    _cache_delete("qdii:response")
 
     # 复用主端点逻辑：force=False light=False + 无缓存 → 走完整计算流程
     dummy_resp = Response()
@@ -1852,62 +1745,283 @@ def cron_qdii():
         return {"ok": False, "ts": datetime.now().isoformat(), "session": session, "error": str(e)}
 
 
+# ─── 用户认证 ──────────────────────────────────────────────────────────────────
+
+_JWT_SECRET = os.environ.get("JWT_SECRET", "wise-etf-jwt-secret-2026-xk9p")
+
+def _hash_password(password: str) -> str:
+    """PBKDF2-SHA256 加密密码，返回 salt:hash"""
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 260000)
+    return f"{salt}:{h.hex()}"
+
+def _verify_password(password: str, stored: str) -> bool:
+    """验证密码"""
+    try:
+        salt, hashed = stored.split(":", 1)
+        h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 260000)
+        return hmac.compare_digest(h.hex(), hashed)
+    except Exception:
+        return False
+
+def _make_token(email: str) -> str:
+    """生成 30 天有效的 HMAC-SHA256 token"""
+    exp = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = f"{email}|{exp}"
+    sig = hmac.new(_JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
+
+def _verify_token(token: str) -> Optional[str]:
+    """验证 token，返回 email 或 None"""
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode() + b"==").decode()
+        *parts, sig = decoded.split("|")
+        payload = "|".join(parts)
+        expected = hmac.new(_JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        email, exp_str = payload.rsplit("|", 1)
+        if datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ") < datetime.utcnow():
+            return None
+        return email
+    except Exception:
+        return None
+
+def _user_get(email: str) -> Optional[dict]:
+    """从 Redis 读取用户"""
+    return _cache_get(f"wise_user:{email.lower()}")
+
+def _user_save(email: str, password_hash: str) -> bool:
+    """永久存储用户到 Redis"""
+    r = _get_redis()
+    if not r:
+        return False
+    try:
+        r.set(f"wise_user:{email.lower()}", json.dumps({
+            "email": email.lower(),
+            "password": password_hash,
+            "created_at": datetime.utcnow().isoformat(),
+        }))
+        return True
+    except Exception:
+        return False
+
+
+from fastapi import Request as _Request, Header as _Header
+
+@app.post("/api/auth/register")
+async def auth_register(request: _Request):
+    """用户注册：邮箱 + 密码（加密存 Redis）"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "msg": "请求格式错误"}
+    email    = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+    if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
+        return {"ok": False, "msg": "邮箱格式不正确"}
+    if len(password) < 8:
+        return {"ok": False, "msg": "密码至少8位"}
+    if not any(c.isupper() for c in password):
+        return {"ok": False, "msg": "密码需包含大写字母"}
+    if not any(c.islower() for c in password):
+        return {"ok": False, "msg": "密码需包含小写字母"}
+    if not any(c.isdigit() for c in password):
+        return {"ok": False, "msg": "密码需包含数字"}
+    if _user_get(email):
+        return {"ok": False, "msg": "该邮箱已注册"}
+    if not _user_save(email, _hash_password(password)):
+        return {"ok": False, "msg": "注册失败，请稍后重试"}
+    token = _make_token(email)
+    logger.info(f"[auth] register: {email}")
+    return {"ok": True, "token": token, "email": email}
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: _Request):
+    """用户登录"""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "msg": "请求格式错误"}
+    email    = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+    user = _user_get(email)
+    if not user or not _verify_password(password, user.get("password", "")):
+        return {"ok": False, "msg": "邮箱或密码错误"}
+    token = _make_token(email)
+    logger.info(f"[auth] login: {email}")
+    return {"ok": True, "token": token, "email": email}
+
+
+@app.get("/api/auth/me")
+def auth_me(authorization: str = _Header(None)):
+    """验证 token，返回用户信息"""
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"ok": False, "msg": "未登录"}
+    email = _verify_token(authorization[7:])
+    if not email:
+        return {"ok": False, "msg": "登录已过期，请重新登录"}
+    return {"ok": True, "email": email}
+
+
+@app.post("/api/auth/change_password")
+async def auth_change_password(request: _Request, authorization: str = _Header(None)):
+    """修改密码：验证旧密码后更新"""
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"ok": False, "msg": "未登录"}
+    email = _verify_token(authorization[7:])
+    if not email:
+        return {"ok": False, "msg": "登录已过期，请重新登录"}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "msg": "请求格式错误"}
+    old_password = body.get("old_password", "")
+    new_password = body.get("new_password", "")
+    user = _user_get(email)
+    if not user or not _verify_password(old_password, user.get("password", "")):
+        return {"ok": False, "msg": "当前密码不正确"}
+    if len(new_password) < 8:
+        return {"ok": False, "msg": "新密码至少8位"}
+    if not any(c.isupper() for c in new_password):
+        return {"ok": False, "msg": "新密码需包含大写字母"}
+    if not any(c.islower() for c in new_password):
+        return {"ok": False, "msg": "新密码需包含小写字母"}
+    if not any(c.isdigit() for c in new_password):
+        return {"ok": False, "msg": "新密码需包含数字"}
+    if old_password == new_password:
+        return {"ok": False, "msg": "新密码不能与当前密码相同"}
+    if not _user_save(email, _hash_password(new_password)):
+        return {"ok": False, "msg": "修改失败，请稍后重试"}
+    logger.info(f"[auth] change_password: {email}")
+    return {"ok": True, "msg": "密码修改成功"}
+
+
 @app.get("/api/cron/post_snap")
 def cron_post_snap():
     """
-    手动/定时触发：从 Yahoo v7 拉取所有 QDII 美股持仓的盘后涨跌幅，
-    写入 stock_last_post_*（72h TTL），供 A股时段盘后估值使用。
-    可在任意时段调用，postMarketChangePercent 是直接字段，A股时段也能获取。
+    手动/定时触发：从 Yahoo v7 拉取所有 QDII 美股持仓的盘后/收盘涨跌幅，
+    写入新缓存键体系（供 a_share / weekend / post_market 时段使用）：
+      qdii:chg:post:{sym}  盘后涨跌幅，TTL 28h
+      qdii:chg:close:{sym} 收盘涨跌幅，TTL 72h（兼顾周末到下周A股）
+      qdii:chg:stale:{sym} 7日兜底
+    可在任意时段调用（postMarketChangePercent / regularMarketChangePercent 始终可取）。
     """
-    # 收集所有 US symbols
-    _non_us = (".HK", ".SS", ".SZ", ".TW", ".KS", ".T", ".L", ".PA", ".DE")
-    all_syms: set = set()
+    # 收集所有 symbol，按数据源分组
+    yf_syms: set = set()   # 美股 + KS/TW 等 Yahoo 支持的国际市场
+    hk_a_syms: set = set() # 港股/A股（也走 Yahoo，Sina 做实时兜底）
     for code in QDII_CODES:
         master = _C_TO_A_HOLDINGS_MAP.get(code, code)
         holdings = fetch_qdii_holdings(master) or []
         for h in holdings:
             sym = h.get("symbol", "")
-            if sym and not any(sym.endswith(s) for s in _non_us):
-                all_syms.add(sym)
-    us_symbols = list(all_syms)
-    if not us_symbols:
-        return {"ok": False, "msg": "no US symbols found"}
+            if not sym:
+                continue
+            if any(sym.endswith(s) for s in _QDII_NON_US_SUFFIX):
+                hk_a_syms.add(sym)
+            else:
+                yf_syms.add(sym)
+    us_symbols = list(yf_syms)
+    if not us_symbols and not hk_a_syms:
+        return {"ok": False, "msg": "no symbols found"}
 
-    # 分批调 Yahoo v7（每批 ≤15 个）
+    # 层1：Yahoo v7 批量（每批 ≤15 个），可同时获取 post_pct + regular_pct
     batch_size = 15
     batches = [us_symbols[i:i+batch_size] for i in range(0, len(us_symbols), batch_size)]
-    results: dict = {}
+    yf_results: dict = {}
     for batch in batches:
         try:
             data = _yf_batch_quote(batch)
-            results.update(data)
+            yf_results.update(data)
         except Exception as e:
-            logger.warning(f"[post_snap] batch failed: {e}")
+            logger.warning(f"[post_snap] yf_batch failed: {e}")
+    logger.info(f"[post_snap] yf_batch got {len(yf_results)}/{len(us_symbols)} symbols")
 
-    # 写入 stock_last_post_*
+    # 层2：Yahoo 未覆盖的纯美股用 Nasdaq 并发补充（台/韩股单独处理，不走 Nasdaq）
+    pure_us = [s for s in us_symbols if not any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)]
+    yf_missing = [s for s in pure_us if s not in yf_results]
+    nasdaq_results: dict = {}
+    if yf_missing:
+        logger.info(f"[post_snap] fallback to nasdaq for {len(yf_missing)} symbols")
+        nasdaq_results = _fetch_chg_from_nasdaq(yf_missing, timeout=60)
+
+    # 层3：港股/A股 — Yahoo 批量（regularMarketChangePercent = 当日收盘涨跌幅）
+    hk_a_list = list(hk_a_syms)
+    hk_a_results: dict = {}
+    if hk_a_list:
+        logger.info(f"[post_snap] fetching {len(hk_a_list)} HK/A-share symbols via Yahoo")
+        hk_batches = [hk_a_list[i:i+batch_size] for i in range(0, len(hk_a_list), batch_size)]
+        for batch in hk_batches:
+            try:
+                data = _yf_batch_quote(batch)
+                hk_a_results.update(data)
+            except Exception as e:
+                logger.warning(f"[post_snap] yf_batch HK/A failed: {e}")
+        logger.info(f"[post_snap] HK/A Yahoo got {len(hk_a_results)}/{len(hk_a_list)} symbols")
+
+    # 写入缓存键
     written = 0
+    missing_post = []
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    for sym, pf in results.items():
-        post_pct   = pf.get("post_pct")
-        reg_pct    = pf.get("regular_pct")
-        snap_pct   = post_pct if post_pct is not None else reg_pct
-        if snap_pct is not None:
-            _cache_set(f"stock_last_post_{sym}", {
-                "pct":      snap_pct,
-                "post_pct": post_pct,
-            }, 72 * 3600)
-            written += 1
 
-    # 清估值缓存，让下次请求重新计算
-    _cache_delete_pattern("qdii_valuation_*")
+    # Yahoo 数据（美股 + KS/TW 等国际市场）
+    for sym, pf in yf_results.items():
+        post_pct  = pf.get("post_pct")
+        reg_pct   = pf.get("regular_pct")
+        close_pct = reg_pct if reg_pct is not None else post_pct
+        if close_pct is None and post_pct is None:
+            continue
+        if post_pct is not None:
+            _cache_set(f"qdii:chg:post:{sym}",  post_pct,  28 * 3600)
+        else:
+            missing_post.append(sym)
+        if close_pct is not None:
+            _cache_set(f"qdii:chg:close:{sym}", close_pct, 72 * 3600)
+            _cache_set(f"qdii:chg:stale:{sym}", close_pct, 7 * 24 * 3600)
+        written += 1
 
-    logger.info(f"[post_snap] written={written}/{len(us_symbols)} symbols")
+    # Nasdaq 兜底（纯美股，无独立 post_pct）
+    for sym, pct in nasdaq_results.items():
+        if pct is None:
+            continue
+        _cache_set(f"qdii:chg:close:{sym}", pct, 72 * 3600)
+        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+        missing_post.append(sym)
+        written += 1
+
+    # 港股/A股 Yahoo 数据（只有 regular_pct = 收盘涨跌幅）
+    for sym, pf in hk_a_results.items():
+        reg_pct = pf.get("regular_pct")
+        if reg_pct is None:
+            continue
+        _cache_set(f"qdii:chg:close:{sym}", reg_pct, 72 * 3600)
+        _cache_set(f"qdii:chg:stale:{sym}", reg_pct, 7 * 24 * 3600)
+        written += 1
+
+    # 层4：台股(.TW)/韩股(.KS) — TWSE/Naver（Yahoo 对国际市场限流，独立接入）
+    intl_syms = [s for s in us_symbols if any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)
+                 and s not in yf_results]
+    intl_results: Dict[str, float] = {}
+    if intl_syms:
+        logger.info(f"[post_snap] fetching {len(intl_syms)} intl (TW/KS) via TWSE/Naver")
+        intl_results = _fetch_intl_stocks(intl_syms)
+    for sym, pct in intl_results.items():
+        _cache_set(f"qdii:chg:close:{sym}", pct, 72 * 3600)
+        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+        written += 1
+
+    # 清顶层估值缓存
+    _cache_delete("qdii:response")
+
+    total_all = len(us_symbols) + len(hk_a_list)
+    logger.info(f"[post_snap] written={written}/{total_all} (us+intl={len(us_symbols)} hk_a={len(hk_a_list)} tw_kr={len(intl_results)})")
     return {
-        "ok":      True,
-        "ts":      now,
-        "total":   len(us_symbols),
-        "written": written,
-        "missing": [s for s in us_symbols if s not in results or results[s].get("post_pct") is None],
+        "ok":           True,
+        "ts":           now,
+        "total":        total_all,
+        "written":      written,
+        "missing_post": missing_post,
     }
 
 
@@ -1928,8 +2042,8 @@ def cron_clear():
 @app.get("/api/cache/delete")
 def cache_delete_key(key: str = ""):
     """删除指定 Redis key。
-    GET /api/cache/delete?key=stock_last_post_KLAC
-    支持精确 key，也支持通配符（如 stock_pf_KLAC* 会删除所有匹配的 key）。
+    GET /api/cache/delete?key=qdii:chg:post:KLAC
+    支持精确 key，也支持通配符（如 qdii:chg:pre:* 会删除所有匹配的 key）。
     """
     if not key:
         return {"ok": False, "msg": "key is required"}
@@ -2590,7 +2704,7 @@ except Exception:
 def _db_save_holdings(fund_code: str, holdings: list, report_date: str = ""):
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     with _db() as conn:
-        for h in holdings:
+        for h in holdings[:10]:
             conn.execute("""
                 INSERT INTO qdii_holdings(fund_code, report_date, symbol, name, weight, updated_at)
                 VALUES(?,?,?,?,?,?)
@@ -2740,9 +2854,9 @@ def _current_session() -> str:
     return "post_market"  # HKT 04:00-08:00
 
 def _valuation_ttl() -> int:
-    """us_open 5min，weekend 60min，其余时段 15min。"""
+    """us_open / pre_market 5min，weekend 60min，其余时段 15min。"""
     s = _current_session()
-    if s == "us_open":  return 5 * 60
+    if s in ("us_open", "pre_market"): return 5 * 60
     if s == "weekend":  return 60 * 60
     return 15 * 60
 
@@ -3096,6 +3210,7 @@ def _do_fetch_qdii_holdings(code: str) -> list:
             logger.info(f"[qdii_holdings] {code}: PDF兜底 ({len(pdf_h)} positions)")
 
     if best_holdings:
+        best_holdings = best_holdings[:10]
         # 季报成功 → 正常TTL；仅年报/PDF兜底 → 短TTL，让下次请求尽快重试季报
         ttl = _HOLDINGS_TTL if source in ("quarterly", "quarterly+annual") else 1800
         _cache_set(cache_key, best_holdings, ttl)
@@ -3107,162 +3222,6 @@ def _do_fetch_qdii_holdings(code: str) -> list:
 
     return best_holdings
 
-
-# ─── 个股价格与涨跌幅（四层容灾）──────────────────────────────────────────────
-
-def fetch_stock_price_fields(symbol: str) -> dict:
-    """
-    获取单只股票各时段价格和涨跌幅。
-    返回: {pre_pct, regular_pct, post_pct, price, close_price}，字段可为 None。
-
-    四层容灾（不放弃任何一只股票）：
-      层1  : Yahoo Finance v8 chart（crumb 认证）→ 收盘价序列 + 三段 pct
-      层1b : Yahoo Finance v10 quoteSummary    → 直接提供 preMarketChangePercent /
-             postMarketChangePercent（比 chart meta 更可靠）
-      层2  : Nasdaq.com API（无需认证）         → 当前涨跌幅 + 最新成交价
-      层3  : Redis stale cache（7天）           → 任何外部源全部失败时的最后保障
-
-    side-effect：post_market 时段成功后写 stock_last_post_{symbol}（48h），
-                 供 a_share 时段读取"昨日涨跌"。
-    """
-    cache_key       = f"stock_pf_{symbol}"
-    stale_cache_key = f"stock_pf_stale_{symbol}"
-    last_post_key   = f"stock_last_post_{symbol}"
-
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    s   = _current_session()
-    ttl = _valuation_ttl() if s in ("us_open", "pre_market", "post_market") else 8 * 3600
-    out: dict = {"pre_pct": None, "regular_pct": None, "post_pct": None,
-                 "price": None, "close_price": None}
-
-    # ── 层1：Yahoo Finance chart（crumb 认证）──────────────────────────────────
-    yf_ok  = False
-    result = _yf_chart(symbol, interval="1d", range_="5d")
-    if result:
-        try:
-            meta   = result["meta"]
-            closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
-            prev   = 0.0
-            # 优先用 meta.regularMarketPreviousClose，Yahoo 直接给的昨收，最可靠
-            # closes[-2] 有时含过期历史数据（如分红/分拆前旧价），导致涨跌幅严重失真
-            for key in ("regularMarketPreviousClose", "previousClose"):
-                v = meta.get(key)
-                if v:
-                    prev = float(v); break
-            if not prev:
-                if len(closes) >= 2:
-                    prev = float(closes[-2])
-                else:
-                    v = meta.get("chartPreviousClose")
-                    if v:
-                        prev = float(v)
-            if prev:
-                def _calc_pct(price_key: str) -> Optional[float]:
-                    p = float(meta.get(price_key) or 0)
-                    return round((p - prev) / prev * 100, 2) if p else None
-                out["regular_pct"] = _calc_pct("regularMarketPrice")
-                out["pre_pct"]     = _calc_pct("preMarketPrice")
-                out["post_pct"]    = _calc_pct("postMarketPrice")
-
-                close_price = round(float(closes[-1]), 2) if closes else None
-                out["close_price"] = close_price
-
-                pre_p  = float(meta.get("preMarketPrice")  or 0)
-                post_p = float(meta.get("postMarketPrice") or 0)
-                reg_p  = float(meta.get("regularMarketPrice") or 0)
-                if s == "pre_market":
-                    raw_price = pre_p or close_price or 0
-                elif s == "post_market":
-                    raw_price = post_p or reg_p or close_price or 0
-                elif s == "us_open":
-                    raw_price = reg_p or close_price or 0
-                else:
-                    raw_price = close_price or reg_p or 0
-                out["price"] = round(raw_price, 2) if raw_price else None
-                yf_ok = True
-        except Exception as e:
-            logger.warning(f"[stock_pf] chart parse {symbol}: {e}")
-
-    # ── 层1b：Yahoo quoteSummary 补全盘前/盘后涨跌幅 ───────────────────────────
-    # chart 的 meta.preMarketPrice 经常缺失；quoteSummary 直接有 changePercent 字段
-    if yf_ok and (
-        (s == "pre_market"  and out["pre_pct"]  is None) or
-        (s == "post_market" and out["post_pct"] is None)
-    ):
-        qs = _yf_quote_summary(symbol)
-        if qs:
-            if s == "pre_market" and qs.get("pre_pct") is not None:
-                out["pre_pct"] = qs["pre_pct"]
-                if qs.get("pre_price") and not out["price"]:
-                    out["price"] = round(float(qs["pre_price"]), 2)
-                logger.info(f"[stock_pf] {symbol}: pre_pct from quoteSummary={qs['pre_pct']}%")
-            elif s == "post_market" and qs.get("post_pct") is not None:
-                out["post_pct"] = qs["post_pct"]
-                if qs.get("post_price") and not out["price"]:
-                    out["price"] = round(float(qs["post_price"]), 2)
-                logger.info(f"[stock_pf] {symbol}: post_pct from quoteSummary={qs['post_pct']}%")
-
-    # ── 层2：Nasdaq.com API（chart 完全失败 OR pre/post pct 仍缺）─────────────
-    nasdaq_needed = (
-        not yf_ok or
-        (s == "pre_market"  and out["pre_pct"]  is None) or
-        (s == "post_market" and out["post_pct"] is None)
-    )
-    if nasdaq_needed:
-        nd = _nasdaq_fetch(symbol)
-        if nd:
-            nd_pct   = nd.get("pct")
-            nd_price = nd.get("price")
-            if not yf_ok:
-                # chart 完全失败：Nasdaq 作为主数据源
-                out["regular_pct"] = nd_pct
-                if s == "pre_market":
-                    out["pre_pct"]   = nd_pct
-                    out["close_price"] = nd_price  # 盘前 lastSalePrice ≈ 昨收
-                elif s == "post_market":
-                    out["post_pct"]  = nd_pct
-                    out["close_price"] = nd_price
-                else:
-                    out["close_price"] = nd_price
-                out["price"] = nd_price
-                logger.info(f"[stock_pf] {symbol}: chart failed, nasdaq pct={nd_pct}% price={nd_price}")
-            else:
-                # chart 成功但 pre/post pct 缺失：仅补涨跌幅
-                if s == "pre_market"  and out["pre_pct"]  is None and nd_pct is not None:
-                    out["pre_pct"]  = nd_pct
-                    logger.info(f"[stock_pf] {symbol}: pre_pct from nasdaq={nd_pct}%")
-                elif s == "post_market" and out["post_pct"] is None and nd_pct is not None:
-                    out["post_pct"] = nd_pct
-                    logger.info(f"[stock_pf] {symbol}: post_pct from nasdaq={nd_pct}%")
-
-    # ── 有任意有效数据则缓存并返回 ────────────────────────────────────────────
-    has_data = any(out.get(k) is not None for k in ("regular_pct","pre_pct","post_pct","price","close_price"))
-    if has_data:
-        # 盘后快照：写入 stock_last_post_{symbol}，供 a_share 时段读"昨日涨跌"
-        if s == "post_market":
-            snap_pct = out.get("post_pct") or out.get("regular_pct")
-            if snap_pct is not None:
-                _cache_set(last_post_key, {
-                    "pct":      snap_pct,
-                    "post_pct": out.get("post_pct"),  # 单独存盘后涨跌幅，供 a_share 盘后估值用
-                }, 72 * 3600)  # 72h：确保周五盘后快照能撑过周末到周一A股时段
-        _cache_set(cache_key, out, ttl)
-        _cache_set(stale_cache_key, out, 7 * 24 * 3600)
-        return out
-
-    # ── 层3：Redis stale cache（所有外部源均失败）────────────────────────────
-    stale = _cache_get(stale_cache_key)
-    if stale:
-        logger.warning(f"[stock_pf] {symbol}: all sources failed, using stale cache")
-        out = {**stale, "_stale": True}
-        _cache_set(cache_key, out, min(ttl, 3600))
-        return out
-
-    logger.warning(f"[stock_pf] {symbol}: all sources failed, no data")
-    return out
 
 
 def fetch_fx_data() -> dict:
@@ -3459,6 +3418,237 @@ def fetch_fund_meta(code: str, _cached=None) -> dict:
 
 # ─── 估值计算核心 ──────────────────────────────────────────────────────────────
 
+_QDII_NON_US_SUFFIX = (".HK", ".SS", ".SZ")          # 仅 Sina 支持的市场
+_QDII_YF_INTL_SUFFIX = (".TW", ".KS", ".T", ".L", ".PA", ".DE")  # Yahoo 支持的非美市场
+
+
+def _fetch_chg_from_nasdaq(symbols: List[str], timeout: int = 15) -> Dict[str, float]:
+    """并发调用 Nasdaq API，返回 {symbol: pct}，只含有效值。
+    并发数限制为 6，避免触发 Nasdaq 限速。
+    """
+    if not symbols:
+        return {}
+    results: Dict[str, float] = {}
+    # 分批，每批 6 个，批次间加 0.3s 延迟，避免高并发被封
+    batch_size = 6
+    for i in range(0, len(symbols), batch_size):
+        if i > 0:
+            time.sleep(0.3)
+        batch = symbols[i:i + batch_size]
+        with ThreadPoolExecutor(max_workers=batch_size) as ex:
+            futs = {ex.submit(_nasdaq_fetch, sym): sym for sym in batch}
+            done, not_done = wait(list(futs), timeout=timeout)
+            for fut in not_done:
+                fut.cancel()
+            for fut in done:
+                sym = futs[fut]
+                try:
+                    r = fut.result()
+                    pct = r.get("pct")
+                    if pct is not None:
+                        results[sym] = pct
+                except Exception as e:
+                    logger.warning(f"[chg_fetch] {sym}: {e}")
+    return results
+
+
+def _sym_to_yf(sym: str) -> str:
+    """将内部 symbol 转为 Yahoo Finance ticker，目前处理 JP 后缀的日本股票。"""
+    if sym.endswith("JP") and not sym.endswith(".JP"):
+        return sym[:-2] + ".T"
+    return sym
+
+
+def _yf_pct_simple(symbol: str) -> Optional[float]:
+    """
+    Yahoo Finance v8 chart 接口（无需 crumb）获取当前涨跌幅。
+    适用于 Nasdaq.com 不覆盖的股票（NYSE ADR、日本股票等）。
+    盘前：(preMarketPrice - regularMarketPrice) / regularMarketPrice
+    盘中：(regularMarketPrice - chartPreviousClose) / chartPreviousClose
+    盘后：(postMarketPrice - regularMarketPrice) / regularMarketPrice
+    """
+    yf_sym = _sym_to_yf(symbol)
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_sym}"
+        r = requests.get(url, params={"interval": "1d", "range": "2d"},
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        data = r.json()
+        meta = data["chart"]["result"][0]["meta"]
+        reg   = meta.get("regularMarketPrice")
+        prev  = meta.get("chartPreviousClose") or meta.get("previousClose")
+        pre   = meta.get("preMarketPrice")
+        post  = meta.get("postMarketPrice")
+        # 盘前：用 preMarketPrice vs 昨收(regularMarketPrice)
+        if pre and reg:
+            return round((pre - reg) / reg * 100, 2)
+        # 盘后：用 postMarketPrice vs 今收(regularMarketPrice)
+        if post and reg:
+            return round((post - reg) / reg * 100, 2)
+        # 盘中：用 regularMarketPrice vs 昨收
+        if reg and prev:
+            return round((reg - prev) / prev * 100, 2)
+    except Exception as e:
+        logger.debug(f"[yf_simple] {symbol}({yf_sym}): {e}")
+    return None
+
+
+def _fetch_chg_from_yf_simple(symbols: List[str], timeout: int = 15) -> Dict[str, float]:
+    """并发调用 _yf_pct_simple，Nasdaq 拉不到时的最终兜底。"""
+    if not symbols:
+        return {}
+    results: Dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=min(16, len(symbols))) as ex:
+        futs = {ex.submit(_yf_pct_simple, sym): sym for sym in symbols}
+        done, not_done = wait(list(futs), timeout=timeout)
+        for fut in not_done:
+            fut.cancel()
+        for fut in done:
+            sym = futs[fut]
+            try:
+                pct = fut.result()
+                if pct is not None:
+                    results[sym] = pct
+            except Exception as e:
+                logger.warning(f"[yf_simple_fetch] {sym}: {e}")
+    return results
+
+
+def _build_stock_cache(us_symbols: List[str], non_us_syms: List[str],
+                       session: str) -> Dict[str, dict]:
+    """
+    根据 session 从 Redis 读取涨跌幅，构建 stock_cache。
+    只存 pct 字段，不存价格。
+
+    key 体系：
+      qdii:chg:pre:{sym}   盘前，TTL 5min
+      qdii:chg:open:{sym}  盘中，TTL 6min
+      qdii:chg:post:{sym}  盘后，TTL 28h（盘后 cron 写入，持续到次日 A股结束）
+      qdii:chg:close:{sym} 收盘快照，TTL 72h（04:05 cron 写入，覆盖周末）
+      qdii:chg:stale:{sym} 7日兜底
+    """
+    cache: Dict[str, dict] = {}
+
+    if session == "pre_market":
+        bulk = _cache_mget(
+            [f"qdii:chg:pre:{s}"   for s in us_symbols] +
+            [f"qdii:chg:stale:{s}" for s in us_symbols]
+        )
+        for sym in us_symbols:
+            cache[sym] = {
+                "pre_pct":   bulk.get(f"qdii:chg:pre:{sym}"),
+                "stale_pct": bulk.get(f"qdii:chg:stale:{sym}"),
+            }
+
+    elif session == "us_open":
+        bulk = _cache_mget(
+            [f"qdii:chg:open:{s}"  for s in us_symbols] +
+            [f"qdii:chg:stale:{s}" for s in us_symbols]
+        )
+        for sym in us_symbols:
+            cache[sym] = {
+                "regular_pct": bulk.get(f"qdii:chg:open:{sym}"),
+                "stale_pct":   bulk.get(f"qdii:chg:stale:{sym}"),
+            }
+
+    else:  # post_market / a_share / weekend：均需 close_pct；post/a_share 还需 post_pct
+        need_post = session in ("post_market", "a_share")
+        keys = (
+            [f"qdii:chg:close:{s}" for s in us_symbols] +
+            ([f"qdii:chg:post:{s}" for s in us_symbols] if need_post else []) +
+            [f"qdii:chg:stale:{s}" for s in us_symbols]
+        )
+        bulk = _cache_mget(keys)
+        for sym in us_symbols:
+            close_pct = bulk.get(f"qdii:chg:close:{sym}")
+            stale_pct = bulk.get(f"qdii:chg:stale:{sym}")
+            post_pct  = bulk.get(f"qdii:chg:post:{sym}") if need_post else None
+            cache[sym] = {
+                "close_pct": close_pct if close_pct is not None else stale_pct,
+                "post_pct":  post_pct  if post_pct  is not None else (close_pct or stale_pct),
+            }
+
+    # ── 非美股（港股/A股）────────────────────────────────────────────────────────
+    # a_share 时段：港股/A股正在交易，用 open 键（6min TTL），未命中则实时拉 Sina
+    # 其他时段：市场已收盘，用 close/stale 快照即可
+    if non_us_syms:
+        if session == "a_share":
+            bulk = _cache_mget(
+                [f"qdii:chg:open:{s}"  for s in non_us_syms] +
+                [f"qdii:chg:stale:{s}" for s in non_us_syms]
+            )
+            to_fetch = [s for s in non_us_syms if bulk.get(f"qdii:chg:open:{s}") is None]
+            if to_fetch:
+                sina = _sina_stock_batch(to_fetch) or {}
+                for sym, pf in sina.items():
+                    pct = pf.get("regular_pct")
+                    if pct is not None:
+                        _cache_set(f"qdii:chg:open:{sym}",  pct, 6 * 60)
+                        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+                        bulk[f"qdii:chg:open:{sym}"] = pct
+            for sym in non_us_syms:
+                pct = bulk.get(f"qdii:chg:open:{sym}") or bulk.get(f"qdii:chg:stale:{sym}")
+                cache[sym] = {"regular_pct": pct, "close_pct": pct}
+        else:
+            bulk = _cache_mget(
+                [f"qdii:chg:close:{s}" for s in non_us_syms] +
+                [f"qdii:chg:stale:{s}" for s in non_us_syms]
+            )
+            to_fetch = [s for s in non_us_syms
+                        if bulk.get(f"qdii:chg:close:{s}") is None
+                        and bulk.get(f"qdii:chg:stale:{s}") is None]
+            if to_fetch:
+                sina = _sina_stock_batch(to_fetch) or {}
+                for sym, pf in sina.items():
+                    pct = pf.get("regular_pct")
+                    if pct is not None:
+                        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+                        bulk[f"qdii:chg:stale:{sym}"] = pct
+            for sym in non_us_syms:
+                pct = bulk.get(f"qdii:chg:close:{sym}") or bulk.get(f"qdii:chg:stale:{sym}")
+                cache[sym] = {"regular_pct": pct, "close_pct": pct}
+
+    # ── 国际市场（台股 .TW / 韩股 .KS 等）────────────────────────────────────────
+    # a_share 时段：台股/韩股正在交易，用 open 键（6min TTL），未命中则实时拉 TWSE/Naver
+    # 其他时段：市场已收盘，用 close/stale 快照
+    yf_intl = [s for s in us_symbols if any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)]
+    if yf_intl:
+        if session == "a_share":
+            bulk_i = _cache_mget(
+                [f"qdii:chg:open:{s}"  for s in yf_intl] +
+                [f"qdii:chg:stale:{s}" for s in yf_intl]
+            )
+            to_fetch_yf = [s for s in yf_intl if bulk_i.get(f"qdii:chg:open:{s}") is None]
+            if to_fetch_yf:
+                logger.info(f"[stock_cache] intl a_share miss {len(to_fetch_yf)}, fetching TWSE/Naver")
+                intl_live = _fetch_intl_stocks(to_fetch_yf)
+                for sym, pct in intl_live.items():
+                    _cache_set(f"qdii:chg:open:{sym}",  pct, 6 * 60)
+                    _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+                    bulk_i[f"qdii:chg:open:{sym}"] = pct
+            for sym in yf_intl:
+                pct = bulk_i.get(f"qdii:chg:open:{sym}") or bulk_i.get(f"qdii:chg:stale:{sym}")
+                cache[sym] = {"regular_pct": pct, "close_pct": pct}
+        else:
+            bulk_i = _cache_mget(
+                [f"qdii:chg:close:{s}" for s in yf_intl] +
+                [f"qdii:chg:stale:{s}" for s in yf_intl]
+            )
+            to_fetch_yf = [s for s in yf_intl
+                           if bulk_i.get(f"qdii:chg:close:{s}") is None
+                           and bulk_i.get(f"qdii:chg:stale:{s}") is None]
+            if to_fetch_yf:
+                logger.info(f"[stock_cache] yf_intl cache miss {len(to_fetch_yf)}, fetching TWSE/Naver")
+                intl_live = _fetch_intl_stocks(to_fetch_yf)
+                for sym, pct in intl_live.items():
+                    _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+                    bulk_i[f"qdii:chg:stale:{sym}"] = pct
+            for sym in yf_intl:
+                pct = bulk_i.get(f"qdii:chg:close:{sym}") or bulk_i.get(f"qdii:chg:stale:{sym}")
+                cache[sym] = {"regular_pct": pct, "close_pct": pct}
+
+    return cache
+
+
 def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
                              session: str = "a_share",
                              prefetched_holdings: Optional[list] = None) -> dict:
@@ -3494,24 +3684,26 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
     for h in holdings:
         sym = h["symbol"]
         pf  = stock_cache.get(sym) or {}
-        # 根据时段选价格字段
+        # 根据时段选涨跌幅字段（不再跟踪具体价格）
+        # 美股有 pre/regular/post_pct；A股/港股只有 close_pct，对应字段缺失时回落
         if session == "pre_market":
-            chg = pf.get("pre_pct") or pf.get("regular_pct")
+            chg = pf.get("pre_pct") if pf.get("pre_pct") is not None else (pf.get("stale_pct") if pf.get("stale_pct") is not None else pf.get("close_pct"))
+        elif session == "us_open":
+            chg = pf.get("regular_pct") if pf.get("regular_pct") is not None else (pf.get("stale_pct") if pf.get("stale_pct") is not None else pf.get("close_pct"))
         elif session == "post_market":
-            chg = pf.get("post_pct") or pf.get("regular_pct")
-        elif session == "a_share":
-            # a_share：用盘后快照涨跌幅（last_post_pct），表示"昨日涨跌"
-            chg = pf.get("last_post_pct") or pf.get("post_pct") or pf.get("regular_pct")
-        else:  # us_open, weekend
+            chg = pf.get("post_pct") if pf.get("post_pct") is not None else pf.get("close_pct")
+        elif session in ("a_share", "close", "weekend"):
+            chg = pf.get("close_pct")
+        else:
             chg = pf.get("regular_pct")
-        enriched.append({**h, "change": chg, "price": pf.get("price")})
+        enriched.append({**h, "change": chg})
         if chg is not None:
             weighted_sum   += h["weight"] / 100.0 * chg
             covered_weight += h["weight"]
 
     # coverage = 已获取价格的持仓占基金净值的比例（分母是100%，而非只看已知持仓）
     coverage   = round(covered_weight, 1)
-    valuation  = round(weighted_sum + fx_change, 2) if covered_weight > 0 else None
+    valuation  = round(weighted_sum, 2) if covered_weight > 0 else None
 
     return {
         "code":      code,
@@ -3552,7 +3744,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
 
     数据策略（5-session-aware）:
     - a_share  (HKT 08:00-16:00 工作日): 优先 fundgz gszzl 实时估值，15min 刷新
-    - pre_market (HKT 16:00-21:30 工作日): Yahoo preMarketPrice 加权，15min 刷新
+    - pre_market (HKT 16:00-21:30 工作日): Yahoo preMarketPrice 加权，5min 刷新
     - us_open   (HKT 21:30-04:00 工作日): Yahoo regularMarketPrice 加权，10min 刷新
     - post_market (HKT 04:00-08:00 工作日): Yahoo postMarketPrice 加权，15min 刷新
     - weekend   (HKT 周六/日): 缓存上次收盘价，60min 刷新
@@ -3562,7 +3754,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     """
     from datetime import timezone, timedelta
     session   = _current_session()
-    cache_key = "qdii_valuations"
+    cache_key = "qdii:response"
 
     if light:
         # light 模式：直接重算并覆盖缓存，不删除旧缓存
@@ -3576,7 +3768,9 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
             _cache_delete(f"qdii_gszzl_{code}")
         _cache_delete("qdii_fx_chg")
         _cache_delete("qdii_fx_data")
-        _cache_delete_pattern("stock_pf_*")
+        _cache_delete_pattern("qdii:chg:pre:*")
+        _cache_delete_pattern("qdii:chg:open:*")
+        _cache_delete_pattern("qdii:chg:stale:*")
         logger.info(f"[qdii] force refresh: cleared all caches (session={session})")
     else:
         cached = _cache_get(cache_key)
@@ -3636,217 +3830,61 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                 elif kind == "h":     all_holdings[code] = val
                 else:                 meta_cache[code]   = val
 
-    # ── Step 2: 并发拉取股价 ────────────────────────────────────────────────────
-    # 价格查询只取每只基金权重最大的前15个 symbol（性能优化），
-    # 但 all_holdings 保持 fetch_qdii_holdings 返回的原始顺序（季报前十在前），
-    # 确保展示给用户的前十持仓与季报官方数据一致。
-    _TOP_N = 15
-
-    _NON_US_SUFFIX = (".HK", ".SS", ".SZ", ".TW", ".KS", ".T", ".L", ".PA", ".DE")
-
-    def _is_us(sym: str) -> bool:
-        return bool(sym) and not any(sym.endswith(s) for s in _NON_US_SUFFIX)
-
+    # ── Step 2: 构建 stock_cache（从 Redis 读涨跌幅；缓存未命中时拉 Nasdaq）───────
+    _TOP_N = 10
     all_symbols = list({
         h["symbol"]
         for holdings in all_holdings.values()
         for h in sorted(holdings, key=lambda x: x.get("weight", 0), reverse=True)[:_TOP_N]
         if h.get("symbol")
     })
-    us_symbols  = [s for s in all_symbols if _is_us(s)]
-    non_us_syms = [s for s in all_symbols if not _is_us(s)]
+    us_symbols  = [s for s in all_symbols if not any(s.endswith(sfx) for sfx in _QDII_NON_US_SUFFIX)]
+    non_us_syms = [s for s in all_symbols if     any(s.endswith(sfx) for sfx in _QDII_NON_US_SUFFIX)]
     logger.info(f"[qdii/stock] total={len(all_symbols)} US={len(us_symbols)} non-US={len(non_us_syms)}")
 
-    _EMPTY_PF = {"pre_pct": None, "regular_pct": None, "post_pct": None,
-                 "price": None, "close_price": None}
-    stock_cache: dict[str, dict] = {}
+    stock_cache = _build_stock_cache(us_symbols, non_us_syms, session)
 
-    # 批量 MGET 所有股价缓存（一次 RTT 代替 134 次串行 GET）
-    all_pf_keys   = [f"stock_pf_{s}"       for s in all_symbols]
-    stale_pf_keys = [f"stock_pf_stale_{s}" for s in all_symbols]
-    bulk_pf    = _cache_mget(all_pf_keys)
-    bulk_stale = _cache_mget(stale_pf_keys)
-
-    def _pf_cached(sym):   return bulk_pf.get(f"stock_pf_{sym}")
-    def _stale_cached(sym): return bulk_stale.get(f"stock_pf_stale_{sym}")
-
-    # non-US（A股/港股）：先读 Redis 缓存，缓存未命中的走新浪批量（单次请求）
-    non_us_fresh = []
-    for sym in non_us_syms:
-        c = _pf_cached(sym)
-        if c is not None:
-            stock_cache[sym] = c
-        else:
-            non_us_fresh.append(sym)
-
-    if non_us_fresh:
-        logger.info(f"[qdii/stock] Sina batch: {len(non_us_fresh)} A/HK symbols")
-        sina_result = _sina_stock_batch(non_us_fresh)
-        if sina_result:
-            _cache_mset({f"stock_pf_{s}":       pf for s, pf in sina_result.items()}, _valuation_ttl())
-            _cache_mset({f"stock_pf_stale_{s}": pf for s, pf in sina_result.items()}, 7 * 24 * 3600)
-        for sym, pf in sina_result.items():
-            stock_cache[sym] = pf
-        # 新浪也拿不到的：stale 兜底
-        for sym in non_us_fresh:
-            if sym not in stock_cache:
-                stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
-
+    # 活跃时段：缓存未命中时实时拉取 Nasdaq（排除 YF 国际市场，它们由 _build_stock_cache 自行处理）
+    pure_us = [s for s in us_symbols if not any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)]
     if session in ("pre_market", "us_open", "post_market"):
-        # 策略：① Redis缓存 → ② 拉新数据 → ③ stale兜底
-        # us_open: stooq 批量（~1.5s，一次请求）
-        # pre_market / post_market: Nasdaq 并发（有盘前/盘后数据，12s timeout）
-
-        # ① Redis 缓存命中的 US symbol
-        fresh_us = []
-        for sym in us_symbols:
-            c = _pf_cached(sym)
-            if c is not None:
-                stock_cache[sym] = c
-            else:
-                fresh_us.append(sym)
-
-        if fresh_us:
-            # ─── us_open / pre_market / post_market：统一走 Nasdaq 并发 ────────
-            # Nasdaq primaryData 三个时段都提供当期正确涨跌幅：
-            #   盘前/盘后：当期相对昨收的涨跌幅%（直接字段）
-            #   盘中：实时成交价 + 当日涨跌幅%
-            # 已在 pre_market/post_market 验证可用，us_open 同理。
-            logger.info(f"[qdii/stock] Nasdaq concurrent: {len(fresh_us)} US symbols, session={session}")
-
-            def _nasdaq_pf(sym: str) -> dict:
-                r = _nasdaq_fetch(sym)
-                pct         = r.get("pct")
-                intra_price = r.get("price")       # 当前时段价（盘中=实时价，盘前/后=盘前/后价）
-                prev_close  = r.get("prev_close")  # 昨日4PM ET固定收盘价
-                if pct is not None:
-                    if session == "us_open":
-                        # 盘中：price 展示实时价，close_price 展示昨收，pct 只填 regular
-                        return {"pre_pct": None, "regular_pct": pct, "post_pct": None,
-                                "price": intra_price or prev_close, "close_price": prev_close}
-                    else:
-                        # 盘前/盘后：price 展示昨收（避免展示动态盘前价引起误解）
-                        return {"pre_pct": pct, "regular_pct": pct, "post_pct": pct,
-                                "price": prev_close, "close_price": prev_close}
-                return dict(_EMPTY_PF)
-
-            nq_ex = ThreadPoolExecutor(max_workers=min(32, len(fresh_us)))
-            nq_results: Dict[str, dict] = {}
-            try:
-                nq_futs = {nq_ex.submit(_nasdaq_pf, s): s for s in fresh_us}
-                done, not_done = wait(list(nq_futs), timeout=12)
-                for fut in not_done:
-                    fut.cancel()
-                for fut in done:
-                    sym = nq_futs[fut]
-                    try:
-                        pf = fut.result()
-                        stock_cache[sym] = pf
-                        if any(v is not None for v in pf.values()):
-                            nq_results[sym] = pf
-                    except Exception:
-                        stock_cache[sym] = dict(_EMPTY_PF)
-            finally:
-                nq_ex.shutdown(wait=False)
-
-            # 批量写回 Redis
-            if nq_results:
-                _cache_mset({f"stock_pf_{s}":       pf for s, pf in nq_results.items()}, _valuation_ttl())
-                _cache_mset({f"stock_pf_stale_{s}": pf for s, pf in nq_results.items()}, 7 * 24 * 3600)
-
-            # Nasdaq 超时/失败的：stale 兜底
-            for sym in fresh_us:
-                if sym not in stock_cache or not any(v is not None for v in stock_cache[sym].values()):
-                    stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
-    else:
-        # a_share / weekend：美股已收盘
-        if session == "a_share":
-            # ── A股时段：Nasdaq 直接字段获取昨日涨跌幅，每日一次，缓存全天 ──────────
-            # 改动原因：原逻辑依赖 fetch_stock_price_fields（Yahoo v8 chart）拿历史
-            # close 序列，用 closes[-2] 手算涨跌幅。Yahoo 偶发在序列里混入几年前的
-            # 旧价格（如 KLAC closes[-2] ≈ $213，当前价 $2411），导致算出 +1029% 这类
-            # 严重失真数据，写入 stock_last_post_* 快照后污染 A 股估值（如 +38.83%）。
-            # 改为调用 Nasdaq _nasdaq_fetch，percentageChange 是直接字段，不依赖历史
-            # 序列，彻底规避手算风险。每日首次 A 股请求时拉取一次，缓存 20h。
-            _HKT = timezone(timedelta(hours=8))
-            today_hkt = datetime.now(_HKT).strftime("%Y-%m-%d")
-            daily_snap_key = f"qdii_nasdaq_daily_{today_hkt}"
-            daily_snap = _cache_get(daily_snap_key) or {}
-
-            if not daily_snap:
-                logger.info(f"[qdii/a_share] building Nasdaq daily snapshot {today_hkt}, {len(us_symbols)} US symbols")
-                fresh_snap: dict = {}
-                with ThreadPoolExecutor(max_workers=min(32, len(us_symbols))) as ex:
-                    futs = {ex.submit(_nasdaq_fetch, sym): sym for sym in us_symbols}
-                    done, _ = wait(list(futs), timeout=20)
-                    for fut in done:
-                        sym = futs[fut]
-                        try:
-                            r = fut.result()
-                            if r.get("pct") is not None:
-                                fresh_snap[sym] = {"pct": r["pct"]}
-                        except Exception as e:
-                            logger.warning(f"[qdii/a_share] nasdaq {sym}: {e}")
-                if fresh_snap:
-                    _cache_set(daily_snap_key, fresh_snap, 20 * 3600)
-                    daily_snap = fresh_snap
-                    _db_save_daily_snap(fresh_snap, today_hkt)  # 存 DB，保留近 3 天
-
-                # Nasdaq 失败的 symbol：从 DB 取最近一条兜底
-                failed = [s for s in us_symbols if s not in daily_snap]
-                if failed:
-                    db_fallback = _db_load_latest_prices(failed)
-                    if db_fallback:
-                        daily_snap = {**daily_snap, **db_fallback}
-                        logger.info(f"[qdii/a_share] DB fallback: {len(db_fallback)} symbols")
-
-                logger.info(f"[qdii/a_share] snapshot done: {len(daily_snap)}/{len(us_symbols)} symbols")
-
-            # 收盘估值：last_post_pct 来自 Nasdaq percentageChange（直接字段）
-            # 盘后估值：post_pct 来自 stock_last_post_*（post_market 时段 Yahoo 写入，72h TTL）
-            last_post_keys = [f"stock_last_post_{s}" for s in us_symbols]
-            bulk_last_post = _cache_mget(last_post_keys)
-            for sym in us_symbols:
-                pf = _pf_cached(sym) or dict(_EMPTY_PF)
-                snap = daily_snap.get(sym) or {}
-                if snap.get("pct") is not None:
-                    pf = {**pf, "last_post_pct": snap["pct"]}
-                last_post = bulk_last_post.get(f"stock_last_post_{sym}") or {}
-                if last_post.get("post_pct") is not None:
-                    pf = {**pf, "post_pct": last_post["post_pct"]}
-                stock_cache[sym] = pf
-
-            # ── 以下为原来的逻辑，已停用，原因见上方注释 ──────────────────────────
-            # missing = [sym for sym in all_symbols if not _pf_cached(sym)]
-            # if missing:
-            #     with ThreadPoolExecutor(max_workers=16) as ex:
-            #         sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
-            #         for fut, sym in sf.items():
-            #             try:    stock_cache[sym] = fut.result()
-            #             except: stock_cache[sym] = dict(_EMPTY_PF)
-            # snap_keys = [f"stock_last_post_{s}" for s in all_symbols]
-            # bulk_snap = _cache_mget(snap_keys)
-            # for sym in all_symbols:
-            #     snap = bulk_snap.get(f"stock_last_post_{sym}") or {}
-            #     if snap.get("pct") is not None:
-            #         stock_cache[sym] = {**stock_cache[sym], "last_post_pct": snap["pct"]}
-            #         if snap.get("close_price") and not stock_cache[sym].get("close_price"):
-            #             stock_cache[sym]["close_price"] = snap["close_price"]
-
+        if session == "pre_market":
+            missing = [s for s in pure_us if stock_cache.get(s, {}).get("pre_pct") is None]
+        elif session == "us_open":
+            missing = [s for s in pure_us if stock_cache.get(s, {}).get("regular_pct") is None]
         else:
-            # weekend：读缓存，缓存未命中时用 fetch_stock_price_fields 兜底
-            missing = [sym for sym in all_symbols if not _pf_cached(sym)]
-            if missing:
-                with ThreadPoolExecutor(max_workers=16) as ex:
-                    sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
-                    for fut, sym in sf.items():
-                        try:    stock_cache[sym] = fut.result()
-                        except: stock_cache[sym] = dict(_EMPTY_PF)
+            missing = [s for s in pure_us if stock_cache.get(s, {}).get("post_pct") is None]
 
-        # 兜底：确保所有 symbol 都在 stock_cache（non-US 已由 Sina batch 填充）
-        for sym in all_symbols:
-            if sym not in stock_cache:
-                stock_cache[sym] = _pf_cached(sym) or dict(_EMPTY_PF)
+        if missing:
+            logger.info(f"[qdii/stock] cache miss {len(missing)} symbols (session={session}), fetching")
+            fresh = _fetch_chg_from_nasdaq(missing, timeout=12)
+            # 对超时未返回的 symbol 自动 retry 一次
+            still_missing = [s for s in missing if s not in fresh]
+            if still_missing:
+                logger.info(f"[qdii/stock] retry {len(still_missing)} timed-out symbols")
+                retry = _fetch_chg_from_nasdaq(still_missing, timeout=15)
+                fresh.update(retry)
+            # Nasdaq 仍拿不到的（NYSE / 日本股票等）→ Yahoo Finance chart 兜底
+            yf_missing = [s for s in missing if s not in fresh]
+            if yf_missing:
+                logger.info(f"[qdii/stock] yf fallback for {len(yf_missing)} symbols: {yf_missing}")
+                yf_fresh = _fetch_chg_from_yf_simple(yf_missing, timeout=15)
+                fresh.update(yf_fresh)
+            if fresh:
+                stale = {f"qdii:chg:stale:{s}": pct for s, pct in fresh.items()}
+                if session == "pre_market":
+                    _cache_mset({f"qdii:chg:pre:{s}":  pct for s, pct in fresh.items()}, 5 * 60)
+                    for s, pct in fresh.items():
+                        stock_cache[s] = {"pre_pct": pct, "stale_pct": pct}
+                elif session == "us_open":
+                    _cache_mset({f"qdii:chg:open:{s}": pct for s, pct in fresh.items()}, 6 * 60)
+                    for s, pct in fresh.items():
+                        stock_cache[s] = {"regular_pct": pct, "stale_pct": pct}
+                else:  # post_market
+                    _cache_mset({f"qdii:chg:post:{s}": pct for s, pct in fresh.items()}, 28 * 3600)
+                    for s, pct in fresh.items():
+                        existing = stock_cache.get(s, {})
+                        stock_cache[s] = {**existing, "post_pct": pct}
+                _cache_mset(stale, 7 * 24 * 3600)
 
     # ── Step 3: 逐基金估值（session-aware 优先级）─────────────────────────────
     # 计算「上周五」日期，用于 weekend nav_published 判断
@@ -3941,36 +3979,3 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     return payload
 
 
-@app.get("/api/stocks/prices")
-def api_stocks_prices(symbols: str = "", response: Response = None):
-    """
-    独立股票价格端点。
-    GET /api/stocks/prices?symbols=TSLA,META,NVDA
-
-    返回每只股票的 {pre_pct, regular_pct, post_pct, price, close_price}，
-    四层容灾确保所有股票均有数据。5分钟缓存（美股交易时段），8小时（非交易时段）。
-    """
-    if response:
-        response.headers["Cache-Control"] = "no-store"
-
-    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if not syms:
-        return {"session": _current_session(), "data": {}}
-
-    s = _current_session()
-    result: dict = {}
-    with ThreadPoolExecutor(max_workers=min(16, len(syms))) as ex:
-        futures = {ex.submit(fetch_stock_price_fields, sym): sym for sym in syms}
-        for fut, sym in futures.items():
-            try:
-                result[sym] = fut.result()
-            except Exception as e:
-                logger.warning(f"[api/stocks/prices] {sym}: {e}")
-                result[sym] = {"pre_pct": None, "regular_pct": None,
-                               "post_pct": None, "price": None, "close_price": None}
-
-    return {
-        "session":    s,
-        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "data":       result,
-    }
