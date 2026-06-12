@@ -430,29 +430,44 @@ def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
         return {}
 
 
+_NASDAQ_UA_POOL = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+]
+
 def _nasdaq_fetch(symbol: str) -> dict:
     """
     Nasdaq.com API：返回 {pct}，primaryData.percentageChange 直接字段（相对昨收的涨跌幅%）。
-    盘前/盘后/盘中均有效，不需要手算。
+    盘前/盘后/盘中均有效，不需要手算。失败时自动重试一次。
     """
-    try:
-        url  = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
-        resp = _get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-        }, timeout=(4, 10))
-        if not (resp and resp.ok):
-            return {}
-        primary = (resp.json().get("data") or {}).get("primaryData") or {}
-        raw = primary.get("percentageChange", "").replace("%", "").replace("+", "").strip()
-        if raw and raw not in ("--", "N/A"):
-            try:
-                return {"pct": round(float(raw), 2)}
-            except (ValueError, TypeError):
-                pass
-    except Exception as e:
-        logger.debug(f"[nasdaq_api] {symbol}: {e}")
+    url = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
+    for attempt in range(2):
+        try:
+            if attempt > 0:
+                time.sleep(_random.uniform(0.5, 1.2))
+            headers = {
+                "User-Agent": _random.choice(_NASDAQ_UA_POOL),
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Referer": "https://www.nasdaq.com/",
+                "Origin": "https://www.nasdaq.com",
+            }
+            resp = _get(url, headers=headers, timeout=(5, 12))
+            if not (resp and resp.ok):
+                continue
+            primary = (resp.json().get("data") or {}).get("primaryData") or {}
+            raw = primary.get("percentageChange", "").replace("%", "").replace("+", "").strip()
+            if raw and raw not in ("--", "N/A"):
+                try:
+                    return {"pct": round(float(raw), 2)}
+                except (ValueError, TypeError):
+                    pass
+        except Exception as e:
+            logger.debug(f"[nasdaq_api] {symbol} attempt={attempt}: {e}")
     return {}
 
 # ─── HTTP 工具 ─────────────────────────────────────────────────────────────────
@@ -3429,11 +3444,11 @@ def _fetch_chg_from_nasdaq(symbols: List[str], timeout: int = 15) -> Dict[str, f
     if not symbols:
         return {}
     results: Dict[str, float] = {}
-    # 分批，每批 6 个，批次间加 0.3s 延迟，避免高并发被封
-    batch_size = 6
+    # 分批，每批 4 个，批次间加 0.5s 延迟，避免高并发被封
+    batch_size = 4
     for i in range(0, len(symbols), batch_size):
         if i > 0:
-            time.sleep(0.3)
+            time.sleep(_random.uniform(0.4, 0.9))
         batch = symbols[i:i + batch_size]
         with ThreadPoolExecutor(max_workers=batch_size) as ex:
             futs = {ex.submit(_nasdaq_fetch, sym): sym for sym in batch}
