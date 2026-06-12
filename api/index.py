@@ -432,7 +432,13 @@ def _yf_quote_summary(symbol: str) -> Optional[dict]:
 def _yf_batch_quote(symbols: List[str]) -> Dict[str, dict]:
     """
     Yahoo Finance v7 批量报价 — 一次请求拿所有股票盘前/盘中/盘后涨跌幅和价格。
-    preMarketChangePercent 是现成字段，直接用，不用自己算。
+    preMarketChangePercent / regularMarketChangePercent / postMarketChangePercent
+    均为现成字段，直接用，不需要自己用 closes[-2] 手算，不会出现 KLAC +1029% 这类问题。
+
+    ⚠️  未接入主流程原因：Yahoo v7 /quote 单次请求 symbol 数量有上限（约 10-20 个），
+        QDII 美股持仓可达 100+ symbols，需分批切割后合并，改造成本较高。
+        目前主流程仍走 fetch_stock_price_fields（v8 chart 逐只拉取，有四层容灾）。
+        若未来要接入，需在调用侧将 symbols 按 ≤15 个一组分批，再合并结果。
     返回 {symbol: {pre_pct, regular_pct, post_pct, price, close_price}}
     """
     if not symbols:
@@ -1860,6 +1866,28 @@ def cron_clear():
         return {"ok": False, "msg": str(e)}
 
 
+@app.get("/api/cache/delete")
+def cache_delete_key(key: str = ""):
+    """删除指定 Redis key。
+    GET /api/cache/delete?key=stock_last_post_KLAC
+    支持精确 key，也支持通配符（如 stock_pf_KLAC* 会删除所有匹配的 key）。
+    """
+    if not key:
+        return {"ok": False, "msg": "key is required"}
+    r = _get_redis()
+    if not r:
+        return {"ok": False, "msg": "Redis unavailable"}
+    try:
+        if "*" in key:
+            _cache_delete_pattern(key)
+            return {"ok": True, "pattern": key}
+        else:
+            _cache_delete(key)
+            return {"ok": True, "deleted": [key]}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+
+
 # ─── 实时行情：昨日涨跌 + 近1年滚动涨幅 ──────────────────────────────────────
 
 _ALL_CODES = [
@@ -3014,13 +3042,19 @@ def fetch_stock_price_fields(symbol: str) -> dict:
             meta   = result["meta"]
             closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
             prev   = 0.0
-            if len(closes) >= 2:
-                prev = float(closes[-2])
-            else:
-                for key in ("regularMarketPreviousClose", "previousClose", "chartPreviousClose"):
-                    v = meta.get(key)
+            # 优先用 meta.regularMarketPreviousClose，Yahoo 直接给的昨收，最可靠
+            # closes[-2] 有时含过期历史数据（如分红/分拆前旧价），导致涨跌幅严重失真
+            for key in ("regularMarketPreviousClose", "previousClose"):
+                v = meta.get(key)
+                if v:
+                    prev = float(v); break
+            if not prev:
+                if len(closes) >= 2:
+                    prev = float(closes[-2])
+                else:
+                    v = meta.get("chartPreviousClose")
                     if v:
-                        prev = float(v); break
+                        prev = float(v)
             if prev:
                 def _calc_pct(price_key: str) -> Optional[float]:
                     p = float(meta.get(price_key) or 0)
@@ -3623,30 +3657,78 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                     stock_cache[sym] = _stale_cached(sym) or dict(_EMPTY_PF)
     else:
         # a_share / weekend：美股已收盘
-        # 1) 读常规 8h 缓存（有就用）
-        # 2) 缓存为空时拉一次填充收盘价
-        # 3) a_share：叠加 stock_last_post_{sym} 快照，注入 last_post_pct（"昨日涨跌"）
-        missing = [sym for sym in all_symbols if not _pf_cached(sym)]
-        if missing:
-            with ThreadPoolExecutor(max_workers=16) as ex:
-                sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
-                for fut, sym in sf.items():
-                    try:    stock_cache[sym] = fut.result()
-                    except: stock_cache[sym] = dict(_EMPTY_PF)
+        if session == "a_share":
+            # ── A股时段：Nasdaq 直接字段获取昨日涨跌幅，每日一次，缓存全天 ──────────
+            # 改动原因：原逻辑依赖 fetch_stock_price_fields（Yahoo v8 chart）拿历史
+            # close 序列，用 closes[-2] 手算涨跌幅。Yahoo 偶发在序列里混入几年前的
+            # 旧价格（如 KLAC closes[-2] ≈ $213，当前价 $2411），导致算出 +1029% 这类
+            # 严重失真数据，写入 stock_last_post_* 快照后污染 A 股估值（如 +38.83%）。
+            # 改为调用 Nasdaq _nasdaq_fetch，percentageChange 是直接字段，不依赖历史
+            # 序列，彻底规避手算风险。每日首次 A 股请求时拉取一次，缓存 20h。
+            _HKT = timezone(timedelta(hours=8))
+            today_hkt = datetime.now(_HKT).strftime("%Y-%m-%d")
+            daily_snap_key = f"qdii_nasdaq_daily_{today_hkt}"
+            daily_snap = _cache_get(daily_snap_key) or {}
+
+            if not daily_snap:
+                logger.info(f"[qdii/a_share] building Nasdaq daily snapshot {today_hkt}, {len(us_symbols)} US symbols")
+                fresh_snap: dict = {}
+                with ThreadPoolExecutor(max_workers=min(32, len(us_symbols))) as ex:
+                    futs = {ex.submit(_nasdaq_fetch, sym): sym for sym in us_symbols}
+                    done, _ = wait(list(futs), timeout=20)
+                    for fut in done:
+                        sym = futs[fut]
+                        try:
+                            r = fut.result()
+                            if r.get("pct") is not None:
+                                fresh_snap[sym] = {"pct": r["pct"], "close_price": r.get("prev_close")}
+                        except Exception as e:
+                            logger.warning(f"[qdii/a_share] nasdaq {sym}: {e}")
+                if fresh_snap:
+                    _cache_set(daily_snap_key, fresh_snap, 20 * 3600)
+                    daily_snap = fresh_snap
+                logger.info(f"[qdii/a_share] snapshot done: {len(daily_snap)}/{len(us_symbols)} symbols")
+
+            for sym in us_symbols:
+                pf = _pf_cached(sym) or dict(_EMPTY_PF)
+                snap = daily_snap.get(sym) or {}
+                if snap.get("pct") is not None:
+                    pf = {**pf, "last_post_pct": snap["pct"]}
+                    if snap.get("close_price") and not pf.get("close_price"):
+                        pf["close_price"] = snap["close_price"]
+                stock_cache[sym] = pf
+
+            # ── 以下为原来的逻辑，已停用，原因见上方注释 ──────────────────────────
+            # missing = [sym for sym in all_symbols if not _pf_cached(sym)]
+            # if missing:
+            #     with ThreadPoolExecutor(max_workers=16) as ex:
+            #         sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
+            #         for fut, sym in sf.items():
+            #             try:    stock_cache[sym] = fut.result()
+            #             except: stock_cache[sym] = dict(_EMPTY_PF)
+            # snap_keys = [f"stock_last_post_{s}" for s in all_symbols]
+            # bulk_snap = _cache_mget(snap_keys)
+            # for sym in all_symbols:
+            #     snap = bulk_snap.get(f"stock_last_post_{sym}") or {}
+            #     if snap.get("pct") is not None:
+            #         stock_cache[sym] = {**stock_cache[sym], "last_post_pct": snap["pct"]}
+            #         if snap.get("close_price") and not stock_cache[sym].get("close_price"):
+            #             stock_cache[sym]["close_price"] = snap["close_price"]
+
+        else:
+            # weekend：读缓存，缓存未命中时用 fetch_stock_price_fields 兜底
+            missing = [sym for sym in all_symbols if not _pf_cached(sym)]
+            if missing:
+                with ThreadPoolExecutor(max_workers=16) as ex:
+                    sf = {ex.submit(fetch_stock_price_fields, sym): sym for sym in missing}
+                    for fut, sym in sf.items():
+                        try:    stock_cache[sym] = fut.result()
+                        except: stock_cache[sym] = dict(_EMPTY_PF)
+
+        # 兜底：确保所有 symbol 都在 stock_cache（non-US 已由 Sina batch 填充）
         for sym in all_symbols:
             if sym not in stock_cache:
                 stock_cache[sym] = _pf_cached(sym) or dict(_EMPTY_PF)
-
-        # a_share：读盘后快照，注入 last_post_pct 供 "昨日涨跌" 展示
-        if session == "a_share":
-            snap_keys = [f"stock_last_post_{s}" for s in all_symbols]
-            bulk_snap = _cache_mget(snap_keys)
-            for sym in all_symbols:
-                snap = bulk_snap.get(f"stock_last_post_{sym}") or {}
-                if snap.get("pct") is not None:
-                    stock_cache[sym] = {**stock_cache[sym], "last_post_pct": snap["pct"]}
-                    if snap.get("close_price") and not stock_cache[sym].get("close_price"):
-                        stock_cache[sym]["close_price"] = snap["close_price"]
 
     # ── Step 3: 逐基金估值（session-aware 优先级）─────────────────────────────
     # 计算「上周五」日期，用于 weekend nav_published 判断
