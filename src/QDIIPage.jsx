@@ -491,7 +491,6 @@ function DetailPanel({ fund, onClose, cc, session }) {
             <div style={{ borderRadius:12, border:`1px solid ${cc.border}`, overflow:"hidden" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize: isMobile ? 12 : 13 }}>
                 {(() => {
-                    const priceLabel  = session === "us_open" ? "实时价" : "收盘价";
                     const changeLabel = { pre_market:"盘前", us_open:"盘中", post_market:"盘后", a_share:"昨涨跌", weekend:"昨涨跌" }[session] ?? "涨跌";
                     const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
                     const displayed = showAll ? holdings : holdings.slice(0, 10);
@@ -503,14 +502,12 @@ function DetailPanel({ fund, onClose, cc, session }) {
                   <tr style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)" }}>
                     <th style={{ ...thStyle, textAlign:"left" }}>名称</th>
                     <th style={{ ...thStyle, textAlign:"center" }}>占比</th>
-                    <th style={{ ...thStyle, textAlign:"right" }}>{priceLabel}</th>
                     <th style={{ ...thStyle, textAlign:"right" }}>{changeLabel}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {displayed.map((h, i) => {
                     const dotColor = i < 10 ? DONUT_COLORS[i] : "#d1d5db";
-                    const displayPrice = h.price;
                     return (
                       <tr key={h.symbol || i} style={{ background: i % 2 ? cc.bg : cc.card }}>
                         <td style={{ ...mkTd(cc), padding: tdP }}>
@@ -533,13 +530,6 @@ function DetailPanel({ fund, onClose, cc, session }) {
                               </div>
                               <span style={{ fontSize:12, fontWeight:600, color:cc.text }}>{h.weight.toFixed(2)}%</span>
                             </div>
-                          )}
-                        </td>
-                        <td style={{ ...mkTd(cc), textAlign:"right", fontFamily:"monospace", fontSize: isMobile ? 11 : 12, padding: tdP }}>
-                          {displayPrice != null ? (
-                            <span style={{ color:cc.textMuted, fontWeight:500 }}>${displayPrice.toFixed(2)}</span>
-                          ) : (
-                            <span style={{ color:cc.textDim }}>—</span>
                           )}
                         </td>
                         <td style={{ ...mkTd(cc), textAlign:"right", padding: tdP }}>

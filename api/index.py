@@ -2563,13 +2563,12 @@ def _db_save_daily_snap(snap: dict, date: str):
     with _db() as conn:
         for sym, data in snap.items():
             conn.execute("""
-                INSERT INTO qdii_stock_prices(symbol, date, change_pct, close_price, updated_at)
-                VALUES(?,?,?,?,?)
+                INSERT INTO qdii_stock_prices(symbol, date, change_pct, updated_at)
+                VALUES(?,?,?,?)
                 ON CONFLICT(symbol, date) DO UPDATE SET
                     change_pct=excluded.change_pct,
-                    close_price=excluded.close_price,
                     updated_at=excluded.updated_at
-            """, (sym, date, data.get("pct"), data.get("close_price"), now))
+            """, (sym, date, data.get("pct"), now))
         conn.execute("DELETE FROM qdii_stock_prices WHERE date < date('now', '-3 days')")
     logger.info(f"[db] saved daily snap {date}: {len(snap)} symbols, cleaned >3d old data")
 
@@ -2581,7 +2580,7 @@ def _db_load_latest_prices(symbols: list) -> dict:
     with _db() as conn:
         placeholders = ",".join("?" * len(symbols))
         rows = conn.execute(f"""
-            SELECT symbol, change_pct, close_price FROM qdii_stock_prices
+            SELECT symbol, change_pct FROM qdii_stock_prices
             WHERE symbol IN ({placeholders})
             AND change_pct IS NOT NULL
             ORDER BY date DESC
@@ -2590,7 +2589,7 @@ def _db_load_latest_prices(symbols: list) -> dict:
     for row in rows:
         sym = row["symbol"]
         if sym not in result:  # 每个 symbol 只取最新一条
-            result[sym] = {"pct": row["change_pct"], "close_price": row["close_price"]}
+            result[sym] = {"pct": row["change_pct"]}
     return result
 
 
@@ -3188,8 +3187,8 @@ def fetch_stock_price_fields(symbol: str) -> dict:
             snap_pct = out.get("post_pct") or out.get("regular_pct")
             if snap_pct is not None:
                 _cache_set(last_post_key, {
-                    "pct":         snap_pct,
-                    "close_price": out.get("close_price"),
+                    "pct": snap_pct,
+                    # "close_price": out.get("close_price"),  # 已停用，前端不再展示收盘价
                 }, 72 * 3600)  # 72h：确保周五盘后快照能撑过周末到周一A股时段
         _cache_set(cache_key, out, ttl)
         _cache_set(stale_cache_key, out, 7 * 24 * 3600)
@@ -3446,8 +3445,7 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
             chg = pf.get("last_post_pct") or pf.get("post_pct") or pf.get("regular_pct")
         else:  # us_open, weekend
             chg = pf.get("regular_pct")
-        enriched.append({**h, "change": chg, "price": pf.get("price"),
-                         "close_price": pf.get("close_price")})
+        enriched.append({**h, "change": chg, "price": pf.get("price")})
         if chg is not None:
             weighted_sum   += h["weight"] / 100.0 * chg
             covered_weight += h["weight"]
@@ -3727,10 +3725,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                         try:
                             r = fut.result()
                             if r.get("pct") is not None:
-                                # prev_close = secondaryData.lastSalePrice，A股时段为空
-                                # 回退用 price（primaryData.lastSalePrice），A股时段即昨收价
-                                close = r.get("prev_close") or r.get("price")
-                                fresh_snap[sym] = {"pct": r["pct"], "close_price": close}
+                                fresh_snap[sym] = {"pct": r["pct"]}
                         except Exception as e:
                             logger.warning(f"[qdii/a_share] nasdaq {sym}: {e}")
                 if fresh_snap:
@@ -3748,18 +3743,12 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
 
                 logger.info(f"[qdii/a_share] snapshot done: {len(daily_snap)}/{len(us_symbols)} symbols")
 
-            # close_price 从 stock_last_post_* 读（原有逻辑，72h TTL，post_market 时段写入）
-            last_post_keys = [f"stock_last_post_{s}" for s in us_symbols]
-            bulk_last_post = _cache_mget(last_post_keys)
-
+            # close_price 已停用（前端不再展示收盘价列）
             for sym in us_symbols:
                 pf = _pf_cached(sym) or dict(_EMPTY_PF)
                 snap = daily_snap.get(sym) or {}
                 if snap.get("pct") is not None:
                     pf = {**pf, "last_post_pct": snap["pct"]}
-                last_post = bulk_last_post.get(f"stock_last_post_{sym}") or {}
-                if last_post.get("close_price") and not pf.get("close_price"):
-                    pf = {**pf, "close_price": last_post["close_price"]}
                 stock_cache[sym] = pf
 
             # ── 以下为原来的逻辑，已停用，原因见上方注释 ──────────────────────────
