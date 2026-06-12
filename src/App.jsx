@@ -4442,18 +4442,9 @@ export default function App() {
           <div style={{ fontSize:18, fontWeight:800, color:"#1e293b", marginBottom:8 }}>
             网站升级中
           </div>
-          <div style={{ fontSize:14, color:"#64748b", lineHeight:1.8, marginBottom:20 }}>
-            更多信息请加入官方群聊
+          <div style={{ fontSize:14, color:"#64748b", lineHeight:1.8 }}>
+            更多咨询请点击右上角加入群聊
           </div>
-          <a href="https://t.me/WiseInvest513Chat" target="_blank" rel="noopener noreferrer"
-            style={{
-              display:"inline-block", padding:"12px 28px", borderRadius:12,
-              background:"linear-gradient(135deg,#229ED9,#1a7abf)",
-              color:"#fff", fontWeight:700, fontSize:15, textDecoration:"none",
-              boxShadow:"0 4px 14px rgba(34,158,217,0.4)",
-            }}>
-            💬 加入群聊
-          </a>
         </div>
       </div>
 
