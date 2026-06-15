@@ -304,26 +304,53 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
           <span style={{ color:cc.textDim, fontSize:12 }}>—</span>
         )}
       </td>}
-      {session === "a_share" && !isMobile && (
+      {/* 桌面端：收盘估值 | 实时估值 双列 */}
+      {!isMobile && (
         <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
-          {fund.post_valuation != null ? (
-            <span style={{ color: fund.post_valuation >= 0 ? cc.red : cc.green, fontSize:15 }}>
-              {fund.post_valuation >= 0 ? "+" : ""}{fund.post_valuation.toFixed(2)}%
+          {fund.close_valuation != null ? (
+            <span style={{ color: fund.close_valuation >= 0 ? cc.red : cc.green, fontSize:15 }}>
+              {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
             </span>
           ) : (
             <span style={{ color:cc.textDim, fontSize:13 }}>—</span>
           )}
         </td>
       )}
-      <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
-        {val != null ? (
-          <span style={{ color: val >= 0 ? cc.red : cc.green, fontSize:15 }}>
-            {val >= 0 ? "+" : ""}{val.toFixed(2)}%
-          </span>
-        ) : (
-          <span style={{ color:"#a5b4fc", fontSize:13 }}>计算中…</span>
-        )}
-      </td>
+      {!isMobile && session !== "weekend" && (
+        <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
+          {fund.live_valuation != null ? (
+            <span style={{ color: fund.live_valuation >= 0 ? cc.red : cc.green, fontSize:15 }}>
+              {fund.live_valuation >= 0 ? "+" : ""}{fund.live_valuation.toFixed(2)}%
+            </span>
+          ) : (
+            <span style={{ color:"#a5b4fc", fontSize:13 }}>—</span>
+          )}
+        </td>
+      )}
+      {/* 移动端：收盘估值列 */}
+      {isMobile && (
+        <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
+          {fund.close_valuation != null ? (
+            <span style={{ color: fund.close_valuation >= 0 ? cc.red : cc.green, fontSize:15, fontWeight:700 }}>
+              {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
+            </span>
+          ) : (
+            <span style={{ color:cc.textDim, fontSize:13 }}>—</span>
+          )}
+        </td>
+      )}
+      {/* 移动端：实时估值列 */}
+      {isMobile && session !== "weekend" && (
+        <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
+          {fund.live_valuation != null ? (
+            <span style={{ color: fund.live_valuation >= 0 ? cc.red : cc.green, fontSize:15, fontWeight:700 }}>
+              {fund.live_valuation >= 0 ? "+" : ""}{fund.live_valuation.toFixed(2)}%
+            </span>
+          ) : (
+            <span style={{ color:"#a5b4fc", fontSize:13 }}>—</span>
+          )}
+        </td>
+      )}
     </tr>
   );
 }
@@ -368,33 +395,55 @@ function DetailPanel({ fund, onClose, cc, session }) {
             }}>×</button>
           </div>
 
-          {val != null && (
-            <div style={{ marginTop:16, display:"flex", alignItems:"flex-end", gap:20, flexWrap:"wrap" }}>
-              {/* 盘后估值暂时隐藏
-              {session === "a_share" && fund.post_valuation != null && (
-                <div>
-                  <div style={{ fontSize:30, fontWeight:900, letterSpacing:-1, color: fund.post_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
-                    {fund.post_valuation >= 0 ? "+" : ""}{fund.post_valuation.toFixed(2)}%
+          {/* 收盘估值 + 实时估值 双卡片 */}
+          {(fund.close_valuation != null || fund.live_valuation != null) && (
+            <div style={{ marginTop:16, display:"flex", gap:10 }}>
+              {/* 左卡：收盘估值（冻结） */}
+              <div style={{
+                flex:1, padding:"12px 14px", borderRadius:12,
+                background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.25)",
+                minWidth:0,
+              }}>
+                <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>收盘估值</div>
+                {fund.close_valuation != null ? (
+                  <div style={{ fontSize:isMobile ? 24 : 28, fontWeight:900, letterSpacing:-1,
+                    color: fund.close_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
+                    {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
                   </div>
-                  <div style={{ fontSize:11, opacity:0.65, marginTop:2 }}>盘后估值<br/>盘后涨跌加权</div>
-                </div>
-              )}
-              */}
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ fontSize:36, fontWeight:900, letterSpacing:-1, color: val >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
-                  {val >= 0 ? "+" : ""}{val.toFixed(2)}%
-                </div>
-                <div style={{ fontSize:12, opacity:0.7, lineHeight:1.5 }}>
-                  {SESSION_INFO[session]?.valLabel ?? "今日估值"}涨跌幅<br/>
-                  {fund.data_source === "gszzl"           ? "fundgz 全仓实时估值" :
-                   fund.data_source === "gszzl_fallback"  ? "gszzl 兜底数据" :
-                   fund.data_source === "us_open_calc"    ? "实时股价加权" :
-                   fund.data_source === "pre_market_calc" ? "盘前涨跌幅加权" :
-                   fund.data_source === "post_market_calc"? "盘后涨跌幅加权" :
-                   fund.data_source === "a_share_post_calc"? "收盘涨跌加权" :
-                   "季报持仓加权"}
+                ) : (
+                  <div style={{ fontSize:20, color:"rgba(255,255,255,0.4)" }}>—</div>
+                )}
+                <div style={{ fontSize:10, opacity:0.5, marginTop:4 }}>
+                  {fund.coverage != null ? `${fund.coverage.toFixed(0)}% 覆盖` : "收盘价加权"}
                 </div>
               </div>
+              {/* 右卡：实时估值（仅非 weekend 时段） */}
+              {session !== "weekend" && (
+                <div style={{
+                  flex:1, padding:"12px 14px", borderRadius:12,
+                  background:"rgba(255,255,255,0.18)", border:"2px solid rgba(255,255,255,0.45)",
+                  minWidth:0,
+                }}>
+                  <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>实时估值</div>
+                  {fund.live_valuation != null ? (
+                    <div style={{ fontSize:isMobile ? 24 : 28, fontWeight:900, letterSpacing:-1,
+                      color: fund.live_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
+                      {fund.live_valuation >= 0 ? "+" : ""}{fund.live_valuation.toFixed(2)}%
+                    </div>
+                  ) : (
+                    <div style={{ fontSize:20, color:"rgba(255,255,255,0.4)" }}>计算中…</div>
+                  )}
+                  <div style={{ fontSize:10, opacity:0.5, marginTop:4 }}>
+                    {fund.data_source === "gszzl"           ? "fundgz 全仓估值" :
+                     fund.data_source === "gszzl_fallback"  ? "gszzl 兜底" :
+                     fund.data_source === "us_open_calc"    ? "实时股价加权" :
+                     fund.data_source === "pre_market_calc" ? "盘前涨跌加权" :
+                     fund.data_source === "post_market_calc"? "盘后涨跌加权" :
+                     fund.data_source === "a_share_post_calc"? "夜盘涨跌加权" :
+                     SESSION_INFO[session]?.desc?.split("，")[0] ?? "持仓加权"}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -513,23 +562,59 @@ function DetailPanel({ fund, onClose, cc, session }) {
             <div style={{ borderRadius:12, border:`1px solid ${cc.border}`, overflow:"hidden" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize: isMobile ? 12 : 13 }}>
                 {(() => {
-                    const changeLabel = { pre_market:"盘前", us_open:"盘中", post_market:"盘后", a_share:"昨涨跌", weekend:"昨涨跌" }[session] ?? "涨跌";
                     const maxW = holdings.reduce((m, x) => Math.max(m, x.weight), 1);
                     const displayed = holdings.slice(0, 10);
                     const tdP = isMobile ? "8px 6px" : "13px 14px";
                     const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
                       padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
+                    // 判断是否有夜盘/实时第二列数据
+                    const hasPostChange = session === "a_share" && displayed.some(h => h.post_change != null);
+                    const hasCloseChange = ["pre_market","us_open","post_market"].includes(session) && displayed.some(h => h.close_change != null);
+                    const showDual = hasPostChange || hasCloseChange;
+                    // 收盘列标签和实时列标签
+                    const closeLabel = "收盘";
+                    const liveLabel  = { a_share:"夜盘", pre_market:"盘前", us_open:"盘中", post_market:"盘后" }[session] ?? "实时";
+                    // 获取每行的收盘和实时涨跌
+                    const getChanges = (h) => {
+                      if (session === "a_share")
+                        return { close: h.change, live: h.post_change };
+                      if (["pre_market","us_open","post_market"].includes(session))
+                        return { close: h.close_change, live: h.change };
+                      return { close: h.change, live: null };
+                    };
+                    const fmtChg = (v, cc) => v != null
+                      ? <span style={{ color: v >= 0 ? cc.red : cc.green, fontWeight:700, fontSize: isMobile ? 12 : 13 }}>
+                          {v >= 0 ? "+" : ""}{v.toFixed(2)}%
+                        </span>
+                      : <span style={{ color:cc.textDim, fontSize: isMobile ? 11 : 12 }}>—</span>;
+                    const hFs = isMobile ? 12 : 13;
+                    const subFs = isMobile ? 9 : 10;
+                    // 所有 th 统一：字号相同、垂直居中、留底部空间给绝对定位的副标题
+                    const baseTh = { ...thStyle, fontSize: hFs, verticalAlign:"middle", position:"relative", paddingBottom: isMobile ? 18 : 20 };
+                    const chgTh  = { ...baseTh, textAlign:"right", width: isMobile ? 68 : 88, paddingLeft:0 };
+                    const subStyle = { position:"absolute", bottom: isMobile ? 4 : 5, fontSize: subFs, opacity:0.6, fontWeight:400, whiteSpace:"nowrap" };
                     return (<>
                 <thead>
                   <tr style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)" }}>
-                    <th style={{ ...thStyle, textAlign:"left" }}>名称</th>
-                    <th style={{ ...thStyle, textAlign:"center" }}>占比</th>
-                    <th style={{ ...thStyle, textAlign:"right" }}>{changeLabel}</th>
+                    <th style={{ ...baseTh, textAlign:"left" }}>名称</th>
+                    <th style={{ ...baseTh, textAlign:"center" }}>占比</th>
+                    <th style={chgTh}>
+                      {closeLabel}
+                      <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>{fund.close_hkt_label ?? ""}</span>
+                    </th>
+                    {showDual && (
+                      <th style={chgTh}>
+                        {liveLabel}
+                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>最新</span>
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {displayed.map((h, i) => {
                     const dotColor = i < 10 ? DONUT_COLORS[i] : "#d1d5db";
+                    const { close, live } = getChanges(h);
+                    const chgTd = { ...mkTd(cc), textAlign:"right", padding: isMobile ? "10px 6px" : "13px 10px", paddingLeft:0 };
                     return (
                       <tr key={h.symbol || i} style={{ background: i % 2 ? cc.bg : cc.card }}>
                         <td style={{ ...mkTd(cc), padding: tdP }}>
@@ -554,15 +639,8 @@ function DetailPanel({ fund, onClose, cc, session }) {
                             </div>
                           )}
                         </td>
-                        <td style={{ ...mkTd(cc), textAlign:"right", padding: tdP }}>
-                          {h.change != null ? (
-                            <span style={{ color: h.change >= 0 ? cc.red : cc.green, fontWeight:600, fontSize: isMobile ? 12 : 13 }}>
-                              {h.change >= 0 ? "+" : ""}{h.change.toFixed(2)}%
-                            </span>
-                          ) : (
-                            <span style={{ color:cc.textDim, fontSize: isMobile ? 11 : 12 }} title="非美股或暂无报价">—</span>
-                          )}
-                        </td>
+                        <td style={chgTd}>{fmtChg(close, cc)}</td>
+                        {showDual && <td style={chgTd}>{fmtChg(live, cc)}</td>}
                       </tr>
                     );
                   })}
@@ -963,6 +1041,15 @@ export default function QDIIPage() {
         daily_limit: ua.daily_limit ?? f.daily_limit,
         buy_status:  ua.buy_status  ?? f.buy_status,
         valuation:     api.valuation     ?? null,
+        // 收盘估值（冻结）：a_share 时段 = valuation；其他时段 = 单独计算的 close_valuation
+        close_valuation: session === "a_share"
+          ? (api.valuation       ?? null)
+          : (api.close_valuation ?? null),
+        // 实时估值：a_share 时段 = 夜盘 post_valuation；其他时段 = 当前 session 的 valuation
+        live_valuation: session === "a_share"
+          ? (api.post_valuation  ?? null)
+          : (api.valuation       ?? null),
+        post_valuation:  api.post_valuation  ?? null,
         coverage:      api.coverage      ?? null,
         holdings:        api.holdings        ?? null,
         holdings_date:   api.holdings_date   ?? null,
@@ -970,8 +1057,10 @@ export default function QDIIPage() {
         nav:             api.nav             ?? null,
         nav_date:      api.nav_date      ?? null,
         nav_published: api.nav_published ?? false,
-        data_source:   api.data_source   ?? null,
-        gszzl_time:    api.gszzl_time    ?? null,
+        data_source:     api.data_source     ?? null,
+        gszzl_time:      api.gszzl_time      ?? null,
+        trade_date:      api.trade_date      ?? null,
+        close_hkt_label: api.close_hkt_label ?? null,
       };
     });
 
@@ -996,6 +1085,27 @@ export default function QDIIPage() {
 
   return (
     <div style={{ minHeight:"100vh", background:CC.bg, paddingBottom:60, transition:"background 0.2s" }}>
+
+      {/* ── 数据修复中弹窗 ────────────────────────────────────────────────────── */}
+      <div style={{
+        position:"fixed", inset:0, zIndex:9999,
+        background:"rgba(0,0,0,0.6)", backdropFilter:"blur(8px)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+      }}>
+        <div style={{
+          background:"#fff", borderRadius:20, padding:"40px 48px",
+          textAlign:"center", boxShadow:"0 20px 60px rgba(0,0,0,0.25)",
+          maxWidth:360, width:"90%",
+        }}>
+          <div style={{ fontSize:40, marginBottom:16 }}>🔧</div>
+          <div style={{ fontSize:18, fontWeight:800, color:"#1e293b", marginBottom:10 }}>
+            数据修复中
+          </div>
+          <div style={{ fontSize:14, color:"#64748b", lineHeight:1.7 }}>
+            夜盘数据正在修复，预计明早恢复正常，感谢耐心等待
+          </div>
+        </div>
+      </div>
 
       {/* ── Hero ─────────────────────────────────────────────────────────────── */}
       <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden" }}>
@@ -1397,15 +1507,16 @@ export default function QDIIPage() {
                     </>
                   )}
                   {(isMobile ? [
-                    { key:"valuation", label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
+                    { key:"close_valuation", label:"收盘估值", align:"center" },
+                    ...(session !== "weekend" ? [{ key:"live_valuation", label:"实时估值", align:"center" }] : []),
                   ] : [
-                    { key:"scale",       label:"规模(亿)", align:"center" },
-                    { key:"ytd_return",  label:"25年涨幅", align:"right"  },
-                    { key:"daily_limit", label:"每日限额", align:"center" },
-                    { key:"status",      label:"状态",     align:"center", noSort:true },
-                    { key:"nav",         label:"最新净值", align:"center" },
-                    // 盘后估值列暂时隐藏：...(session === "a_share" ? [{ key:"post_valuation", label:"盘后估值", align:"center" }] : []),
-                    { key:"valuation",   label: SESSION_INFO[session]?.valLabel ?? "今日估值", align:"center" },
+                    { key:"scale",         label:"规模(亿)", align:"center" },
+                    { key:"ytd_return",    label:"25年涨幅", align:"right"  },
+                    { key:"daily_limit",   label:"每日限额", align:"center" },
+                    { key:"status",        label:"状态",     align:"center", noSort:true },
+                    { key:"nav",           label:"最新净值", align:"center" },
+                    { key:"close_valuation", label:"收盘估值", align:"center" },
+                    ...(session !== "weekend" ? [{ key:"live_valuation", label: "实时估值", align:"center" }] : []),
                   ]).map(({ key, label, align, noSort }) => {
                     const active = sortKey === key;
                     const arrow = active ? (sortDir === "desc" ? " ▼" : " ▲") : " ↕";
@@ -1430,7 +1541,7 @@ export default function QDIIPage() {
                 ))}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={isMobile ? 3 : 9} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
+                    <td colSpan={isMobile ? (session !== "weekend" ? 4 : 3) : (session === "weekend" ? 9 : 10)} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
                       未找到相关基金
                     </td>
                   </tr>
