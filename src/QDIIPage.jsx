@@ -567,22 +567,15 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     const tdP = isMobile ? "8px 6px" : "13px 14px";
                     const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
                       padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
-                    // 判断是否显示双列（收盘 + 实时）
-                    // a_share: 有夜盘数据才显示双列
-                    const hasPostChange = session === "a_share" && displayed.some(h => h.post_change != null);
-                    // 美股活跃时段：有实时数据（h.change）就显示双列，不再要求 close_change 必须非空
-                    // 原逻辑：只有 close_change 非空才显示——导致 close_pct 缺失时整列消失，实时数据也看不到
-                    const hasLiveChange = ["pre_market","us_open","post_market"].includes(session) && displayed.some(h => h.change != null);
-                    const showDual = hasPostChange || hasLiveChange;
-                    // 收盘列标签和实时列标签
+                    // 有实时数据（h.change）且非 weekend 时显示双列
+                    const showDual = session !== "weekend" && displayed.some(h => h.change != null);
                     const closeLabel = "收盘";
                     const liveLabel  = { a_share:"夜盘", pre_market:"盘前", us_open:"盘中", post_market:"盘后" }[session] ?? "实时";
-                    // 获取每行的收盘和实时涨跌
+                    // 后端统一：h.close_change = 收盘，h.change = 实时/夜盘
                     const getChanges = (h) => {
-                      if (session === "a_share")
-                        return { close: h.change, live: h.post_change };
-                      if (["pre_market","us_open","post_market"].includes(session))
-                        return { close: h.close_change, live: h.change };
+                      if (session === "weekend")
+                        return { close: h.close_change, live: null };
+                      return { close: h.close_change, live: h.change };
                       return { close: h.change, live: null };
                     };
                     const fmtChg = (v, cc) => v != null
@@ -1045,22 +1038,9 @@ export default function QDIIPage() {
         buy_status:  ua.buy_status  ?? f.buy_status,
         valuation:     api.valuation     ?? null,
         // [SESSION DISPLAY SPEC] 前端字段映射 — 与后端 api/index.py 中的权威注释保持一致。
-        // 修改下方逻辑前必须先查阅后端注释块（搜索 SESSION DISPLAY SPEC）。
-        // 若改动与规范相悖，须用 // [SPEC CONFLICT] 标注并告知用户确认。
-        //
-        // 收盘估值：固定参照，上一个已完成交易日的正规收盘
-        //   a_share  → api.valuation（后端 a_share 直接以 close_pct 计算 valuation）
-        //   其他时段 → api.close_valuation（后端单独计算的 close_valuation 字段）
-        close_valuation: session === "a_share"
-          ? (api.valuation       ?? null)
-          : (api.close_valuation ?? null),
-        // 实时估值：当前时段的动态估值
-        //   a_share  → api.post_valuation（昨日夜盘，来自 Redis post_pct，08:05 cron 写入）
-        //   其他时段 → api.valuation（盘前/盘中/夜盘 实时加权）
-        live_valuation: session === "a_share"
-          ? (api.post_valuation  ?? null)
-          : (api.valuation       ?? null),
-        post_valuation:  api.post_valuation  ?? null,
+        // 后端统一返回 close_valuation / live_valuation，前端直接使用
+        close_valuation: api.close_valuation ?? null,
+        live_valuation:  api.live_valuation  ?? null,
         coverage:      api.coverage      ?? null,
         holdings:        api.holdings        ?? null,
         holdings_date:   api.holdings_date   ?? null,

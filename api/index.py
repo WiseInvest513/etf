@@ -1686,32 +1686,53 @@ def cron_prem():
     return {"ts": datetime.now().isoformat(), "results": results}
 
 
-@app.get("/api/cron/qdii")
-def cron_qdii():
+@app.get("/api/cron/live")
+def cron_live():
     """
-    QDII估值预热 cron（Vercel Cron 触发）：
-    在各时段开始前5分钟运行，确保新时段开始时数据已在 Redis。
-      UTC 07:55 / HKT 15:55  → 盘前预热（pre_market 15:00 HKT 启动前）
-      UTC 13:25 / HKT 21:25  → 盘中预热（us_open 21:30 HKT 启动前）
-      UTC 19:55 / HKT 03:55  → 盘后预热（post_market 04:00 HKT 启动前）
-    策略：清旧缓存 → 全量重算 → 写入 Redis，用户刷新时直接命中缓存
+    每5分钟由 Vercel Cron 触发，拉取实时股价写入 Redis（qdii:live:{sym}，7min TTL）。
+    post_market 时段额外写 qdii:close（今日正规收盘，72h TTL）。
+    a_share / weekend 时段跳过（无需实时股价）。
     """
     session = _current_session()
-    logger.info(f"[cron/qdii] pre-warming started, session={session}")
+    if session in ("a_share", "weekend"):
+        return {"ok": True, "skipped": True, "session": session}
 
-    # 清旧缓存（这里主动删是安全的，因为 cron 在窗口开始前5分钟跑，此时用户量极少）
-    _cache_delete("qdii:response")
+    # 收集所有 US symbols（前10大持仓，排除港股/A股）
+    all_syms: set = set()
+    for code in QDII_CODES:
+        master = _C_TO_A_HOLDINGS_MAP.get(code, code)
+        holdings = fetch_qdii_holdings(master) or []
+        for h in sorted(holdings, key=lambda x: x.get("weight", 0), reverse=True)[:10]:
+            sym = h.get("symbol", "")
+            if sym and not any(sym.endswith(sfx) for sfx in _QDII_NON_US_SUFFIX):
+                all_syms.add(sym)
+    symbols = list(all_syms)
+    if not symbols:
+        return {"ok": False, "msg": "no symbols"}
 
-    # 复用主端点逻辑：force=False light=False + 无缓存 → 走完整计算流程
-    dummy_resp = Response()
-    try:
-        result = api_qdii_valuations(dummy_resp, force=False, light=False)
-        fund_count = len(result.get("funds", [])) if isinstance(result, dict) else 0
-        logger.info(f"[cron/qdii] pre-warming done: {fund_count} funds, session={session}")
-        return {"ok": True, "ts": datetime.now().isoformat(), "session": session, "funds": fund_count}
-    except Exception as e:
-        logger.error(f"[cron/qdii] pre-warming failed: {e}")
-        return {"ok": False, "ts": datetime.now().isoformat(), "session": session, "error": str(e)}
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if session == "post_market":
+        # 正规收盘已完成：Nasdaq → qdii:close（72h，覆盖到次日 A股 + 周末）
+        close_res = _fetch_chg_from_nasdaq(symbols, timeout=20)
+        if close_res:
+            _cache_mset({f"qdii:close:{s}": pct for s, pct in close_res.items()}, 72 * 3600)
+        # 夜盘实时：Yahoo v8 post → qdii:live（7min）
+        live_res = _fetch_chg_from_yf_simple(symbols, prefer_post=True, timeout=20)
+        if live_res:
+            _cache_mset({f"qdii:live:{s}": pct for s, pct in live_res.items()}, 7 * 60)
+        logger.info(f"[cron/live] post_market close={len(close_res)} live={len(live_res)}")
+        return {"ok": True, "ts": now, "session": session, "close": len(close_res), "live": len(live_res)}
+
+    else:  # pre_market / us_open：Nasdaq → qdii:live（7min），Yahoo 兜底
+        live_res = _fetch_chg_from_nasdaq(symbols, timeout=20)
+        missing  = [s for s in symbols if s not in live_res]
+        if missing:
+            live_res.update(_fetch_chg_from_yf_simple(missing, timeout=15))
+        if live_res:
+            _cache_mset({f"qdii:live:{s}": pct for s, pct in live_res.items()}, 7 * 60)
+        logger.info(f"[cron/live] {session} live={len(live_res)}/{len(symbols)}")
+        return {"ok": True, "ts": now, "session": session, "live": len(live_res)}
 
 
 # ─── 用户认证 ──────────────────────────────────────────────────────────────────
@@ -1870,22 +1891,15 @@ async def auth_change_password(request: _Request, authorization: str = _Header(N
 @app.get("/api/cron/post_snap")
 def cron_post_snap():
     """
-    手动/定时触发（Vercel UTC 21:30 Mon-Fri，美股收盘后 1.5h）：
-    拉取所有 QDII 持仓的收盘 + 盘后涨跌幅，写入 Redis。
-
-    数据源：
-      收盘（qdii:chg:close）: 纯美股 → Nasdaq; 国际市场(TW/KS/JP) → Yahoo v8
-      盘后（qdii:chg:post） : 美股+国际 → Yahoo v8 prefer_post=True
-      港股/A股（qdii:chg:close）: Yahoo v8
-    TTL: 72h（覆盖周五→周一A股），last_post 7天快照兜底
+    HKT 08:05 触发（夜盘结束后）：写入最终收盘 + 夜盘涨跌幅，72h TTL 覆盖周末。
+      qdii:close:{sym}  收盘涨跌幅（Nasdaq regular；国际市场/港股/A股用 Yahoo v8）
+      qdii:post:{sym}   夜盘涨跌幅（Yahoo v8 prefer_post，无夜盘股票跳过）
     """
-    # 收集所有 symbol，按数据源分组
     yf_syms: set = set()
     hk_a_syms: set = set()
     for code in QDII_CODES:
         master = _C_TO_A_HOLDINGS_MAP.get(code, code)
-        holdings = fetch_qdii_holdings(master) or []
-        for h in holdings:
+        for h in (fetch_qdii_holdings(master) or []):
             sym = h.get("symbol", "")
             if not sym:
                 continue
@@ -1893,6 +1907,7 @@ def cron_post_snap():
                 hk_a_syms.add(sym)
             else:
                 yf_syms.add(sym)
+
     us_symbols = list(yf_syms)
     hk_a_list  = list(hk_a_syms)
     if not us_symbols and not hk_a_list:
@@ -1900,65 +1915,45 @@ def cron_post_snap():
 
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # 层1：纯美股收盘 → Nasdaq（regularMarketChangePercent，准确区分正规收盘和盘后）
+    # 纯美股收盘 → Nasdaq
     pure_us = [s for s in us_symbols if not any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)]
     close_results: Dict[str, float] = {}
     if pure_us:
-        logger.info(f"[post_snap] Nasdaq close for {len(pure_us)} pure-US symbols")
         close_results = _fetch_chg_from_nasdaq(pure_us, timeout=60)
-        logger.info(f"[post_snap] Nasdaq got {len(close_results)}/{len(pure_us)}")
+        logger.info(f"[snap] Nasdaq close {len(close_results)}/{len(pure_us)}")
 
-    # 层2：所有美股+国际市场 → Yahoo v8 盘后（prefer_post=True：优先取 postMarketPrice）
-    #       国际市场（KS/TW/JP）无盘后，自动回落到正规收盘，兼做 close 兜底
-    logger.info(f"[post_snap] Yahoo v8 post for {len(us_symbols)} symbols")
+    # 所有美股+国际 → Yahoo v8 夜盘（国际市场无夜盘，自动回落到正规收盘兼做 close 兜底）
     post_results = _fetch_chg_from_yf_simple(us_symbols, prefer_post=True)
-    logger.info(f"[post_snap] Yahoo v8 post got {len(post_results)}/{len(us_symbols)}")
+    logger.info(f"[snap] Yahoo post {len(post_results)}/{len(us_symbols)}")
 
-    # 层3：港股/A股收盘 → Yahoo v8（无盘后，返回正规收盘）
+    # 港股/A股 → Yahoo v8 收盘
     hk_a_results: Dict[str, float] = {}
     if hk_a_list:
-        logger.info(f"[post_snap] Yahoo v8 close for {len(hk_a_list)} HK/A symbols")
         hk_a_results = _fetch_chg_from_yf_simple(hk_a_list, prefer_post=False)
-        logger.info(f"[post_snap] HK/A got {len(hk_a_results)}/{len(hk_a_list)}")
+        logger.info(f"[snap] HK/A close {len(hk_a_results)}/{len(hk_a_list)}")
 
-    # 写入缓存键
     written = 0
     missing_post = []
-
     for sym in us_symbols:
-        is_intl = any(sym.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)
-        # 收盘：纯美股用 Nasdaq；国际市场用 Yahoo v8（其无盘后，返回值即收盘）
+        is_intl   = any(sym.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)
         close_pct = close_results.get(sym) if not is_intl else post_results.get(sym)
-        post_pct  = post_results.get(sym) if not is_intl else None
+        post_pct  = post_results.get(sym)  if not is_intl else None
         if close_pct is None and post_pct is None:
             continue
         if close_pct is not None:
-            _cache_set(f"qdii:chg:close:{sym}", close_pct, 72 * 3600)
-            _cache_set(f"qdii:chg:stale:{sym}", close_pct, 7 * 24 * 3600)
+            _cache_set(f"qdii:close:{sym}", close_pct, 72 * 3600)
         if post_pct is not None:
-            _cache_set(f"qdii:chg:post:{sym}",      post_pct, 72 * 3600)
-            _cache_set(f"qdii:chg:last_post:{sym}", post_pct, 7 * 24 * 3600)
+            _cache_set(f"qdii:post:{sym}", post_pct, 72 * 3600)
         else:
             missing_post.append(sym)
         written += 1
 
     for sym, pct in hk_a_results.items():
-        _cache_set(f"qdii:chg:close:{sym}", pct, 72 * 3600)
-        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
+        _cache_set(f"qdii:close:{sym}", pct, 72 * 3600)
         written += 1
 
-    # 清顶层估值缓存，确保下次请求重新计算
-    _cache_delete("qdii:response")
-
-    total_all = len(us_symbols) + len(hk_a_list)
-    logger.info(f"[post_snap] done written={written}/{total_all}")
-    return {
-        "ok":           True,
-        "ts":           now,
-        "total":        total_all,
-        "written":      written,
-        "missing_post": missing_post,
-    }
+    logger.info(f"[snap] done written={written}/{len(us_symbols)+len(hk_a_list)}")
+    return {"ok": True, "ts": now, "written": written, "missing_post": missing_post}
 
 
 @app.get("/api/cron/clear")
@@ -2789,14 +2784,7 @@ def _current_session() -> str:
     if h >= 21.5 or h < 4.0: return "us_open"
     return "post_market"  # HKT 04:00-08:00
 
-def _valuation_ttl() -> int:
-    """us_open / pre_market 5min，weekend 60min，其余时段 15min。"""
-    s = _current_session()
-    if s in ("us_open", "pre_market"): return 5 * 60
-    if s == "weekend":  return 60 * 60
-    return 15 * 60
-
-_VALUATION_TTL  = 20 * 3600   # 持仓数据写 DB 时用，实际缓存由 _valuation_ttl() 决定
+_VALUATION_TTL  = 20 * 3600   # 持仓数据写 DB 时用
 
 
 # ─── 持仓抓取（多层次策略）─────────────────────────────────────────────────────
@@ -3454,161 +3442,37 @@ def _fetch_chg_from_yf_simple(symbols: List[str], timeout: int = 15, prefer_post
     return results
 
 
-def _build_stock_cache(us_symbols: List[str], non_us_syms: List[str],
-                       session: str) -> Dict[str, dict]:
+def _build_stock_cache(all_symbols: List[str]) -> Dict[str, dict]:
     """
-    根据 session 从 Redis 读取涨跌幅，构建 stock_cache。
-    只存 pct 字段，不存价格。
-
-    key 体系：
-      qdii:chg:pre:{sym}   盘前，TTL 5min
-      qdii:chg:open:{sym}  盘中，TTL 6min
-      qdii:chg:post:{sym}  盘后，TTL 28h（盘后 cron 写入，持续到次日 A股结束）
-      qdii:chg:close:{sym} 收盘快照，TTL 72h（04:05 cron 写入，覆盖周末）
-      qdii:chg:stale:{sym} 7日兜底
+    从 Redis 批量读取 qdii:close / qdii:post / qdii:live，构建 stock_cache。
+      qdii:close:{sym}  上一个完整交易日正规收盘涨跌幅（72h TTL，cron/snap 写入）
+      qdii:post:{sym}   上一个交易日夜盘涨跌幅（72h TTL，cron/snap 写入）
+      qdii:live:{sym}   当前盘中实时涨跌幅（7min TTL，cron/live 每5分钟写入）
     """
-    cache: Dict[str, dict] = {}
-
-    if session == "pre_market":
-        bulk = _cache_mget(
-            [f"qdii:chg:pre:{s}"   for s in us_symbols] +
-            [f"qdii:chg:close:{s}" for s in us_symbols] +
-            [f"qdii:chg:stale:{s}" for s in us_symbols]
-        )
-        for sym in us_symbols:
-            cache[sym] = {
-                "pre_pct":   bulk.get(f"qdii:chg:pre:{sym}"),
-                "close_pct": bulk.get(f"qdii:chg:close:{sym}") or bulk.get(f"qdii:chg:stale:{sym}"),
-                "stale_pct": bulk.get(f"qdii:chg:stale:{sym}"),
-            }
-
-    elif session == "us_open":
-        bulk = _cache_mget(
-            [f"qdii:chg:open:{s}"  for s in us_symbols] +
-            [f"qdii:chg:close:{s}" for s in us_symbols] +
-            [f"qdii:chg:stale:{s}" for s in us_symbols]
-        )
-        for sym in us_symbols:
-            cache[sym] = {
-                "regular_pct": bulk.get(f"qdii:chg:open:{sym}"),
-                "close_pct":   bulk.get(f"qdii:chg:close:{sym}") or bulk.get(f"qdii:chg:stale:{sym}"),
-                "stale_pct":   bulk.get(f"qdii:chg:stale:{sym}"),
-            }
-
-    else:  # post_market / a_share / weekend：均需 close_pct；post/a_share 还需 post_pct
-        need_post = session in ("post_market", "a_share")
-        keys = (
-            [f"qdii:chg:close:{s}"     for s in us_symbols] +
-            ([f"qdii:chg:post:{s}"      for s in us_symbols] if need_post else []) +
-            ([f"qdii:chg:last_post:{s}" for s in us_symbols] if need_post else []) +
-            [f"qdii:chg:stale:{s}"     for s in us_symbols]
-        )
-        bulk = _cache_mget(keys)
-        for sym in us_symbols:
-            close_pct = bulk.get(f"qdii:chg:close:{sym}")
-            stale_pct = bulk.get(f"qdii:chg:stale:{sym}")
-            # post_pct 优先用短 TTL 的实时键，过期后回落到 7 天快照
-            post_pct = (bulk.get(f"qdii:chg:post:{sym}") or bulk.get(f"qdii:chg:last_post:{sym}")) if need_post else None
-            effective_close = close_pct if close_pct is not None else stale_pct
-            entry: dict = {
-                "close_pct": effective_close,
-                "post_pct":  post_pct,  # 无数据时保持 None，不做假兜底以免掩盖重试逻辑
-            }
-            if session == "post_market":
-                # regular_pct = 今日正规收盘（= close_pct），供 close_valuation 计算时显式使用
-                entry["regular_pct"] = effective_close
-            cache[sym] = entry
-
-    # ── 非美股（港股/A股）────────────────────────────────────────────────────────
-    # a_share 时段：港股/A股正在交易，用 open 键（6min TTL），未命中则实时拉 Sina
-    # 其他时段：市场已收盘，用 close/stale 快照即可
-    if non_us_syms:
-        if session == "a_share":
-            bulk = _cache_mget(
-                [f"qdii:chg:open:{s}"  for s in non_us_syms] +
-                [f"qdii:chg:stale:{s}" for s in non_us_syms]
-            )
-            to_fetch = [s for s in non_us_syms if bulk.get(f"qdii:chg:open:{s}") is None]
-            if to_fetch:
-                sina = _sina_stock_batch(to_fetch) or {}
-                for sym, pf in sina.items():
-                    pct = pf.get("regular_pct")
-                    if pct is not None:
-                        _cache_set(f"qdii:chg:open:{sym}",  pct, 6 * 60)
-                        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
-                        bulk[f"qdii:chg:open:{sym}"] = pct
-            for sym in non_us_syms:
-                pct = bulk.get(f"qdii:chg:open:{sym}") or bulk.get(f"qdii:chg:stale:{sym}")
-                cache[sym] = {"regular_pct": pct, "close_pct": pct}
-        else:
-            bulk = _cache_mget(
-                [f"qdii:chg:close:{s}" for s in non_us_syms] +
-                [f"qdii:chg:stale:{s}" for s in non_us_syms]
-            )
-            to_fetch = [s for s in non_us_syms
-                        if bulk.get(f"qdii:chg:close:{s}") is None
-                        and bulk.get(f"qdii:chg:stale:{s}") is None]
-            if to_fetch:
-                sina = _sina_stock_batch(to_fetch) or {}
-                for sym, pf in sina.items():
-                    pct = pf.get("regular_pct")
-                    if pct is not None:
-                        _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
-                        bulk[f"qdii:chg:stale:{sym}"] = pct
-            for sym in non_us_syms:
-                pct = bulk.get(f"qdii:chg:close:{sym}") or bulk.get(f"qdii:chg:stale:{sym}")
-                cache[sym] = {"regular_pct": pct, "close_pct": pct}
-
-    # ── 国际市场（台股 .TW / 韩股 .KS 等）────────────────────────────────────────
-    # a_share 时段：台股/韩股正在交易，用 open 键（6min TTL），未命中则实时拉 TWSE/Naver
-    # 其他时段：市场已收盘，用 close/stale 快照
-    yf_intl = [s for s in us_symbols if any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)]
-    if yf_intl:
-        if session == "a_share":
-            bulk_i = _cache_mget(
-                [f"qdii:chg:open:{s}"  for s in yf_intl] +
-                [f"qdii:chg:stale:{s}" for s in yf_intl]
-            )
-            to_fetch_yf = [s for s in yf_intl if bulk_i.get(f"qdii:chg:open:{s}") is None]
-            if to_fetch_yf:
-                logger.info(f"[stock_cache] intl a_share miss {len(to_fetch_yf)}, fetching TWSE/Naver")
-                intl_live = _fetch_intl_stocks(to_fetch_yf)
-                for sym, pct in intl_live.items():
-                    _cache_set(f"qdii:chg:open:{sym}",  pct, 6 * 60)
-                    _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
-                    bulk_i[f"qdii:chg:open:{sym}"] = pct
-            for sym in yf_intl:
-                pct = bulk_i.get(f"qdii:chg:open:{sym}") or bulk_i.get(f"qdii:chg:stale:{sym}")
-                cache[sym] = {"regular_pct": pct, "close_pct": pct}
-        else:
-            bulk_i = _cache_mget(
-                [f"qdii:chg:close:{s}" for s in yf_intl] +
-                [f"qdii:chg:stale:{s}" for s in yf_intl]
-            )
-            to_fetch_yf = [s for s in yf_intl
-                           if bulk_i.get(f"qdii:chg:close:{s}") is None
-                           and bulk_i.get(f"qdii:chg:stale:{s}") is None]
-            if to_fetch_yf:
-                logger.info(f"[stock_cache] yf_intl cache miss {len(to_fetch_yf)}, fetching TWSE/Naver")
-                intl_live = _fetch_intl_stocks(to_fetch_yf)
-                for sym, pct in intl_live.items():
-                    _cache_set(f"qdii:chg:stale:{sym}", pct, 7 * 24 * 3600)
-                    bulk_i[f"qdii:chg:stale:{sym}"] = pct
-            for sym in yf_intl:
-                pct = bulk_i.get(f"qdii:chg:close:{sym}") or bulk_i.get(f"qdii:chg:stale:{sym}")
-                cache[sym] = {"regular_pct": pct, "close_pct": pct}
-
-    return cache
+    if not all_symbols:
+        return {}
+    bulk = _cache_mget(
+        [f"qdii:close:{s}" for s in all_symbols] +
+        [f"qdii:post:{s}"  for s in all_symbols] +
+        [f"qdii:live:{s}"  for s in all_symbols]
+    )
+    return {
+        sym: {
+            "close_pct": bulk.get(f"qdii:close:{sym}"),
+            "post_pct":  bulk.get(f"qdii:post:{sym}"),
+            "live_pct":  bulk.get(f"qdii:live:{sym}"),
+        }
+        for sym in all_symbols
+    }
 
 
 def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
-                             session: str = "a_share",
+                             field: str = "close_pct",
                              prefetched_holdings: Optional[list] = None) -> dict:
     """
     计算单只基金估值。
-    stock_cache: {symbol -> {pre_pct, regular_pct, post_pct}}，由调用方批量填充。
-    session: 当前时段，决定使用哪个价格字段。
-    prefetched_holdings: 由调用方传入已预取的持仓（避免重复 Redis 调用）。
+    stock_cache: {symbol -> {close_pct, post_pct, live_pct}}
+    field: 用于计算的字段名（"close_pct" / "post_pct" / "live_pct"）
     """
     raw_holdings = prefetched_holdings if prefetched_holdings is not None else fetch_qdii_holdings(code)
     if not raw_holdings:
@@ -3628,34 +3492,20 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
     if total_weight > 110.0:
         scale = 100.0 / total_weight
         holdings = [{**h, "weight": round(h["weight"] * scale, 4)} for h in holdings]
-        total_weight = 100.0
 
     weighted_sum   = 0.0
     covered_weight = 0.0
     enriched = []
     for h in holdings:
         sym = h["symbol"]
-        pf  = stock_cache.get(sym) or {}
-        # 根据时段选涨跌幅字段（不再跟踪具体价格）
-        # 美股有 pre/regular/post_pct；A股/港股只有 close_pct，对应字段缺失时回落
-        if session == "pre_market":
-            chg = pf.get("pre_pct") if pf.get("pre_pct") is not None else (pf.get("stale_pct") if pf.get("stale_pct") is not None else pf.get("close_pct"))
-        elif session == "us_open":
-            chg = pf.get("regular_pct") if pf.get("regular_pct") is not None else (pf.get("stale_pct") if pf.get("stale_pct") is not None else pf.get("close_pct"))
-        elif session == "post_market":
-            chg = pf.get("post_pct") if pf.get("post_pct") is not None else pf.get("close_pct")
-        elif session in ("a_share", "close", "weekend"):
-            chg = pf.get("close_pct")
-        else:
-            chg = pf.get("regular_pct")
+        chg = (stock_cache.get(sym) or {}).get(field)
         enriched.append({**h, "change": chg})
         if chg is not None:
             weighted_sum   += h["weight"] / 100.0 * chg
             covered_weight += h["weight"]
 
-    # coverage = 已获取价格的持仓占基金净值的比例（分母是100%，而非只看已知持仓）
-    coverage   = round(covered_weight, 1)
-    valuation  = round(weighted_sum, 2) if covered_weight > 0 else None
+    coverage  = round(covered_weight, 1)
+    valuation = round(weighted_sum, 2) if covered_weight > 0 else None
 
     return {
         "code":      code,
@@ -3689,104 +3539,19 @@ def api_qdii_holdings(code: str, response: Response, force: bool = False):
     }
 
 
-# ╔══════════════════════════════════════════════════════════════════════════════════╗
-# ║         QDII 估值展示逻辑 — 权威定义  (SESSION DISPLAY SPEC)                  ║
-# ║                                                                                  ║
-# ║  ⚠️  修改本函数或 calc_valuation_for_fund 前必须阅读此注释。                  ║
-# ║     任何与下方逻辑相悖的改动，必须在代码中用 # [SPEC CONFLICT] 标注，         ║
-# ║     并向用户说明冲突原因，获得确认后方可执行。                                 ║
-# ║                                                                                  ║
-# ║  最后更新：2026-06-17                                                            ║
-# ╠══════════════════════════════════════════════════════════════════════════════════╣
-# ║  两列定义：                                                                      ║
-# ║    收盘估值 = 上一个已完成交易日的正规收盘加权估值（固定参照，不随时间变动）    ║
-# ║    实时估值 = 当前时段的动态加权估值                                             ║
-# ╠══════════════════════════════════════════════════════════════════════════════════╣
-# ║  时段          │ 收盘估值（close_valuation）         │ 实时估值（live_valuation）  ║
-# ║  ─────────────────────────────────────────────────────────────────────────────  ║
-# ║  pre_market    │ 昨日收盘（Redis close_pct，          │ 盘前涨跌（Nasdaq pre_pct，  ║
-# ║  16:00–21:30   │ 由 08:05 cron 写入，固定）           │ 5min 实时刷新）             ║
-# ║  ─────────────────────────────────────────────────────────────────────────────  ║
-# ║  us_open       │ 昨日收盘（同上，close_pct，固定）    │ 盘中实时（Nasdaq            ║
-# ║  21:30–04:00   │                                     │ regular_pct，5min 刷新）   ║
-# ║  ─────────────────────────────────────────────────────────────────────────────  ║
-# ║  post_market   │ 今日正规收盘（Redis close_pct；      │ 夜盘实时（Yahoo v8          ║
-# ║  04:00–08:00   │ cron 未跑时以 regular_pct 代替）     │ post_pct，15min 刷新）      ║
-# ║  ─────────────────────────────────────────────────────────────────────────────  ║
-# ║  a_share       │ 昨日收盘（Redis close_pct，固定）    │ 昨日夜盘（Redis post_pct，  ║
-# ║  08:00–16:00   │ api.valuation = close_valuation      │ api.post_valuation，固定）  ║
-# ║  ─────────────────────────────────────────────────────────────────────────────  ║
-# ║  weekend       │ 周五收盘（Redis close_pct）          │ 不显示                      ║
-# ╠══════════════════════════════════════════════════════════════════════════════════╣
-# ║  Redis 写入节点（vercel.json cron）：                                            ║
-# ║    qdii:chg:close:{sym}  每日 HKT 08:05（UTC 00:05 Tue–Sat）                    ║
-# ║                          来源：Nasdaq regularMarketChangePercent（正规收盘涨跌） ║
-# ║    qdii:chg:post:{sym}   同上 cron                                               ║
-# ║                          来源：Yahoo v8 postMarketPrice（夜盘涨跌，收盘后最终价）║
-# ║    qdii:chg:open:{sym}   us_open/pre_market 实时写，TTL 6min                     ║
-# ║    qdii:chg:pre:{sym}    pre_market 实时写，TTL 5min                             ║
-# ╠══════════════════════════════════════════════════════════════════════════════════╣
-# ║  前端字段映射（QDIIPage.jsx，搜索 [SESSION DISPLAY SPEC]）：                    ║
-# ║    a_share:  close_valuation = api.valuation;  live_valuation = api.post_valuation ║
-# ║    其他时段: close_valuation = api.close_valuation; live_valuation = api.valuation ║
-# ╚══════════════════════════════════════════════════════════════════════════════════╝
+# SESSION DISPLAY SPEC（最后更新：2026-06-17）
+# Redis 键：qdii:close / qdii:post / qdii:live（cron/snap + cron/live 写入）
+# 时段        │ close_valuation（收盘）    │ live_valuation（实时）
+# pre_market  │ qdii:close（昨日收盘）     │ qdii:live（盘前，每5min）
+# us_open     │ qdii:close（昨日收盘）     │ qdii:live（盘中，每5min）
+# post_market │ qdii:close（今日收盘）     │ qdii:live（夜盘，每5min）
+# a_share     │ qdii:close（昨日收盘）     │ qdii:post（昨日夜盘，snap写入）
+# weekend     │ qdii:close（周五收盘）     │ 不显示
 @app.get("/api/qdii/valuations")
-def api_qdii_valuations(response: Response, force: bool = False, light: bool = False):
-    """
-    批量返回所有主动 QDII 基金的估值结果。
-
-    数据策略（5-session-aware）:
-    - a_share  (HKT 08:00-16:00 工作日): 优先 fundgz gszzl 实时估值，15min 刷新
-    - pre_market (HKT 16:00-21:30 工作日): Yahoo preMarketPrice 加权，5min 刷新
-    - us_open   (HKT 21:30-04:00 工作日): Yahoo regularMarketPrice 加权，10min 刷新
-    - post_market (HKT 04:00-08:00 工作日): Yahoo postMarketPrice 加权，15min 刷新
-    - weekend   (HKT 周六/日): 缓存上次收盘价，60min 刷新
-
-    ?light=true  轻量预热：只清顶层+股价缓存，持仓/gszzl 保留（~3-5s 完成）
-    ?force=true  全量重算：清所有缓存（慢，仅调试用）
-    """
+def api_qdii_valuations(response: Response):
+    """批量返回所有主动 QDII 基金的估值结果。不缓存计算结果，每次直接从 Redis 读股价计算。"""
     from datetime import timezone, timedelta
-    session   = _current_session()
-    cache_key = "qdii:response"
-
-    if light:
-        # light 模式：直接重算并覆盖缓存，不删除旧缓存
-        # → 计算期间并发请求仍命中旧缓存（不显示"计算中"），完成后原子覆盖
-        logger.info(f"[qdii] light refresh: recomputing in-place, old cache retained (session={session})")
-    elif force:
-        _cache_delete(cache_key)
-        for code in QDII_CODES:
-            _cache_delete(f"qdii_h_{code}")
-            _cache_delete(f"qdii_meta_{code}")
-            _cache_delete(f"qdii_gszzl_{code}")
-        _cache_delete("qdii_fx_chg")
-        _cache_delete("qdii_fx_data")
-        _cache_delete_pattern("qdii:chg:pre:*")
-        _cache_delete_pattern("qdii:chg:open:*")
-        _cache_delete_pattern("qdii:chg:stale:*")
-        logger.info(f"[qdii] force refresh: cleared all caches (session={session})")
-    else:
-        cached = _cache_get(cache_key)
-        if cached:
-            cached_session = cached.get("session", "weekend")
-            # 估值来源发生根本性切换时必须失效，否则旧 session 数据会持续到 TTL 到期
-            # a_share  → 持仓×昨日盘后涨跌加权（last_post_pct）
-            # pre/us/post → Yahoo 实时/盘前/盘后加权
-            # weekend  → 缓存收盘价
-            _SOURCE_CHANGED = (
-                (cached_session == "weekend"    and session != "weekend") or
-                (cached_session == "a_share"    and session in ("pre_market", "us_open", "post_market")) or
-                (cached_session == "post_market" and session in ("a_share", "pre_market", "us_open")) or
-                (cached_session in ("pre_market", "us_open") and session == "a_share")
-            )
-            if _SOURCE_CHANGED:
-                logger.info(f"[qdii] session {cached_session}→{session}, invalidating cache")
-                _cache_delete(cache_key)
-            else:
-                cached["session"] = session
-                _cache_set(cache_key, cached, _valuation_ttl())
-                response.headers["Cache-Control"] = "no-store"
-                return cached
+    session = _current_session()
 
     fx_data   = fetch_fx_data()
     fx_change = fx_data["change"]
@@ -3797,11 +3562,11 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
     all_holdings: dict[str, list] = {}
     meta_cache:   dict[str, dict] = {}
 
-    # 批量预读三类 per-fund key（3 次 RTT 替代 84 次串行读）
     _pre = _cache_mget(
-        [f"qdii_gszzl_{c}" for c in QDII_CODES] +
-        [f"qdii_h_{c}"     for c in QDII_CODES] +
-        [f"qdii_meta_{c}"  for c in QDII_CODES]
+        [f"qdii_gszzl_{c}"                              for c in QDII_CODES] +
+        [f"qdii_h_{c}"                                  for c in QDII_CODES] +
+        [f"qdii_meta_{c}"                               for c in QDII_CODES] +
+        [f"qdii_hmeta_{_C_TO_A_HOLDINGS_MAP.get(c,c)}" for c in QDII_CODES]
     )
     _pre_gszzl = {c: _pre.get(f"qdii_gszzl_{c}") for c in QDII_CODES}
     _pre_h     = {c: _pre.get(f"qdii_h_{c}")     for c in QDII_CODES}
@@ -3823,7 +3588,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
                 elif kind == "h":     all_holdings[code] = val
                 else:                 meta_cache[code]   = val
 
-    # ── Step 2: 构建 stock_cache（从 Redis 读涨跌幅；缓存未命中时拉 Nasdaq）───────
+    # ── Step 2: 从 Redis 读 close/post/live 三类股价，无需实时拉取 ────────────
     _TOP_N = 10
     all_symbols = list({
         h["symbol"]
@@ -3831,173 +3596,82 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         for h in sorted(holdings, key=lambda x: x.get("weight", 0), reverse=True)[:_TOP_N]
         if h.get("symbol")
     })
-    us_symbols  = [s for s in all_symbols if not any(s.endswith(sfx) for sfx in _QDII_NON_US_SUFFIX)]
-    non_us_syms = [s for s in all_symbols if     any(s.endswith(sfx) for sfx in _QDII_NON_US_SUFFIX)]
-    logger.info(f"[qdii/stock] total={len(all_symbols)} US={len(us_symbols)} non-US={len(non_us_syms)}")
+    logger.info(f"[qdii] session={session} symbols={len(all_symbols)}")
+    stock_cache = _build_stock_cache(all_symbols)
 
-    stock_cache = _build_stock_cache(us_symbols, non_us_syms, session)
-
-    # 活跃时段：缓存未命中时实时拉取（排除 YF 国际市场，它们由 _build_stock_cache 自行处理）
-    pure_us = [s for s in us_symbols if not any(s.endswith(sfx) for sfx in _QDII_YF_INTL_SUFFIX)]
-    if session in ("pre_market", "us_open", "post_market", "a_share"):
-        if session == "pre_market":
-            missing = [s for s in pure_us if stock_cache.get(s, {}).get("pre_pct") is None]
-        elif session == "us_open":
-            missing = [s for s in pure_us if stock_cache.get(s, {}).get("regular_pct") is None]
-        else:  # post_market / a_share：关键字段均为 post_pct
-            missing = [s for s in pure_us if stock_cache.get(s, {}).get("post_pct") is None]
-
-        if missing:
-            logger.info(f"[qdii/stock] cache miss {len(missing)} symbols (session={session}), fetching")
-
-            if session in ("post_market", "a_share"):
-                # post_pct：Yahoo v8 prefer_post=True（a股时段和盘后时段均有效）
-                fresh: Dict[str, float] = _fetch_chg_from_yf_simple(missing, prefer_post=True)
-                if session == "post_market":
-                    # 盘后时段额外用 Nasdaq 补充（Nasdaq 有实时盘后价，覆盖 Yahoo v8 失败的股票）
-                    still_missing = [s for s in missing if s not in fresh]
-                    if still_missing:
-                        logger.info(f"[qdii/stock] post_market yf miss {len(still_missing)}, fallback Nasdaq")
-                        fresh.update(_fetch_chg_from_nasdaq(still_missing, timeout=15))
-                if fresh:
-                    _cache_mset({f"qdii:chg:post:{s}":      pct for s, pct in fresh.items()}, 72 * 3600)       # 72h 覆盖周五→周一A股
-                    _cache_mset({f"qdii:chg:last_post:{s}": pct for s, pct in fresh.items()}, 7 * 24 * 3600)   # 7天快照
-                    _cache_mset({f"qdii:chg:stale:{s}":     pct for s, pct in fresh.items()}, 7 * 24 * 3600)
-                    for s, pct in fresh.items():
-                        existing = stock_cache.get(s, {})
-                        stock_cache[s] = {**existing, "post_pct": pct}
-            else:
-                # pre_market / us_open：Nasdaq 优先，Yahoo chart 兜底
-                fresh = _fetch_chg_from_nasdaq(missing, timeout=12)
-                still_missing = [s for s in missing if s not in fresh]
-                if still_missing:
-                    logger.info(f"[qdii/stock] retry {len(still_missing)} timed-out symbols")
-                    fresh.update(_fetch_chg_from_nasdaq(still_missing, timeout=15))
-                yf_missing = [s for s in missing if s not in fresh]
-                if yf_missing:
-                    logger.info(f"[qdii/stock] yf fallback for {len(yf_missing)} symbols: {yf_missing}")
-                    fresh.update(_fetch_chg_from_yf_simple(yf_missing, timeout=15))
-                if fresh:
-                    stale = {f"qdii:chg:stale:{s}": pct for s, pct in fresh.items()}
-                    if session == "pre_market":
-                        _cache_mset({f"qdii:chg:pre:{s}":  pct for s, pct in fresh.items()}, 5 * 60)
-                        for s, pct in fresh.items():
-                            existing = stock_cache.get(s, {})
-                            stock_cache[s] = {**existing, "pre_pct": pct, "stale_pct": pct}
-                    else:  # us_open
-                        _cache_mset({f"qdii:chg:open:{s}": pct for s, pct in fresh.items()}, 6 * 60)
-                        for s, pct in fresh.items():
-                            existing = stock_cache.get(s, {})
-                            stock_cache[s] = {**existing, "regular_pct": pct, "stale_pct": pct}
-                    _cache_mset(stale, 7 * 24 * 3600)
-
-    # ── Step 3: 逐基金估值（session-aware 优先级）─────────────────────────────
-    # 计算「上周五」日期，用于 weekend nav_published 判断
+    # ── Step 3: 逐基金估值 ───────────────────────────────────────────────────
     HKT = timezone(timedelta(hours=8))
     now_hkt = datetime.now(HKT)
     days_since_friday = (now_hkt.weekday() - 4) % 7
     last_friday = (now_hkt - timedelta(days=days_since_friday)).strftime("%Y-%m-%d")
 
-    # 最近美股交易日（MM/DD），供持仓面板展示收盘日期
-    def _last_us_trade_date() -> str:
+    def _last_us_trade_date():
         d = now_hkt.date()
-        if session == "post_market":
-            pass  # 当天就是交易日
-        else:
-            d -= timedelta(days=1)          # a_share/pre_market：今天美股尚未开盘，用昨日
-        while d.weekday() >= 5:             # 跳过周末
+        if session != "post_market":
+            d -= timedelta(days=1)
+        while d.weekday() >= 5:
             d -= timedelta(days=1)
         return d
     trade_day = _last_us_trade_date()
     trade_date = trade_day.strftime("%m/%d")
-    # 美股收盘对应的 HKT 时间：交易日次日 04:00（EDT 夏令时），供持仓面板显示
     close_hkt_day = trade_day + timedelta(days=1)
     close_hkt_label = f"{close_hkt_day.month}月{close_hkt_day.day}日 04:00"
 
+    # live 字段：pre/us_open/post_market 用 live_pct；a_share 用 post_pct；weekend 无实时
+    live_field = "post_pct" if session == "a_share" else ("live_pct" if session != "weekend" else None)
+
     results = []
     for code in QDII_CODES:
-        g        = gszzl_cache.get(code, {})
-        meta     = meta_cache.get(code, {})
-        gszzl_v  = g.get("gszzl")
-        gztime   = g.get("gztime")
-        is_fresh = g.get("is_fresh", False)
-        nav_date = g.get("nav_date")
+        g       = gszzl_cache.get(code, {})
+        meta    = meta_cache.get(code, {})
+        holdings = all_holdings.get(code, [])
 
-        if session == "a_share":
-            # A股时段：
-            #   收盘估值（valuation / close_valuation）= 持仓 × 昨日收盘涨跌幅
-            #   实时估值（post_valuation）              = 持仓 × 昨日盘后涨跌幅（夜盘）
-            r = calc_valuation_for_fund(code, stock_cache, fx_change, "a_share",
-                                        prefetched_holdings=all_holdings.get(code, []))
-            r["gszzl_time"] = gztime
-            if r["valuation"] is None and gszzl_v is not None:
-                r["valuation"]   = gszzl_v
-                r["data_source"] = "gszzl_fallback"
-            else:
-                r["data_source"] = "a_share_post_calc"
-            r["close_valuation"] = r["valuation"]
-            # 实时估值（夜盘）
-            r_post = calc_valuation_for_fund(code, stock_cache, fx_change, "post_market",
-                                             prefetched_holdings=all_holdings.get(code, []))
-            r["post_valuation"] = r_post["valuation"]
-            r["post_coverage"]  = r_post["coverage"]
-            # 将夜盘涨跌合并进每条持仓，供详情面板展示
-            post_chg_map = {h["symbol"]: h.get("change") for h in r_post.get("holdings", [])}
-            for h in r.get("holdings", []):
-                h["post_change"] = post_chg_map.get(h["symbol"])
+        # 收盘估值（始终用 close_pct）
+        r_close = calc_valuation_for_fund(code, stock_cache, fx_change, "close_pct", holdings)
+        close_val = r_close["valuation"]
+        # a_share 时段 gszzl 兜底
+        if session == "a_share" and close_val is None and g.get("gszzl") is not None:
+            close_val = g["gszzl"]
+
+        # 实时估值
+        if live_field:
+            r_live = calc_valuation_for_fund(code, stock_cache, fx_change, live_field, holdings)
+            live_val      = r_live["valuation"]
+            live_coverage = r_live["coverage"]
+            # 合并每条持仓：close_change = close_pct，change = live_pct/post_pct
+            close_chg_map = {h["symbol"]: h.get("change") for h in r_close["holdings"]}
+            for h in r_live["holdings"]:
+                h["close_change"] = close_chg_map.get(h["symbol"])
+            main_holdings = r_live["holdings"]
         else:
-            # 其他时段 → 持仓加权计算（session决定价格字段）
-            r = calc_valuation_for_fund(code, stock_cache, fx_change, session,
-                                        prefetched_holdings=all_holdings.get(code, []))
-            if r["valuation"] is None and gszzl_v is not None:
-                r["valuation"]   = gszzl_v
-                r["data_source"] = "gszzl_fallback"
-            else:
-                src_map = {
-                    "pre_market":  "pre_market_calc",
-                    "us_open":     "us_open_calc",
-                    "post_market": "post_market_calc",
-                    "weekend":     "cached_post",
-                }
-                r["data_source"] = src_map.get(session, "cached_post")
-            r["gszzl_time"] = gztime
-            # 收盘估值（冻结参照）：对盘前/盘中/盘后时段额外计算，weekend 直接复用 valuation
-            if session in ("pre_market", "us_open"):
-                r_close = calc_valuation_for_fund(code, stock_cache, fx_change, "a_share",
-                                                  prefetched_holdings=all_holdings.get(code, []))
-                r["close_valuation"] = r_close["valuation"]
-                # 将收盘涨跌合并进持仓，前端可同时展示收盘和实时
-                close_chg_map = {h["symbol"]: h.get("change") for h in r_close.get("holdings", [])}
-                for h in r.get("holdings", []):
-                    h["close_change"] = close_chg_map.get(h["symbol"])
-            elif session == "post_market":
-                # 盘后时段：今日正规市场已收盘，收盘估值用今日 regular_pct
-                r_close = calc_valuation_for_fund(code, stock_cache, fx_change, "us_open",
-                                                  prefetched_holdings=all_holdings.get(code, []))
-                r["close_valuation"] = r_close["valuation"]
-                # 将收盘涨跌合并进持仓
-                close_chg_map = {h["symbol"]: h.get("change") for h in r_close.get("holdings", [])}
-                for h in r.get("holdings", []):
-                    h["close_change"] = close_chg_map.get(h["symbol"])
-            else:  # weekend
-                r["close_valuation"] = r["valuation"]
+            live_val      = None
+            live_coverage = 0
+            # weekend：只展示 close_change，无 live
+            for h in r_close["holdings"]:
+                h["close_change"] = h.pop("change", None)
+            main_holdings = r_close["holdings"]
 
-        # 净值
-        r["nav"]      = g.get("nav") or meta.get("nav_latest")
-        r["nav_date"] = nav_date
-        # 周末：若净值日期 >= 上周五，标记已公布最新净值
-        r["nav_published"] = bool(
-            session == "weekend" and nav_date and nav_date >= last_friday
-        )
-        r["scale"]      = meta.get("scale")
-        r["ytd_return"] = meta.get("ytd_return")
-        # 持仓报告期
+        r = {
+            "code":           code,
+            "close_valuation": close_val,
+            "live_valuation":  live_val,
+            "coverage":        r_close["coverage"],
+            "live_coverage":   live_coverage,
+            "fx_change":       fx_change,
+            "holdings":        main_holdings,
+            "gszzl_time":      g.get("gztime"),
+            "nav":             g.get("nav") or meta.get("nav_latest"),
+            "nav_date":        g.get("nav_date"),
+            "nav_published":   bool(session == "weekend" and g.get("nav_date") and g.get("nav_date") >= last_friday),
+            "scale":           meta.get("scale"),
+            "ytd_return":      meta.get("ytd_return"),
+            "trade_date":      trade_date,
+            "close_hkt_label": close_hkt_label,
+        }
         master = _C_TO_A_HOLDINGS_MAP.get(code, code)
-        hmeta = _cache_get(f"qdii_hmeta_{master}") or {}
+        hmeta  = _pre.get(f"qdii_hmeta_{master}") or {}
         r["holdings_date"]   = hmeta.get("report_date", "")
         r["holdings_source"] = hmeta.get("source", "")
-        r["trade_date"]      = trade_date       # 最近美股交易日 MM/DD
-        r["close_hkt_label"] = close_hkt_label  # 收盘对应 HKT 时间，如 "6月13日 04:00"
         results.append(r)
 
     today      = datetime.utcnow().strftime("%Y-%m-%d")
@@ -4010,7 +3684,7 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
             if r.get("holdings"):
                 _db_save_holdings(r["code"], r["holdings"], report_date=r.get("holdings_date", ""))
         _db_save_valuations(results, today)
-        logger.info(f"[qdii] saved: {len(results)} funds, {len(stock_cache)} stocks, session={session}")
+        logger.info(f"[qdii] saved {len(results)} funds, {len(stock_cache)} stocks")
     except Exception as e:
         logger.warning(f"[qdii] DB save failed: {e}")
 
@@ -4021,8 +3695,6 @@ def api_qdii_valuations(response: Response, force: bool = False, light: bool = F
         "session":    session,
         "funds":      results,
     }
-    _cache_set(cache_key, payload, _valuation_ttl())
-
     response.headers["Cache-Control"] = "no-store"
     return payload
 
