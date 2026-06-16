@@ -1078,8 +1078,32 @@ export default function QDIIPage() {
     <div style={{ minHeight:"100vh", background:CC.bg, paddingBottom:60, transition:"background 0.2s" }}>
 
 
+      {/* ── 功能下线蒙层 ───────────────────────────────────────────────────────── */}
+      <div style={{
+        position:"fixed", top:0, left:0, right:0, bottom:0,
+        zIndex:1000,
+        background:"rgba(15,20,40,0.88)", backdropFilter:"blur(8px)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        padding:"0 16px",
+      }}>
+        <div style={{
+          background:"#fff", borderRadius:16, padding:"36px 32px",
+          maxWidth:360, width:"100%", textAlign:"center",
+          boxShadow:"0 20px 60px rgba(0,0,0,0.4)",
+        }}>
+          <div style={{ fontSize:36, marginBottom:12 }}>🔧</div>
+          <div style={{ fontSize:18, fontWeight:800, color:"#111", marginBottom:10 }}>
+            功能暂时下线
+          </div>
+          <div style={{ fontSize:14, color:"#555", lineHeight:1.7 }}>
+            因为一些原因，QDII 基金估值功能已暂时下线。<br/>
+            有任何问题请返回首页加群交流，感谢理解！
+          </div>
+        </div>
+      </div>
+
       {/* ── Hero ─────────────────────────────────────────────────────────────── */}
-      <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden" }}>
+      <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden", zIndex:1001 }}>
         <div style={{ position:"absolute", width:320, height:320, borderRadius:"50%", background:"rgba(255,255,255,0.04)", top:-80, right:-60, pointerEvents:"none" }} />
         <div style={{ position:"absolute", width:180, height:180, borderRadius:"50%", background:"rgba(255,255,255,0.05)", bottom:-40, left:120, pointerEvents:"none" }} />
 
