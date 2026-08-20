@@ -8,8 +8,9 @@
 缓存分层：带 TTL 的 Redis 热缓存 + 独立永久 Last-Known-Good。部分抓取只
 进入热缓存，不覆盖完整 LKG；前端会收到 fresh/partial/stale/reference 状态。
 
-定时任务（UTC）：01:30 场外基金；07:30 工作日 ETF 收盘快照；23:30
-工作日补齐历史溢价。所有 cron/admin 路由默认要求 CRON_SECRET。
+定时任务（UTC）：01:10/01:20/01:30 分类别刷新场外基金；07:30 工作日
+ETF 收盘快照；23:30 工作日补齐历史溢价。所有 cron/admin 路由默认要求
+CRON_SECRET。
 """
 
 import json, os, re, logging, time, xml.etree.ElementTree as ET
@@ -126,15 +127,17 @@ def _cache_get(key: str) -> Optional[any]:
         logger.warning(f"[redis:get] {key}: {e}")
     return None
 
-def _cache_set(key: str, data: any, ttl: int):
+def _cache_set(key: str, data: any, ttl: int) -> bool:
     r = _get_redis()
     if not r:
-        return
+        return False
     try:
         r.set(_storage_key(key), json.dumps(data, ensure_ascii=False), ex=ttl)
         logger.info(f"[redis] set {key} ttl={ttl}s")
+        return True
     except Exception as e:
         logger.warning(f"[redis:set] {key}: {e}")
+        return False
 
 
 def _lkg_get(key: str) -> Optional[any]:
@@ -142,23 +145,29 @@ def _lkg_get(key: str) -> Optional[any]:
     return _cache_get(f"{LKG_PREFIX}{key}")
 
 
-def _lkg_set(key: str, data: any):
+def _lkg_set(key: str, data: any) -> bool:
     """只在候选数据通过校验后写入，不设置 TTL。"""
     r = _get_redis()
     if not r:
-        return
+        return False
     try:
         r.set(_storage_key(f"{LKG_PREFIX}{key}"), json.dumps(data, ensure_ascii=False))
         logger.info(f"[redis] lkg set {key}")
+        return True
     except Exception as e:
         logger.warning(f"[redis:lkg:set] {key}: {e}")
+        return False
 
 
-def _publish_cache(key: str, data: any, ttl: int):
+def _publish_cache(key: str, data: any, ttl: int) -> bool:
     """先保存永久好数据，再发布热缓存；不会预删当前可读数据。"""
-    _lkg_set(key, data)
-    _cache_set(key, data, ttl)
+    lkg_ok = _lkg_set(key, data)
+    hot_ok = _cache_set(key, data, ttl)
+    if not (lkg_ok and hot_ok):
+        logger.error(f"[redis:publish] {key}: lkg_ok={lkg_ok} hot_ok={hot_ok}")
+        return False
     _cache_delete(f"{RECOVERY_GATE_PREFIX}{key}")
+    return True
 
 def _cache_delete(key: str):
     r = _get_redis()
@@ -169,6 +178,31 @@ def _cache_delete(key: str):
         logger.info(f"[redis] del {key}")
     except Exception as e:
         logger.warning(f"[redis:del] {key}: {e}")
+
+
+def _acquire_job_lock(job_key: str, ttl_seconds: int = 45) -> Optional[str]:
+    """Cross-instance cron lock; token ownership prevents unsafe unlocks."""
+    r = _get_redis()
+    if not r:
+        return None
+    token = secrets.token_urlsafe(18)
+    try:
+        acquired = r.set(f"wise:job-lock:{job_key}", token, nx=True, px=ttl_seconds * 1000)
+        return token if acquired else None
+    except Exception as exc:
+        logger.error(f"[redis:lock] {job_key}: {exc}")
+        return None
+
+
+def _release_job_lock(job_key: str, token: str) -> None:
+    r = _get_redis()
+    if not r or not token:
+        return
+    script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+    try:
+        r.eval(script, keys=[f"wise:job-lock:{job_key}"], args=[token])
+    except Exception as exc:
+        logger.warning(f"[redis:unlock] {job_key}: {exc}")
 
 
 def _recovery_gate_active(cache_key: str) -> bool:
@@ -662,7 +696,9 @@ def fetch_fund_performance(code: str) -> list:
 
 def _fetch_basic_information(code: str) -> Optional[dict]:
     """获取东方财富基金基础行情；空 ``Datas`` 不计为成功。"""
-    for attempt in range(2):
+    # 每个分类由独立 cron 执行。单次请求必须有界，避免重试把 Vercel
+    # 30 秒预算全部耗尽；失败后由 pingzhongdata/LKG 明确降级。
+    for attempt in range(1):
         try:
             resp = _get(
                 "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation",
@@ -674,7 +710,7 @@ def _fetch_basic_information(code: str) -> Optional[dict]:
                     "version": "6.5.0",
                 },
                 headers=_MOBILE_HEADERS,
-                timeout=(3, 8),
+                timeout=(2, 4),
             )
             if not (resp and resp.ok):
                 continue
@@ -697,7 +733,7 @@ def _fetch_tracking_error(code: str) -> Optional[dict]:
         resp = _get(
             f"https://fundf10.eastmoney.com/tsdata_{code}.html",
             headers=HEADERS,
-            timeout=(3, 8),
+            timeout=(2, 4),
         )
         if not (resp and resp.ok):
             return None
@@ -790,6 +826,81 @@ def _valid_iso_datetime(value: object) -> bool:
         return False
 
 
+def _china_now() -> datetime:
+    return datetime.now(_CHINA_TZ)
+
+
+def _as_of_instant(value: object) -> Optional[datetime]:
+    """Normalize an ISO date/datetime for monotonic snapshot comparisons."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    try:
+        if "T" in raw:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return None
+            return parsed.astimezone(timezone.utc)
+        parsed_date = date.fromisoformat(raw)
+        return datetime.combine(parsed_date, datetime.min.time(), tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _candidate_not_older(candidate_as_of: object, previous_as_of: object) -> bool:
+    candidate = _as_of_instant(candidate_as_of)
+    if candidate is None:
+        return False
+    previous = _as_of_instant(previous_as_of)
+    return previous is None or candidate >= previous
+
+
+def _apply_monotonic_group(
+    target: dict,
+    candidate: dict,
+    previous: dict,
+    fields: tuple,
+    as_of_field: str,
+    required_field: str,
+) -> bool:
+    """Copy one value/date group only when complete and non-regressing."""
+    if candidate.get(required_field) is None:
+        return False
+    if not _candidate_not_older(candidate.get(as_of_field), previous.get(as_of_field)):
+        return False
+    for field in fields:
+        if candidate.get(field) is not None:
+            target[field] = candidate[field]
+    return True
+
+
+def _is_publishable_cn_close_quote(value: object, now: Optional[datetime] = None) -> bool:
+    """Only a same-day A-share close observation may enter the daily ETF LKG."""
+    quote = _as_of_instant(value)
+    if quote is None:
+        return False
+    current = (now or _china_now()).astimezone(_CHINA_TZ)
+    quote_cn = quote.astimezone(_CHINA_TZ)
+    if current.weekday() >= 5 or quote_cn.weekday() >= 5:
+        return False
+    if current.date() != quote_cn.date():
+        return False
+    if (current.hour, current.minute) < (15, 5):
+        return False
+    return (quote_cn.hour, quote_cn.minute) >= (14, 55)
+
+
+def _expected_cn_close_date(now: Optional[datetime] = None) -> str:
+    """Latest expected completed weekday session; weekday holidays stay stale."""
+    current = (now or _china_now()).astimezone(_CHINA_TZ)
+    candidate = current.date()
+    if current.weekday() >= 5 or (current.hour, current.minute) < (15, 5):
+        candidate -= timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate.isoformat()
+
+
 def _china_date_from_timestamp_ms(value: object) -> Optional[str]:
     timestamp_ms = parse_number(value)
     if timestamp_ms is None or timestamp_ms <= 0:
@@ -872,7 +983,7 @@ def _fetch_pingzhong_daily(code: str) -> Optional[dict]:
         resp = _get(
             f"https://fund.eastmoney.com/pingzhongdata/{code}.js",
             headers=HEADERS,
-            timeout=(3, 8),
+            timeout=(2, 4),
         )
         if not (resp and resp.ok):
             return None
@@ -903,9 +1014,18 @@ def _fetch_daily_snapshot(code: str) -> Optional[dict]:
             fallback = None
         if fallback:
             # Each value/date pair is indivisible.  Never attach a fallback
-            # value to BasicInformation's date (or vice versa).
+            # value to BasicInformation's date (or vice versa), and never let
+            # an older fallback replace a complete BasicInformation group.
             for value, as_of in daily_groups:
-                if fallback.get(value) is not None and _valid_iso_date(fallback.get(as_of)):
+                basic_group_complete = (
+                    snapshot.get(value) is not None
+                    and _valid_iso_date(snapshot.get(as_of))
+                )
+                if (
+                    not basic_group_complete
+                    and fallback.get(value) is not None
+                    and _valid_iso_date(fallback.get(as_of))
+                ):
                     snapshot[value] = fallback[value]
                     snapshot[as_of] = fallback[as_of]
             snapshot["source"] = "eastmoney_basic+pingzhongdata"
@@ -1228,7 +1348,7 @@ def fetch_etfs_em_fallback(codes: List[str]) -> Dict[str, dict]:
             except Exception:
                 pass
     finally:
-        ex.shutdown(wait=False)
+        ex.shutdown(wait=True, cancel_futures=True)
     logger.info(f"[em_fallback] got {len(res)}/{len(codes)} ETFs")
     return res
 
@@ -1766,11 +1886,60 @@ def _build_funds(category: str) -> tuple:
         ):
             for key in ("track_error", "track_error_as_of", "track_error_source"):
                 previous_dynamic.pop(key, None)
-        volatile_update = {
-            k: v for k, v in {**track, **live}.items()
-            if k in _VOLATILE_FUND_FIELDS and v is not None
-        }
-        merged = {**fb, **previous_dynamic, **volatile_update}
+        merged = {**fb, **previous_dynamic}
+        nav_accepted = _apply_monotonic_group(
+            merged,
+            live,
+            previous_row,
+            ("nav", "nav_date", "return_ytd"),
+            "nav_date",
+            "nav",
+        )
+        day_accepted = _apply_monotonic_group(
+            merged,
+            live,
+            previous_row,
+            ("day_change", "day_change_as_of"),
+            "day_change_as_of",
+            "day_change",
+        )
+        rolling_accepted = _apply_monotonic_group(
+            merged,
+            live,
+            previous_row,
+            ("rolling_1y", "rolling_1y_as_of"),
+            "rolling_1y_as_of",
+            "rolling_1y",
+        )
+        subscription_fields = (
+            "buy_status", "subscription_status", "subscription_status_status",
+            "daily_limit", "daily_limit_cny", "subscription_as_of",
+        )
+        subscription_candidate_fresh = (
+            live.get("subscription_status_status") == "fresh"
+            and live.get("subscription_status") != "unknown"
+            and live.get("subscription_as_of") == _china_now().date().isoformat()
+        )
+        subscription_accepted = subscription_candidate_fresh and _apply_monotonic_group(
+            merged,
+            live,
+            previous_row,
+            subscription_fields,
+            "subscription_as_of",
+            "subscription_status",
+        )
+        track_accepted = _apply_monotonic_group(
+            merged,
+            track,
+            previous_row,
+            ("track_error", "track_error_as_of", "track_error_source", "track_error_fetched_at"),
+            "track_error_as_of",
+            "track_error",
+        )
+        if live:
+            merged["source"] = live.get("source")
+            merged["fetched_at"] = live.get("fetched_at")
+            merged["daily_source_status"] = live.get("daily_source_status")
         merged.setdefault("annual_return_2025", merged.get("ytd_return"))
         if "subscription_status" not in merged:
             if merged.get("buy_status") == "suspended":
@@ -1780,14 +1949,7 @@ def _build_funds(category: str) -> tuple:
                 merged["subscription_status"] = "limited" if limit and limit > 0 else "open"
             else:
                 merged["subscription_status"] = "unknown"
-        track_required = needs_tracking and (
-            (fb.get("track_error") is not None and _valid_iso_date(fb.get("track_error_as_of")))
-            or (
-                previous_dynamic.get("track_error") is not None
-                and _valid_iso_date(previous_dynamic.get("track_error_as_of"))
-            )
-        )
-        if track:
+        if track_accepted:
             merged["track_error_status"] = "fresh"
         elif merged.get("track_error") is not None and _valid_iso_date(merged.get("track_error_as_of")):
             merged["track_error_status"] = "stale"
@@ -1795,9 +1957,8 @@ def _build_funds(category: str) -> tuple:
             merged["track_error_status"] = "unavailable"
 
         if live:
-            daily_full = live.get("daily_source_status") == "full"
-            subscription_fresh = live.get("subscription_status_status") == "fresh"
-            if not subscription_fresh:
+            daily_full = nav_accepted and day_accepted and rolling_accepted and subscription_accepted
+            if not subscription_accepted:
                 # A NAV-only fallback must never make a retained purchase
                 # limit look current.
                 merged.update({
@@ -1808,8 +1969,10 @@ def _build_funds(category: str) -> tuple:
                     "daily_limit_cny": None,
                     "subscription_as_of": None,
                 })
-            row_fresh = daily_full and (not track_required or bool(track))
-            merged["data_status"] = "fresh" if row_fresh else "partial"
+            # Tracking error has its own low-frequency disclosure date.  A
+            # provider failure there must not block today's NAV/subscription
+            # snapshot from becoming the new LKG.
+            merged["data_status"] = "fresh" if daily_full else "partial"
             merged["daily_status"] = "fresh" if daily_full else "partial"
         else:
             merged["data_status"] = "stale" if fb["code"] in previous_map else "reference"
@@ -1853,12 +2016,14 @@ def _build_etfs() -> tuple:
 
     ex = ThreadPoolExecutor(max_workers=min(16, _PROVIDER_MAX_CONCURRENCY))
     try:
-        quote_fut = ex.submit(fetch_etfs_em_fallback, codes)
+        # Sina is one bounded batch request and avoids a nested executor
+        # competing with NAV tasks for the same provider semaphore.
+        quote_fut = ex.submit(fetch_etfs_sina_batch, codes)
         basic_futs: Dict = {ex.submit(_fetch_daily_snapshot, c): c for c in codes}
         track_futs: Dict = {ex.submit(_fetch_tracking_error, c): c for c in codes}
 
         all_futs = [quote_fut] + list(basic_futs.keys()) + list(track_futs.keys())
-        done, not_done = wait(all_futs, timeout=18)
+        done, not_done = wait(all_futs, timeout=24)
 
         for fut in not_done:
             fut.cancel()
@@ -1887,10 +2052,12 @@ def _build_etfs() -> tuple:
     finally:
         ex.shutdown(wait=True, cancel_futures=True)
 
-    # 东方财富缺失时才调用新浪，减少重复外部请求。
+    # 新浪缺失时才调用东方财富逐只补齐。
     missing = [c for c in codes if c not in quote_map]
-    if missing:
-        quote_map.update(fetch_etfs_sina_batch(missing))
+    if 0 < len(missing) <= 4:
+        quote_map.update(fetch_etfs_em_fallback(missing))
+    elif missing:
+        logger.warning(f"[etfs] Sina missing {len(missing)} quotes; skip broad fallback to keep cron deadline")
 
     quote_count = 0
     premium_count = 0
@@ -1908,15 +2075,12 @@ def _build_etfs() -> tuple:
             market_price is not None
             and market_price > 0
             and _valid_iso_datetime(quote.get("quote_as_of"))
+            and _is_publishable_cn_close_quote(quote.get("quote_as_of"))
         )
         nav_is_current = nav is not None and nav > 0 and _valid_iso_date(nav_date)
         # 只允许同一轮同时拿到的行情和净值参与计算。任一侧失败时保留上次
         # premium 及其原日期，绝不跨日期拼出一个“新”溢价率。
-        premium = calculate_etf_premium(market_price, nav)
-        if quote_is_current:
-            quote_count += 1
-        if quote_is_current and nav_is_current and premium is not None:
-            premium_count += 1
+        premium = None
 
         normalized_basic = basic
         quote_fields = (
@@ -1927,6 +2091,7 @@ def _build_etfs() -> tuple:
             "nav", "nav_date", "nav_as_of", "nav_source", "rolling_1y",
             "rolling_1y_as_of", "day_change", "day_change_as_of",
         )
+        nav_core_fields = ("nav", "nav_date", "nav_as_of", "nav_source")
         premium_fields = (
             "premium", "premium_pct", "premium_as_of", "premium_quote_as_of",
             "premium_nav_as_of", "premium_basis",
@@ -1939,7 +2104,7 @@ def _build_etfs() -> tuple:
         }
         merged = {**fb, **retained}
         if quote_is_current:
-            merged.update({
+            quote_candidate = {
                 "market_price": market_price,
                 "market_change_pct": quote.get("market_change_pct"),
                 "change_pct": quote.get("change_pct"),
@@ -1947,7 +2112,15 @@ def _build_etfs() -> tuple:
                 "volume": quote.get("volume"),
                 "quote_as_of": quote.get("quote_as_of"),
                 "quote_source": quote.get("quote_source"),
-            })
+            }
+            quote_is_current = _apply_monotonic_group(
+                merged,
+                quote_candidate,
+                previous_row,
+                quote_fields,
+                "quote_as_of",
+                "market_price",
+            )
         if nav_is_current:
             nav_update = {
                 "nav": nav,
@@ -1955,17 +2128,48 @@ def _build_etfs() -> tuple:
                 "nav_as_of": nav_date,
                 "nav_source": normalized_basic.get("source"),
             }
-            for field in ("rolling_1y", "rolling_1y_as_of", "day_change", "day_change_as_of"):
-                if normalized_basic.get(field) is not None:
-                    nav_update[field] = normalized_basic[field]
-            merged.update(nav_update)
-        if track:
-            merged.update({key: track.get(key) for key in track_fields if track.get(key) is not None})
-        elif fb.get("track_error_as_of") and (
+            nav_is_current = _apply_monotonic_group(
+                merged,
+                nav_update,
+                previous_row,
+                nav_core_fields,
+                "nav_date",
+                "nav",
+            )
+        rolling_is_current = _apply_monotonic_group(
+            merged,
+            normalized_basic,
+            previous_row,
+            ("rolling_1y", "rolling_1y_as_of"),
+            "rolling_1y_as_of",
+            "rolling_1y",
+        )
+        day_is_current = _apply_monotonic_group(
+            merged,
+            normalized_basic,
+            previous_row,
+            ("day_change", "day_change_as_of"),
+            "day_change_as_of",
+            "day_change",
+        )
+        track_accepted = _apply_monotonic_group(
+            merged,
+            track,
+            previous_row,
+            track_fields,
+            "track_error_as_of",
+            "track_error",
+        )
+        if not track_accepted and fb.get("track_error_as_of") and (
             not merged.get("track_error_as_of") or merged["track_error_as_of"] < fb["track_error_as_of"]
         ):
             merged.update({key: fb.get(key) for key in track_fields})
+        if quote_is_current:
+            quote_count += 1
+        if quote_is_current and nav_is_current:
+            premium = calculate_etf_premium(market_price, nav)
         if quote_is_current and nav_is_current and premium is not None:
+            premium_count += 1
             merged.update({
                 "premium": premium,
                 "premium_pct": premium,
@@ -1977,24 +2181,14 @@ def _build_etfs() -> tuple:
 
         daily_complete = (
             nav_is_current
-            and normalized_basic.get("rolling_1y") is not None
-            and _valid_iso_date(normalized_basic.get("rolling_1y_as_of"))
-            and normalized_basic.get("day_change") is not None
-            and _valid_iso_date(normalized_basic.get("day_change_as_of"))
+            and rolling_is_current
+            and day_is_current
         )
         quote_complete = quote_is_current and quote.get("market_change_pct") is not None
-        track_required = (
-            (fb.get("track_error") is not None and _valid_iso_date(fb.get("track_error_as_of")))
-            or (
-                previous_row.get("track_error") is not None
-                and _valid_iso_date(previous_row.get("track_error_as_of"))
-            )
-        )
-        any_current = quote_is_current or nav_is_current or bool(track)
+        any_current = quote_is_current or nav_is_current or rolling_is_current or day_is_current or track_accepted
         fully_current = (
             quote_complete
             and daily_complete
-            and (not track_required or bool(track))
             and premium is not None
         )
         merged.update({
@@ -2006,7 +2200,7 @@ def _build_etfs() -> tuple:
             "premium_status": "fresh" if quote_is_current and nav_is_current and premium is not None else (
                 "stale" if previous_row.get("premium") is not None else "unavailable"
             ),
-            "track_error_status": "fresh" if track else ("stale" if merged.get("track_error") is not None else "unavailable"),
+            "track_error_status": "fresh" if track_accepted else ("stale" if merged.get("track_error") is not None else "unavailable"),
             "source": "eastmoney+sina" if quote.get("quote_source") == "sina" else "eastmoney",
             "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds") if any_current else previous_row.get("fetched_at"),
             "data_status": "fresh" if fully_current else ("partial" if any_current else ("stale" if previous_row else "reference")),
@@ -2026,7 +2220,7 @@ def _build_etfs() -> tuple:
         reverse=True,
     )
     source = "live" if results and all(row.get("data_status") == "fresh" for row in results) else (
-        "partial" if any(row.get("data_status") == "partial" for row in results) else "none"
+        "partial" if any(row.get("data_status") in {"fresh", "partial"} for row in results) else "none"
     )
     return results, source
 
@@ -2076,6 +2270,40 @@ def _dataset_status(rows: list, source: str) -> str:
     return "fresh"
 
 
+def _fund_cache_is_current(rows: list) -> bool:
+    today = _china_now().date().isoformat()
+    return bool(rows) and all(
+        isinstance(row, dict)
+        and row.get("subscription_status_status") == "fresh"
+        and row.get("subscription_as_of") == today
+        for row in rows
+    )
+
+
+def _etf_cache_is_current(rows: list) -> bool:
+    expected = _expected_cn_close_date()
+    if not rows:
+        return False
+    for row in rows:
+        if not isinstance(row, dict) or row.get("premium_status") != "fresh":
+            return False
+        quote = _as_of_instant(row.get("premium_quote_as_of") or row.get("quote_as_of"))
+        if quote is None or quote.astimezone(_CHINA_TZ).date().isoformat() != expected:
+            return False
+    return True
+
+
+def _stale_etf_rows(rows: list) -> list:
+    return [{
+        **row,
+        "data_status": "stale",
+        "quote_status": "stale" if row.get("market_price") is not None else "unavailable",
+        "nav_status": "stale" if row.get("nav") is not None else "unavailable",
+        "premium_status": "stale" if row.get("premium") is not None else "unavailable",
+        "fund_daily_status": "stale",
+    } for row in rows]
+
+
 def _reference_etfs() -> list:
     """冷启动参考快照不能把历史行情伪装成当前行情。"""
     dynamic_fields = {
@@ -2108,6 +2336,9 @@ def get_funds(category: str, response: Response):
     # 1. 内存缓存
     cached = _mem_get(cache_key, "funds")
     cached_status = _dataset_status(cached, "cache") if cached is not None else None
+    if cached_status == "fresh" and not _fund_cache_is_current(cached):
+        cached = [{**row, "data_status": "stale", "daily_status": "stale"} for row in cached]
+        cached_status = "stale"
     if cached is not None and cached_status == "fresh":
         _cache_header(response, 3600)
         return {
@@ -2203,102 +2434,31 @@ def get_funds(category: str, response: Response):
 
 @app.get("/api/etfs")
 def get_etfs(response: Response):
-    """
-    三层容错：内存缓存 → 实时抓取（不变字段保留）→ 文件缓存 → 静态兜底
-    """
+    """Read the latest official close snapshot; never build from a public GET."""
     cache_key = "etfs"
-
     cached = _mem_get(cache_key, "etfs")
-    cached_status = _dataset_status(cached, "cache") if cached is not None else None
-    if cached is not None and cached_status == "fresh":
-        _cache_header(response, 300)
-        return {
-            "data": cached,
-            "count": len(cached),
-            "source": "cache",
-            "status": cached_status,
-            "as_of": _latest_field_date(cached, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
-            "schema_version": "2.0",
-        }
-    if cached is not None and _recovery_gate_active(cache_key):
-        _cache_header(response, 300)
-        return {
-            "data": cached,
-            "count": len(cached),
-            "source": "cache",
-            "status": cached_status,
-            "as_of": _latest_field_date(cached, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
-            "schema_version": "2.0",
-        }
-
-    refresh_lock = _try_recovery_refresh(cache_key)
-    if refresh_lock is None:
-        if cached is not None:
-            _cache_header(response, 300)
-            return {
-                "data": cached,
-                "count": len(cached),
-                "source": "cache",
-                "status": cached_status,
-                "as_of": _latest_field_date(cached, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
-                "schema_version": "2.0",
-            }
+    if cached:
+        is_current = _etf_cache_is_current(cached)
+        results = cached if is_current else _stale_etf_rows(cached)
+        source = "cache"
+        status = _dataset_status(results, source) if is_current else "stale"
+    else:
         previous = _file_load(cache_key) or []
-        reference = ([{
-            **row,
-            "data_status": "stale",
-            "quote_status": "stale" if row.get("market_price") is not None else "unavailable",
-            "nav_status": "stale" if row.get("nav") is not None else "unavailable",
-            "premium_status": "stale" if row.get("premium") is not None else "unavailable",
-            "fund_daily_status": "stale",
-        } for row in previous] if previous else _reference_etfs())
-        _cache_header(response, 300)
-        return {
-            "data": reference,
-            "count": len(reference),
-            "source": "lkg" if previous else "refresh_in_progress",
-            "status": "stale",
-            "as_of": _latest_field_date(reference, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
-            "schema_version": "2.0",
-        }
-
-    try:
-        results, source = _build_etfs()
-
-        if source == "live":
-            _publish_cache(cache_key, results, CACHE_TTL["etfs"])
-        elif source == "partial":
-            _cache_recovery_snapshot(cache_key, results)
+        if previous:
+            results = _stale_etf_rows(previous)
+            source = "lkg"
+            status = "stale"
         else:
-            file_data = _file_load(cache_key)
-            if file_data:
-                results = [{
-                    **row,
-                    "data_status": "stale",
-                    "quote_status": "stale" if row.get("market_price") is not None else "unavailable",
-                    "nav_status": "stale" if row.get("nav") is not None else "unavailable",
-                    "premium_status": "stale" if row.get("premium") is not None else "unavailable",
-                    "fund_daily_status": "stale",
-                } for row in file_data]
-                _cache_recovery_snapshot(cache_key, results)
-                source  = "lkg"
-            elif cached is not None:
-                results = cached
-                _cache_recovery_snapshot(cache_key, results)
-                source = "cache"
-            else:
-                results = _reference_etfs()
-                source  = "reference"
-    finally:
-        if refresh_lock is not None:
-            refresh_lock.release()
+            results = _reference_etfs()
+            source = "reference"
+            status = "stale"
 
     _cache_header(response, 300)
     return {
         "data": results,
         "count": len(results),
         "source": source,
-        "status": _dataset_status(results, source),
+        "status": status,
         "as_of": _latest_field_date(results, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
         "schema_version": "2.0",
     }
@@ -2654,12 +2814,51 @@ def _require_job_secret(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _store_snapshot(cache_key: str, data: list, source: str, ttl: int) -> None:
+def _store_snapshot(cache_key: str, data: list, source: str, ttl: int) -> bool:
     """发布完整快照；部分快照只进入热缓存，不降级永久 LKG。"""
     if source == "live":
-        _publish_cache(cache_key, data, ttl)
+        return _publish_cache(cache_key, data, ttl)
     elif source == "partial":
         _cache_recovery_snapshot(cache_key, data)
+    return False
+
+
+def _refresh_fund_category(category: str) -> dict:
+    if category not in STATIC_FUNDS:
+        raise HTTPException(status_code=404, detail=f"Unknown fund category: {category}")
+    started = time.monotonic()
+    data, source = _build_funds(category)
+    published = _store_snapshot(f"funds_{category}", data, source, CACHE_TTL["funds"])
+    result = {
+        "category": category,
+        "count": len(data),
+        "source": source,
+        "published": published,
+        "duration_ms": round((time.monotonic() - started) * 1000),
+    }
+    if source != "live" or not published:
+        raise HTTPException(status_code=503, detail={**result, "error": "daily snapshot not published"})
+    result["live_data"] = _publish_live_projection(data)
+    return result
+
+
+@app.get("/api/cron/funds/{category}")
+def cron_fund_category(category: str, authorization: Optional[str] = Header(default=None)):
+    """One category per invocation keeps the Vercel function under 30 seconds."""
+    _require_job_secret(authorization)
+    lock_key = f"funds:{category}"
+    token = _acquire_job_lock(lock_key)
+    if token is None:
+        raise HTTPException(status_code=409, detail="Fund refresh is already running or Redis is unavailable")
+    try:
+        return {
+            "ts": _china_now().isoformat(),
+            "v": "v5",
+            "run_id": token,
+            "result": _refresh_fund_category(category),
+        }
+    finally:
+        _release_job_lock(lock_key, token)
 
 
 def _publish_live_projection(rows: list) -> dict:
@@ -2710,47 +2909,54 @@ def _publish_live_projection(rows: list) -> dict:
 
 @app.get("/api/cron/refresh")
 def cron_refresh(authorization: Optional[str] = Header(default=None)):
-    """北京时间 09:30：仅更新场外基金净值、滚动收益、申购与跟踪误差。"""
+    """Deprecated: the all-category job cannot fit the 30-second budget."""
     _require_job_secret(authorization)
-    results: dict = {}
-    published_rows: list = []
-
-    # 分类顺序刷新：每个 builder 内部已经有 10–16 个 worker。若再套三分类
-    # 并行，会让几十个请求同时争用全局 provider semaphore 并自相超时。
-    # ETF 仍在 A 股收盘后由 /api/cron/etfs 单独更新。
-    def _refresh_category(category: str):
-        data, source = _build_funds(category)
-        _store_snapshot(f"funds_{category}", data, source, CACHE_TTL["funds"])
-        return category, {"count": len(data), "source": source}, data
-
-    for category in STATIC_FUNDS:
-        try:
-            key, val, data = _refresh_category(category)
-            results[key] = val
-            published_rows.extend(data)
-        except Exception as e:
-            results[f"error_{category}"] = str(e)
-
-    results["live_data"] = {**_publish_live_projection(published_rows), "source": "same_snapshot"}
-
-    return {"ts": datetime.now(_CHINA_TZ).isoformat(), "v": "v5", "results": results}
+    raise HTTPException(
+        status_code=410,
+        detail="Use /api/cron/funds/{category}; the legacy combined refresh is disabled",
+    )
 
 
 @app.get("/api/cron/etfs")
 def cron_etfs(authorization: Optional[str] = Header(default=None)):
     """A 股收盘后更新 ETF 市价、滚动收益、跟踪误差和溢价快照。"""
     _require_job_secret(authorization)
-    data, source = _build_etfs()
-    _store_snapshot("etfs", data, source, CACHE_TTL["etfs"])
-    live_meta = _publish_live_projection(data)
-    return {
-        "ts": datetime.now(_CHINA_TZ).isoformat(),
-        "v": "v5",
-        "results": {
-            "etfs": {"count": len(data), "source": source},
-            "live_data": {**live_meta, "source": "same_snapshot"},
-        },
-    }
+    now = _china_now()
+    if now.weekday() >= 5 or (now.hour, now.minute) < (15, 5):
+        raise HTTPException(status_code=409, detail="ETF close snapshot is only published after 15:05 Asia/Shanghai")
+    lock_key = "etfs:close"
+    token = _acquire_job_lock(lock_key)
+    if token is None:
+        raise HTTPException(status_code=409, detail="ETF close refresh is already running or Redis is unavailable")
+    started = time.monotonic()
+    try:
+        data, source = _build_etfs()
+        published = _store_snapshot("etfs", data, source, CACHE_TTL["etfs"])
+        if source != "live" or not published:
+            raise HTTPException(status_code=503, detail={
+                "count": len(data),
+                "source": source,
+                "published": published,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "error": "ETF close snapshot not published",
+            })
+        live_meta = _publish_live_projection(data)
+        return {
+            "ts": _china_now().isoformat(),
+            "v": "v5",
+            "run_id": token,
+            "results": {
+                "etfs": {
+                    "count": len(data),
+                    "source": source,
+                    "published": published,
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                },
+                "live_data": {**live_meta, "source": "same_snapshot"},
+            },
+        }
+    finally:
+        _release_job_lock(lock_key, token)
 
 
 @app.get("/api/cron/prem")

@@ -230,7 +230,7 @@ class DailyNavFallbackTests(unittest.TestCase):
         self.assertEqual(result["subscription_status"], "limited")
         self.assertEqual(result["daily_source_status"], "full")
 
-    def test_missing_day_change_alone_triggers_coherent_fallback_group(self):
+    def test_missing_day_change_only_uses_fallback_for_missing_group(self):
         basic = {
             "DWJZ": "2.5",
             "FSRQ": "2026-08-20",
@@ -256,8 +256,10 @@ class DailyNavFallbackTests(unittest.TestCase):
             result = api._fetch_daily_snapshot("160213")
 
         ping.assert_called_once_with("160213")
-        self.assertEqual(result["nav"], 2.4)
-        self.assertEqual(result["nav_date"], "2026-08-18")
+        self.assertEqual(result["nav"], 2.5)
+        self.assertEqual(result["nav_date"], "2026-08-20")
+        self.assertEqual(result["rolling_1y"], 21.0)
+        self.assertEqual(result["rolling_1y_as_of"], "2026-08-20")
         self.assertEqual(result["day_change"], -1.2)
         self.assertEqual(result["day_change_as_of"], "2026-08-18")
 
@@ -346,7 +348,7 @@ class FundCacheContractTests(unittest.TestCase):
             "daily_source_status": "full",
         }
 
-    def test_tracking_failure_keeps_fund_dataset_partial(self):
+    def test_tracking_failure_does_not_block_daily_snapshot(self):
         catalog_row = {
             "code": "160213",
             "name": "Fund",
@@ -356,13 +358,17 @@ class FundCacheContractTests(unittest.TestCase):
         with (
             patch.object(api, "STATIC_FUNDS", {"nasdaq_passive": [catalog_row]}),
             patch.object(api, "_lkg_get", return_value=None),
-            patch.object(api, "fetch_one_fund", return_value=self._full_fund_snapshot()),
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 10, tzinfo=timezone(timedelta(hours=8)))),
+            patch.object(api, "fetch_one_fund", return_value={
+                **self._full_fund_snapshot(),
+                "subscription_as_of": "2026-08-20",
+            }),
             patch.object(api, "_fetch_tracking_error", return_value=None),
         ):
             rows, source = api._build_funds("nasdaq_passive")
 
-        self.assertEqual(source, "partial")
-        self.assertEqual(rows[0]["data_status"], "partial")
+        self.assertEqual(source, "live")
+        self.assertEqual(rows[0]["data_status"], "fresh")
         self.assertEqual(rows[0]["track_error_status"], "stale")
 
     def test_nav_only_fallback_never_reuses_old_purchase_limit(self):
@@ -397,6 +403,39 @@ class FundCacheContractTests(unittest.TestCase):
         self.assertEqual(rows[0]["subscription_status_status"], "unavailable")
         self.assertEqual(rows[0]["daily_limit"], "待确认")
         self.assertIsNone(rows[0]["daily_limit_cny"])
+
+    def test_older_daily_groups_cannot_replace_newer_lkg(self):
+        catalog_row = {"code": "100055", "name": "Fund"}
+        previous = [{
+            **catalog_row,
+            "nav": 2.5,
+            "nav_date": "2026-08-20",
+            "day_change": 1.0,
+            "day_change_as_of": "2026-08-20",
+            "rolling_1y": 25.0,
+            "rolling_1y_as_of": "2026-08-20",
+            "subscription_status": "limited",
+            "subscription_status_status": "fresh",
+            "subscription_as_of": "2026-08-20",
+            "daily_limit": "1000元",
+            "daily_limit_cny": 1000,
+        }]
+        older = {
+            **self._full_fund_snapshot("100055"),
+            "subscription_as_of": "2026-08-20",
+        }
+        with (
+            patch.object(api, "STATIC_FUNDS", {"us_active": [catalog_row]}),
+            patch.object(api, "_lkg_get", return_value=previous),
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 10, tzinfo=timezone(timedelta(hours=8)))),
+            patch.object(api, "fetch_one_fund", return_value=older),
+        ):
+            rows, source = api._build_funds("us_active")
+
+        self.assertEqual(source, "partial")
+        self.assertEqual(rows[0]["nav"], 2.5)
+        self.assertEqual(rows[0]["nav_date"], "2026-08-20")
+        self.assertEqual(rows[0]["rolling_1y"], 25.0)
 
     def test_partial_fund_refresh_only_updates_hot_cache(self):
         rows = [{"code": "050025", "rolling_1y": 12.3, "data_status": "partial"}]
@@ -533,6 +572,17 @@ class FundCacheContractTests(unittest.TestCase):
 
 
 class EtfCacheContractTests(unittest.TestCase):
+    def setUp(self):
+        self._now_patch = patch.object(
+            api,
+            "_china_now",
+            return_value=datetime(2026, 8, 20, 15, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        self._now_patch.start()
+
+    def tearDown(self):
+        self._now_patch.stop()
+
     @staticmethod
     def _daily_etf_snapshot(*, rolling_1y=20.0, day_change=-1.2):
         return {
@@ -610,6 +660,29 @@ class EtfCacheContractTests(unittest.TestCase):
         self.assertNotEqual(rows[0]["premium_status"], "fresh")
         self.assertIsNone(rows[0].get("premium"))
 
+    def test_intraday_quote_cannot_create_or_publish_fresh_premium(self):
+        catalog_row = {"code": "513100", "name": "ETF"}
+        quote = {"513100": {
+            "market_price": 1.70,
+            "market_change_pct": 1.2,
+            "quote_as_of": "2026-08-20T02:30:00+00:00",
+            "quote_source": "test",
+        }}
+        with (
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 10, 30, tzinfo=timezone(timedelta(hours=8)))),
+            patch.object(api, "STATIC_ETFS", [catalog_row]),
+            patch.object(api, "_lkg_get", return_value=None),
+            patch.object(api, "fetch_etfs_sina_batch", return_value=quote),
+            patch.object(api, "_fetch_daily_snapshot", return_value=self._daily_etf_snapshot()),
+            patch.object(api, "_fetch_tracking_error", return_value=None),
+            patch.object(api, "fetch_etfs_em_fallback", return_value={}),
+        ):
+            rows, source = api._build_etfs()
+
+        self.assertEqual(source, "partial")
+        self.assertNotEqual(rows[0]["premium_status"], "fresh")
+        self.assertIsNone(rows[0].get("premium"))
+
     def test_new_quote_and_failed_nav_do_not_recompute_old_premium(self):
         catalog_row = {
             "code": "513100",
@@ -658,42 +731,33 @@ class EtfCacheContractTests(unittest.TestCase):
         self.assertEqual(rows[0]["premium_as_of"], "2026-08-19T07:00:00+00:00")
         self.assertEqual(rows[0]["premium_status"], "stale")
 
-    def test_partial_etf_refresh_only_updates_hot_cache(self):
+    def test_public_etf_get_only_serves_existing_cache(self):
         rows = [{"code": "513100", "premium": 1.2, "data_status": "partial"}]
         with (
-            patch.object(api, "_mem_get", return_value=None),
-            patch.object(api, "_recovery_gate_active", return_value=False),
-            patch.object(api, "_build_etfs", return_value=(rows, "partial")),
+            patch.object(api, "_mem_get", return_value=rows),
+            patch.object(api, "_build_etfs") as build,
             patch.object(api, "_publish_cache") as publish,
             patch.object(api, "_cache_set") as cache_set,
         ):
             payload = api.get_etfs(Response())
 
+        build.assert_not_called()
         publish.assert_not_called()
-        self.assertIn(call("etfs", rows, api.RECOVERY_CACHE_TTL), cache_set.call_args_list)
-        self.assertIn(
-            call("recovery_gate:etfs", {"active": True}, api.RECOVERY_CACHE_TTL),
-            cache_set.call_args_list,
-        )
-        self.assertEqual(payload["source"], "partial")
-        self.assertEqual(payload["status"], "partial")
+        cache_set.assert_not_called()
+        self.assertEqual(payload["source"], "cache")
+        self.assertEqual(payload["status"], "stale")
 
-    def test_true_cold_follower_does_not_duplicate_etf_builder(self):
-        held = api._try_recovery_refresh("etfs")
-        self.assertIsNotNone(held)
-        try:
-            with (
-                patch.object(api, "_mem_get", return_value=None),
-                patch.object(api, "_file_load", return_value=None),
-                patch.object(api, "STATIC_ETFS", [{"code": "513100"}]),
-                patch.object(api, "_build_etfs") as build,
-            ):
-                payload = api.get_etfs(Response())
-        finally:
-            held.release()
+    def test_true_cold_public_etf_get_returns_reference_without_building(self):
+        with (
+            patch.object(api, "_mem_get", return_value=None),
+            patch.object(api, "_file_load", return_value=None),
+            patch.object(api, "STATIC_ETFS", [{"code": "513100"}]),
+            patch.object(api, "_build_etfs") as build,
+        ):
+            payload = api.get_etfs(Response())
 
         build.assert_not_called()
-        self.assertEqual(payload["source"], "refresh_in_progress")
+        self.assertEqual(payload["source"], "reference")
 
     def test_etf_lkg_is_rehydrated_with_field_level_stale_statuses(self):
         previous = [{
@@ -726,7 +790,7 @@ class EtfCacheContractTests(unittest.TestCase):
         self.assertEqual(row["nav_status"], "stale")
         self.assertEqual(row["premium_status"], "stale")
         self.assertEqual(row["fund_daily_status"], "stale")
-        self.assertEqual(cache_set.call_args_list[0].args[1][0]["data_status"], "stale")
+        cache_set.assert_not_called()
         self.assertEqual(previous[0]["data_status"], "fresh")
 
 
@@ -883,26 +947,58 @@ class MonthlyReturnRouteContractTests(unittest.TestCase):
 
 
 class CronRefreshContractTests(unittest.TestCase):
-    def test_fund_categories_refresh_sequentially_without_outer_pool(self):
-        order = []
-
-        def build(category):
-            order.append(category)
-            return ([{"code": category, "data_status": "fresh"}], "live")
-
+    def test_combined_fund_cron_is_disabled_to_protect_30_second_budget(self):
         with (
-            patch.object(api, "STATIC_FUNDS", {"first": [{}], "second": [{}], "third": [{}]}),
             patch.object(api, "_require_job_secret"),
-            patch.object(api, "_build_funds", side_effect=build),
-            patch.object(api, "_store_snapshot"),
-            patch.object(api, "_publish_live_projection", return_value={"status": "partial"}),
-            patch.object(api, "ThreadPoolExecutor", side_effect=AssertionError("outer pool forbidden")),
+            patch.object(api, "_build_funds") as build,
         ):
-            payload = api.cron_refresh(None)
+            with self.assertRaises(HTTPException) as raised:
+                api.cron_refresh(None)
 
-        self.assertEqual(order, ["first", "second", "third"])
-        self.assertEqual(payload["results"]["first"]["source"], "live")
-        self.assertNotIn("error_first", payload["results"])
+        self.assertEqual(raised.exception.status_code, 410)
+        build.assert_not_called()
+
+    def test_split_fund_cron_requires_successful_redis_publish(self):
+        with (
+            patch.object(api, "STATIC_FUNDS", {"us_active": [{"code": "x"}]}),
+            patch.object(api, "_build_funds", return_value=([{"code": "x"}], "live")),
+            patch.object(api, "_store_snapshot", return_value=False),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api._refresh_fund_category("us_active")
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertFalse(raised.exception.detail["published"])
+
+    def test_etf_cron_rejects_intraday_execution(self):
+        with (
+            patch.object(api, "_require_job_secret"),
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 10, 30, tzinfo=timezone(timedelta(hours=8)))),
+            patch.object(api, "_acquire_job_lock") as lock,
+            patch.object(api, "_build_etfs") as build,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api.cron_etfs(None)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        lock.assert_not_called()
+        build.assert_not_called()
+
+    def test_etf_cron_reports_publish_failure_as_non_2xx(self):
+        with (
+            patch.object(api, "_require_job_secret"),
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 15, 30, tzinfo=timezone(timedelta(hours=8)))),
+            patch.object(api, "_acquire_job_lock", return_value="run-token"),
+            patch.object(api, "_release_job_lock") as release,
+            patch.object(api, "_build_etfs", return_value=([{"code": "513100"}], "live")),
+            patch.object(api, "_store_snapshot", return_value=False),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api.cron_etfs(None)
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertFalse(raised.exception.detail["published"])
+        release.assert_called_once_with("etfs:close", "run-token")
 
 
 class PeHistoryContractTests(unittest.TestCase):
