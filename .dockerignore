@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+.codex
+.env*
+!.env.example
+node_modules
+dist
+tmp
+*.db
+*.db-*
+*.xlsx
+*.log
+__pycache__
+*.py[cod]
+.DS_Store

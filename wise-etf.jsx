@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Legend, Area, AreaChart } from "recharts";
 
 // ─── API Config ──────────────────────────────────────────────────────────────
@@ -8,7 +8,7 @@ async function apiFetch(path) {
   try {
     const resp = await fetch(`${API_BASE}${path}`);
     if (resp.ok) return await resp.json();
-  } catch (e) {
+  } catch {
     console.warn(`API fetch failed for ${path}, using fallback data`);
   }
   return null;

@@ -5,18 +5,6 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 
-// ─── Mobile Hook ──────────────────────────────────────────────────────────────
-
-function useIsMobile() {
-  const [m, setM] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
-  useEffect(() => {
-    const fn = () => setM(window.innerWidth <= 768);
-    window.addEventListener("resize", fn);
-    return () => window.removeEventListener("resize", fn);
-  }, []);
-  return m;
-}
-
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
 const ETF_RETURNS = {
@@ -475,7 +463,28 @@ function PortfolioCard({ portfolio, onClick }) {
 
 // ─── Growth Comparison Chart ─────────────────────────────────────────────────
 
-function GrowthComparisonChart({ portfolios, onSelect }) {
+function GrowthComparisonTooltip({active,payload,label,portfolios}) {
+  if (!active || !payload?.length) return null;
+  const sorted = [...payload].sort((a,b)=>b.value-a.value);
+  return (
+    <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:12,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",maxWidth:220}}>
+      <div style={{fontWeight:700,color:"#1e293b",marginBottom:6}}>{label}年末</div>
+      {sorted.slice(0,8).map((item,index)=>{
+        const portfolio=portfolios.find(candidate=>candidate.id===Number(item.dataKey));
+        return (
+          <div key={index} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:item.color,flexShrink:0}} />
+            <span style={{color:"#64748b",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{portfolio?.name}</span>
+            <span style={{fontWeight:700,color:"#1e293b"}}>${item.value}</span>
+          </div>
+        );
+      })}
+      {sorted.length>8&&<div style={{color:"#94a3b8",marginTop:4}}>+{sorted.length-8} 更多...</div>}
+    </div>
+  );
+}
+
+function GrowthComparisonChart({ portfolios }) {
   const [selected, setSelected] = useState(() => new Set(portfolios.map(p => p.id)));
 
   const chartData = useMemo(() => {
@@ -504,27 +513,6 @@ function GrowthComparisonChart({ portfolios, onSelect }) {
       else s.add(id);
       return s;
     });
-  };
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null;
-    const sorted = [...payload].sort((a, b) => b.value - a.value);
-    return (
-      <div style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:10, padding:"10px 14px", fontSize:12, boxShadow:"0 4px 20px rgba(0,0,0,0.12)", maxWidth:220 }}>
-        <div style={{ fontWeight:700, color:"#1e293b", marginBottom:6 }}>{label}年末</div>
-        {sorted.slice(0,8).map((p, i) => {
-          const port = portfolios.find(x => x.id === Number(p.dataKey));
-          return (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
-              <div style={{ width:6, height:6, borderRadius:"50%", background:p.color, flexShrink:0 }} />
-              <span style={{ color:"#64748b", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{port?.name}</span>
-              <span style={{ fontWeight:700, color:"#1e293b" }}>${p.value}</span>
-            </div>
-          );
-        })}
-        {sorted.length > 8 && <div style={{ color:"#94a3b8", marginTop:4 }}>+{sorted.length-8} 更多...</div>}
-      </div>
-    );
   };
 
   return (
@@ -566,7 +554,7 @@ function GrowthComparisonChart({ portfolios, onSelect }) {
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis dataKey="year" tick={{ fontSize:12, fill:"#94a3b8" }} />
           <YAxis tick={{ fontSize:12, fill:"#94a3b8" }} tickFormatter={v => `$${v}`} />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<GrowthComparisonTooltip portfolios={portfolios} />} />
           {portfolios.filter(p => selected.has(p.id)).map(p => (
             <Line key={p.id} type="monotone" dataKey={p.id}
               stroke={p.color} strokeWidth={2} dot={false}
@@ -732,11 +720,12 @@ function ComparisonTable({ portfolios, onSelect }) {
 // ─── Mini sparklines for header ───────────────────────────────────────────────
 
 function MiniSparklines({ portfolios }) {
-  const featured = [portfolios[8], portfolios[2], portfolios[1]];
-  const allData = useMemo(() => featured.map(p => ({
-    color: p.color, name: p.name,
-    data: calcGrowth(p.returns),
-  })), []);
+  const allData = useMemo(() => [portfolios[8],portfolios[2],portfolios[1]]
+    .filter(Boolean)
+    .map(portfolio=>({
+      color:portfolio.color,name:portfolio.name,
+      data:calcGrowth(portfolio.returns),
+    })),[portfolios]);
 
   const chartData = YEARS.map((yr, i) => {
     const row = { year: yr };
@@ -1177,7 +1166,7 @@ function SvgGrowthChart({ data, color, W = 440, H = 190 }) {
   );
 }
 
-function SvgBarChart({ data, color, W = 440, H = 190 }) {
+function SvgBarChart({ data, W = 440, H = 190 }) {
   const maxAbs = Math.max(...data.map(d => Math.abs(d.return)), 1);
   const pad = { top: 24, right: 8, bottom: 28, left: 8 };
   const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
@@ -1629,14 +1618,14 @@ function PreviewModal({ dataUrl, onClose }) {
 
 function BatchExporter() {
   const [progress, setProgress] = useState(null);
-  const canvasRefs = useRef(PORTFOLIOS.map(() => ({ current: null })));
+  const [canvasRefs] = useState(() => PORTFOLIOS.map(() => ({ current: null })));
 
   async function handleBatchExport() {
     if (progress !== null) return;
     setProgress({ done: 0, total: PORTFOLIOS.length });
     for (let i = 0; i < PORTFOLIOS.length; i++) {
       const p = PORTFOLIOS[i];
-      const el = canvasRefs.current[i].current;
+      const el = canvasRefs[i].current;
       try {
         const canvas = await html2canvas(el, {
           useCORS: true, allowTaint: true, scale: 2,
@@ -1666,7 +1655,7 @@ function BatchExporter() {
   return (
     <>
       {PORTFOLIOS.map((p, i) => (
-        <PortfolioExportCanvas key={p.id} portfolio={p} canvasRef={canvasRefs.current[i]} />
+        <PortfolioExportCanvas key={p.id} portfolio={p} canvasRef={canvasRefs[i]} />
       ))}
       <button
         onClick={handleBatchExport}

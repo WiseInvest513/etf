@@ -21,7 +21,8 @@
     }
   },
   "crons": [
-    { "path": "/api/cron/refresh",   "schedule": "30 1 * * *"   },
-    { "path": "/api/cron/prem",      "schedule": "0 2 * * *"    }
+    { "path": "/api/cron/refresh", "schedule": "30 1 * * *" },
+    { "path": "/api/cron/etfs",    "schedule": "30 7 * * 1-5" },
+    { "path": "/api/cron/prem",    "schedule": "30 23 * * 1-5" }
   ]
 }

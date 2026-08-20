@@ -4,6 +4,19 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Ba
 import { Analytics } from "@vercel/analytics/react";
 import LazyPage from "./LazyPage.jsx";
 import QDIIPage from "./QDIIPage.jsx";
+import {
+  DATASET_STATE,
+  deriveDatasetState,
+  finiteAverage,
+  formatPercent,
+  normalizeApiEnvelope,
+  normalizeObjectDataset,
+  normalizeSubscriptionStatus,
+  nullLastComparator,
+  premiumDisplayModel,
+  resolveLocalAuthBypass,
+  shouldRequireAuth,
+} from "./data/model.js";
 
 // ─── Community Mode ───────────────────────────────────────────────────────────
 // "telegram" → 弹窗显示电报图片 + 点击加入群聊按钮
@@ -11,14 +24,47 @@ import QDIIPage from "./QDIIPage.jsx";
 const COMMUNITY_MODE = "telegram";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
-async function apiFetch(path) {
-  try { const r = await fetch(`${API_BASE}${path}`); if (r.ok) return await r.json(); } catch {}
-  return null;
+const LOCAL_AUTH_BYPASS = resolveLocalAuthBypass({
+  isDev: import.meta.env.DEV,
+  flag: import.meta.env.VITE_LOCAL_AUTH_BYPASS,
+  hostname: typeof window === "undefined" ? "" : window.location.hostname,
+});
+const MARKET_SENTIMENT_FIELDS = ["vix","fear_greed","pe","nasdaq_pe","ndx_price","spx_price"];
+async function apiFetch(path, options={}) {
+  const response = await fetch(`${API_BASE}${path}`, options);
+  if(!response.ok){
+    const error = new Error(`API ${path} returned HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
 }
 
+async function apiFetchSequential(paths, options={}) {
+  const responses=[];
+  for(const path of paths){
+    responses.push(await apiFetch(path,options));
+  }
+  return responses;
+}
+
+const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
+const formatShanghaiDate = (value=new Date(), separator="/") => {
+  if(typeof value==="string"){
+    const match=value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|\s)/);
+    if(match) return [match[1],match[2],match[3]].join(separator);
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone:SHANGHAI_TIME_ZONE, year:"numeric", month:"2-digit", day:"2-digit",
+  }).formatToParts(date);
+  const pick = type => parts.find(part=>part.type===type)?.value || "";
+  return [pick("year"),pick("month"),pick("day")].join(separator);
+};
 // ─── Static Data ──────────────────────────────────────────────────────────────
-// ⚠️  FALLBACK 中的 ytd_return（25年涨幅）为写死的 2025 全年收益率，禁止动态覆盖。
-// ⚠️  如需修改 ytd_return，必须直接编辑此处，并征得用户同意后才能改动。
+// 迁移期离线目录生成器仍会读取这份旧字面量；Web 运行时不再使用它。
+// 生产静态元数据唯一来源是 catalog/products.v1.json，日更字段只来自 API。
 const FALLBACK = {
   nasdaq_passive: [
     { code:"019524",name:"华泰柏瑞纳斯达克100ETF联接(QDII)A",  fee_rate:0.65,scale:6.8,  ytd_return:16.66,track_error:1.65,daily_limit:"100元",  buy_status:"open",     code_c:"019525"},
@@ -104,22 +150,6 @@ const FALLBACK = {
   ],
 };
 
-// 过去12个月月度收益（来源：Yahoo Finance，2025-05 ~ 2026-04，美元口径，NDX/GSPC 月收盘价计算）
-const MONTHLY_12M = [
-  {month:"5月",  nasdaq: 9.04, sp500: 6.15},
-  {month:"6月",  nasdaq: 6.27, sp500: 4.96},
-  {month:"7月",  nasdaq: 2.38, sp500: 2.17},
-  {month:"8月",  nasdaq: 0.85, sp500: 1.91},
-  {month:"9月",  nasdaq: 5.40, sp500: 3.53},
-  {month:"10月", nasdaq: 4.77, sp500: 2.27},
-  {month:"11月", nasdaq:-1.64, sp500: 0.13},
-  {month:"12月", nasdaq:-0.73, sp500:-0.05},
-  {month:"1月",  nasdaq: 1.20, sp500: 1.37},
-  {month:"2月",  nasdaq:-2.32, sp500:-0.87},
-  {month:"3月",  nasdaq:-4.89, sp500:-5.09},
-  {month:"4月",  nasdaq:15.60, sp500:10.40},
-];
-
 // ─── FX / Index Historical Data ───────────────────────────────────────────────
 // USD/CNY 年末汇率（来源：中国外汇交易中心 / Wind 公开数据）
 // 格式：[年初汇率, 年末汇率]
@@ -187,7 +217,7 @@ function useCountUp(target, duration=900) {
     };
     raf.current=requestAnimationFrame(tick);
     return ()=>cancelAnimationFrame(raf.current);
-  },[target]);
+  },[target,duration]);
   return val;
 }
 
@@ -200,7 +230,7 @@ function useScrollReveal(threshold=0.12) {
     },{threshold});
     if(ref.current) obs.observe(ref.current);
     return ()=>obs.disconnect();
-  },[]);
+  },[threshold]);
   return [ref, visible];
 }
 
@@ -256,8 +286,8 @@ function Reveal({children, delay=0}) {
 // ─── StatCard ─────────────────────────────────────────────────────────────────
 function StatCard({label,value,sub,color=C.accent,index=0}) {
   const numStr = String(value).replace(/[^0-9.]/g,"");
-  const prefix = String(value).startsWith("+") ? "+" : "";
-  const suffix = String(value).replace(/^[+\-]?[\d.]+/,"");
+  const prefix = String(value).startsWith("+") ? "+" : String(value).startsWith("-") ? "-" : "";
+  const suffix = String(value).replace(/^[+-]?[\d.]+/,"");
   const counted = useCountUp(numStr,900);
   const [h,hProps] = useHover();
   return (
@@ -397,7 +427,7 @@ const CapitolBuilding = ({color}) => (
   </svg>
 );
 
-function ReturnTag({label, value, color}) {
+function ReturnTag({label, value}) {
   if (value==null) return null;
   const c = value>=0 ? C.green : C.red;
   return (
@@ -408,7 +438,7 @@ function ReturnTag({label, value, color}) {
   );
 }
 
-function IndexPriceCard({title, ticker, price, changePct, returns={}, color, index=0}) {
+function IndexPriceCard({title, ticker, price, changePct, returns={}, asOf, color, index=0}) {
   const [h,hProps] = useHover();
   const fmt = v => v==null ? '--' : v.toLocaleString('en-US', {maximumFractionDigits:2});
   const chgColor = changePct==null ? C.textDim : changePct>=0 ? C.green : C.red;
@@ -455,7 +485,7 @@ function IndexPriceCard({title, ticker, price, changePct, returns={}, color, ind
           </div>
           {changePct!=null&&(
             <div style={{fontSize:12,fontWeight:700,color:chgColor,background:chgColor+"15",padding:"3px 10px",borderRadius:20}}>
-              今日 {changePct>=0?"+":""}{changePct}%
+              {asOf ? `${asOf} ` : "最近交易日 "}{changePct>=0?"+":""}{changePct}%
             </div>
           )}
         </div>
@@ -485,18 +515,18 @@ function MarketAISummary({aiInsight, aiLoading, ndx, spx}) {
     const out = [];
     const ndxStreak = ndx.streak || 0;
     const spxStreak = spx.streak || 0;
-    const ndxAtHigh = (ndx.pct_from_high||0) >= -0.5;
-    const spxAtHigh = (spx.pct_from_high||0) >= -0.5;
+    const ndxAtHigh = Number.isFinite(ndx.pct_from_high) && ndx.pct_from_high >= -0.5;
+    const spxAtHigh = Number.isFinite(spx.pct_from_high) && spx.pct_from_high >= -0.5;
     if (ndxAtHigh && spxAtHigh)
-      out.push({icon:"🚀",tag:"双指数创年内新高",level:"bullish",text:`纳指100（${ndx.price?.toLocaleString('en-US')}）与标普500（${spx.price?.toLocaleString('en-US')}）均触及近一年高位，多头格局强势。`});
+      out.push({icon:"📍",tag:"接近年内高位",level:"bullish",text:`纳指100（${ndx.price?.toLocaleString('en-US')}）与标普500（${spx.price?.toLocaleString('en-US')}）都处于各自近一年高点约0.5%以内。`});
     if (ndxStreak >= 7)
-      out.push({icon:"🔥",tag:`纳指连涨${ndxStreak}天`,level:"bullish",text:`纳指100已连续 ${ndxStreak} 个交易日收涨，历史上10连涨以上概率不足3%，为罕见逼空行情，15日累计 ${p(ndx.returns?.d15,'%')}。`});
+      out.push({icon:"📈",tag:`纳指连涨${ndxStreak}天`,level:"bullish",text:`纳指100已连续 ${ndxStreak} 个交易日收涨，近15日价格收益为 ${p(ndx.returns?.d15,'%')}；这是动量描述，不代表后续方向。`});
     else if (ndxStreak >= 3)
       out.push({icon:"📈",tag:`纳指连涨${ndxStreak}天`,level:"bullish",text:`纳指100连续 ${ndxStreak} 日上涨，短期动能强劲，15日涨幅 ${p(ndx.returns?.d15,'%')}。`});
     if ((ndx.returns?.yr1||0) > 35)
-      out.push({icon:"⚡",tag:"年度回报罕见",level:"bullish",text:`纳指100近一年涨 ${p(ndx.returns?.yr1,'%')}，远超历史均值（约+15%），科技股溢价明显；标普500同期 ${p(spx.returns?.yr1,'%')}。`});
+      out.push({icon:"↗️",tag:"近一年涨幅较大",level:"neutral",text:`纳指100近一年价格收益为 ${p(ndx.returns?.yr1,'%')}，标普500同期为 ${p(spx.returns?.yr1,'%')}；两者仅为美元价格口径。`});
     if (spxStreak >= 5)
-      out.push({icon:"💪",tag:`标普连涨${spxStreak}天`,level:"bullish",text:`标普500同步连涨 ${spxStreak} 天，近15日 ${p(spx.returns?.d15,'%')}，大盘走强信号明确。`});
+      out.push({icon:"📊",tag:`标普连涨${spxStreak}天`,level:"bullish",text:`标普500连续 ${spxStreak} 个交易日上涨，近15日价格收益为 ${p(spx.returns?.d15,'%')}。`});
     return out.slice(0,2);
   }, [ndx, spx]);
 
@@ -545,8 +575,6 @@ function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
   const ndx = sentiment?.ndx_price;
   const spx = sentiment?.spx_price;
   const round2 = v => Math.round(v * 100) / 100;
-  const fmtNum = v => v==null ? '--' : v.toLocaleString('en-US',{maximumFractionDigits:2});
-
   // 合并图表数据
   const buildPct = (history=[]) => {
     if (history.length < 2) return {};
@@ -571,8 +599,8 @@ function IndexPriceRow({sentiment, aiInsight, aiLoading, isMobile}) {
     <div style={{marginBottom: isMobile?16:24}}>
       {/* 顶部数据卡 */}
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2,1fr)",gap:isMobile?10:16,marginBottom:isMobile?10:16}}>
-        <IndexPriceCard title="纳斯达克100" ticker="^NDX" price={ndx?.price} changePct={ndx?.change_pct} returns={ndx?.returns||{}} color={C.accent} index={0}/>
-        <IndexPriceCard title="标普500" ticker="^GSPC" price={spx?.price} changePct={spx?.change_pct} returns={spx?.returns||{}} color={C.cyan} index={1}/>
+        <IndexPriceCard title="纳斯达克100" ticker="^NDX" price={ndx?.price} changePct={ndx?.change_pct} returns={ndx?.returns||{}} asOf={ndx?.as_of} color={C.accent} index={0}/>
+        <IndexPriceCard title="标普500" ticker="^GSPC" price={spx?.price} changePct={spx?.change_pct} returns={spx?.returns||{}} asOf={spx?.as_of} color={C.cyan} index={1}/>
       </div>
 
       {/* 图表 + AI解读 */}
@@ -637,28 +665,33 @@ function MarketSentimentRow({sentiment, isMobile}) {
   const vix = sentiment?.vix;
   const fg  = sentiment?.fear_greed;
   const pe  = sentiment?.pe;
-  const vixColor = !vix ? C.textDim : vix.value>=40 ? C.red : vix.value>=30 ? "#ff6b35" : vix.value>=20 ? C.orange : C.green;
-  const vixLabel = !vix ? '--' : vix.value>=40 ? '极度恐慌' : vix.value>=30 ? '高度恐慌' : vix.value>=20 ? '市场警惕' : vix.value>=12 ? '相对平静' : '极度平静';
-  const vixChg = vix?.change_pct;
-  const vixSub = vix ? `CBOE官方 · ${vixChg!=null?(vixChg>=0?'+':'')+vixChg+'%':''} 今日` : '数据加载中…';
-  const fgScore = fg?.score;
+  const vixValue = Number.isFinite(vix?.value) ? vix.value : null;
+  const vixColor = vixValue==null ? C.textDim : vixValue>=40 ? C.red : vixValue>=30 ? "#ff6b35" : vixValue>=20 ? C.orange : C.green;
+  const vixLabel = vixValue==null ? '--' : vixValue>=40 ? '极度恐慌' : vixValue>=30 ? '高度恐慌' : vixValue>=20 ? '市场警惕' : vixValue>=12 ? '相对平静' : '极度平静';
+  const vixChg = Number.isFinite(vix?.change_pct) ? vix.change_pct : null;
+  const vixSub = vixValue!=null ? `CBOE延迟行情 · ${vixChg!=null?(vixChg>=0?'+':'')+vixChg+'% · ':''}${vix.as_of||'日期未知'}` : '当前数据不可用';
+  const fgScore = Number.isFinite(fg?.score) ? fg.score : null;
   const fgColor = fgScore==null ? C.textDim : fgScore<=25 ? C.red : fgScore<=45 ? C.orange : fgScore<=55 ? C.textMuted : fgScore<=75 ? C.green : "#1a9e4a";
   const fgLabelMap = {'extreme fear':'极度恐慌','fear':'恐慌','neutral':'中性','greed':'贪婪','extreme greed':'极度贪婪'};
-  const fgLabel = fg ? (fgLabelMap[(fg.rating||'').toLowerCase()]||fg.rating) : '--';
-  const fgSub = fg?.previous_close!=null ? `昨收 ${fg.previous_close} · 上周 ${fg.previous_1_week??'--'}` : '数据加载中…';
-  const peColor = !pe ? C.textDim : pe.percentile>=85 ? C.red : pe.percentile>=70 ? C.orange : pe.percentile>=45 ? C.textMuted : C.green;
-  const peLabel = !pe ? '--' : pe.percentile>=85 ? '高估' : pe.percentile>=70 ? '偏高' : pe.percentile>=45 ? '合理' : '低估';
-  const peSub = pe ? `历史${pe.percentile}%分位 · 来源 multpl.com` : '数据加载中…';
+  const fgLabel = fgScore!=null ? (fgLabelMap[(fg?.rating||'').toLowerCase()]||fg?.rating||'--') : '--';
+  const fgSub = fg?.previous_close!=null ? `昨收 ${fg.previous_close} · 上周 ${fg.previous_1_week??'--'} · CNN` : '当前数据不可用';
+  const peValue = Number.isFinite(pe?.pe) ? pe.pe : null;
+  const pePct = Number.isFinite(pe?.percentile) ? pe.percentile : null;
+  const peColor = pePct==null ? C.textDim : pePct>=85 ? C.red : pePct>=70 ? C.orange : pePct>=45 ? C.textMuted : C.green;
+  const peLabel = pePct==null ? '分位不可用' : pePct>=85 ? '高估' : pePct>=70 ? '偏高' : pePct>=45 ? '合理' : '低估';
+  const peSub = peValue!=null ? (pePct==null ? `Trailing PE · ${pe.as_of||'日期未知'}` : `约${pePct}%分位 · 年度样本1950–2025 · ${pe.as_of||'日期未知'}`) : '当前数据不可用';
   const nqPe = sentiment?.nasdaq_pe;
-  const nqPeColor = !nqPe ? C.textDim : nqPe.percentile>=85 ? C.red : nqPe.percentile>=70 ? C.orange : nqPe.percentile>=45 ? C.textMuted : C.green;
-  const nqPeLabel = !nqPe ? '--' : nqPe.percentile>=85 ? '高估' : nqPe.percentile>=70 ? '偏高' : nqPe.percentile>=45 ? '合理' : '低估';
-  const nqPeSub = nqPe ? `历史${nqPe.percentile}%分位 · 来源 gurufocus.com` : '数据加载中…';
+  const nqPeValue = Number.isFinite(nqPe?.pe) ? nqPe.pe : null;
+  const nqPct = Number.isFinite(nqPe?.percentile) ? nqPe.percentile : null;
+  const nqPeColor = nqPct==null ? C.textDim : nqPct>=85 ? C.red : nqPct>=70 ? C.orange : nqPct>=45 ? C.textMuted : C.green;
+  const nqPeLabel = nqPct==null ? '暂无同口径分位' : nqPct>=85 ? '高估' : nqPct>=70 ? '偏高' : nqPct>=45 ? '合理' : '低估';
+  const nqPeSub = nqPeValue!=null ? `QQQ Trailing PE 代理 · ${nqPe.as_of||'日期未知'}` : '当前数据不可用';
   return (
     <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:28}}>
-      <SentimentCard title="VIX 恐慌指数" value={vix?vix.value:'--'} label={vixLabel} color={vixColor} barPct={vix?Math.min(vix.value/60*100,100):null} sub={vixSub} index={0}/>
+      <SentimentCard title="VIX 恐慌指数" value={vixValue??'--'} label={vixLabel} color={vixColor} barPct={vixValue!=null?Math.min(vixValue/60*100,100):null} sub={vixSub} index={0}/>
       <SentimentCard title="CNN 恐慌贪婪指数" value={fgScore!=null?fgScore:'--'} label={fgLabel} color={fgColor} barPct={fgScore!=null?fgScore:null} sub={fgSub} index={1}/>
-      <SentimentCard title="标普500 PE分位" value={pe?`${pe.pe}x`:'--'} label={peLabel} color={peColor} barPct={pe?pe.percentile:null} sub={peSub} index={2}/>
-      <SentimentCard title="纳斯达克100 PE分位" value={nqPe?`${nqPe.pe}x`:'--'} label={nqPeLabel} color={nqPeColor} barPct={nqPe?nqPe.percentile:null} sub={nqPeSub} index={3}/>
+      <SentimentCard title="标普500 Trailing PE" value={peValue!=null?`${peValue}x`:'--'} label={peLabel} color={peColor} barPct={pePct} sub={peSub} index={2}/>
+      <SentimentCard title="纳指100 PE（QQQ代理）" value={nqPeValue!=null?`${nqPeValue}x`:'--'} label={nqPeLabel} color={nqPeColor} barPct={nqPct} sub={nqPeSub} index={3}/>
     </div>
   );
 }
@@ -685,14 +718,29 @@ const PE_HIST_REFS_NQ = [
 // ─── 标普500 + 纳指100 历史PE走势图 ──────────────────────────────────────────
 const PE_RANGES = ["5Y","10Y","全部"];
 
+function PEChartTooltip({active, payload, label}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
+      padding:"10px 14px",fontSize:12,boxShadow:"0 4px 20px rgba(0,0,0,0.1)",minWidth:140}}>
+      <div style={{color:C.textDim,marginBottom:6}}>{label}</div>
+      {payload.map(item=>(
+        <div key={item.dataKey} style={{display:"flex",justifyContent:"space-between",gap:16,marginBottom:3}}>
+          <span style={{color:item.color,fontWeight:600}}>{item.name}</span>
+          <span style={{fontWeight:800,color:item.color}}>{item.value}x</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
   const [range, setRange] = useState("10Y");
 
-  const sp500Data   = peHistory?.sp500    || [];
-  const nasdaqData  = peHistory?.nasdaq100 || [];
-
   // 合并两条数据为 recharts 格式 {date, sp500, nasdaq}
   const merged = useMemo(() => {
+    const sp500Data=peHistory?.sp500||[];
+    const nasdaqData=peHistory?.nasdaq100||[];
     const map = {};
     sp500Data.forEach(d  => { map[d.date] = {date:d.date, sp500:d.pe}; });
     nasdaqData.forEach(d => {
@@ -700,7 +748,7 @@ function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
       else map[d.date] = {date:d.date, nasdaq:d.pe};
     });
     return Object.values(map).sort((a,b)=>a.date<b.date?-1:1);
-  }, [sp500Data, nasdaqData]);
+  }, [peHistory]);
 
   // 按时间范围过滤
   const filtered = useMemo(() => {
@@ -743,30 +791,14 @@ function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
     return ticks;
   }, [filtered, range]);
 
-  const PETooltip = ({active, payload, label}) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
-        padding:"10px 14px",fontSize:12,boxShadow:"0 4px 20px rgba(0,0,0,0.1)",minWidth:140}}>
-        <div style={{color:C.textDim,marginBottom:6}}>{label}</div>
-        {payload.map(p=>(
-          <div key={p.dataKey} style={{display:"flex",justifyContent:"space-between",gap:16,marginBottom:3}}>
-            <span style={{color:p.color,fontWeight:600}}>{p.name}</span>
-            <span style={{fontWeight:800,color:p.color}}>{p.value}x</span>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
   const hasData = filtered.length > 0;
 
   return (
     <Card style={{padding:isMobile?"20px 18px":"24px 28px", marginBottom:isMobile?20:28}}>
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:4,flexWrap:"wrap"}}>
-        <div style={{fontSize:14,fontWeight:700,color:C.text}}>标普500 vs 纳指100 · PE历史走势</div>
-        <div style={{fontSize:11,color:C.textDim,flexShrink:0}}>1990年至今 · 月度数据</div>
+        <div style={{fontSize:14,fontWeight:700,color:C.text}}>标普500 vs 纳指100 · PE历史参考</div>
+        <div style={{fontSize:11,color:C.textDim,flexShrink:0}}>观测值与年度插值混合 · 不用于精确分位</div>
         {/* 时间范围切换 */}
         <div style={{marginLeft:"auto",display:"flex",gap:4}}>
           {PE_RANGES.map(r=>(
@@ -791,7 +823,7 @@ function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
           {currentNQPE&&<span style={{fontWeight:700,color:currentNQPE>=30?C.red:"#ff6b35",marginLeft:4}}>当前{currentNQPE}x</span>}
         </div>
         <div style={{fontSize:11,color:C.textDim,marginLeft:"auto"}}>
-          {range==="全部"?"季度均值":"月度数据"}
+          {range==="全部"?"季度聚合":"月度参考序列"}
         </div>
       </div>
       {hasData ? (
@@ -809,7 +841,7 @@ function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
               tickFormatter={v=>v.slice(0,4)} interval={0}/>
             <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}
               tickFormatter={v=>`${v}x`} domain={[0,"auto"]} width={36}/>
-            <Tooltip content={<PETooltip/>}/>
+            <Tooltip content={<PEChartTooltip/>}/>
             {/* 关键参考线 */}
             <ReferenceLine y={25} stroke={C.green}  strokeDasharray="4 3" strokeWidth={1}
               label={{value:"25x",fill:C.green, fontSize:10,position:"insideTopLeft"}}/>
@@ -828,11 +860,11 @@ function PEHistoryChart({peHistory, currentPE, currentNQPE, isMobile}) {
         </ResponsiveContainer>
       ) : (
         <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:14}}>
-          数据加载中…
+          历史参考数据不可用
         </div>
       )}
       <div style={{marginTop:10,fontSize:11,color:C.textDim}}>
-        标普500来源：multpl.com 月度实际值（Trailing PE）· 纳指100：gurufocus.com 口径，2009年前数据为估算
+        标普数据优先采用 Multpl 月度观测值，不足部分为年度值插值；纳指序列为 QQQ/年度参考估算。当前值与历史序列并非完全同口径，因此不据此计算纳指分位。
       </div>
     </Card>
   );
@@ -894,7 +926,7 @@ function PEHistoryReference({pe, nqPe, isMobile}) {
       </div>
       <div style={{marginTop:14, fontSize:11, color:C.textDim, display:"flex", alignItems:"flex-start", gap:6}}>
         <span style={{color:C.orange, flexShrink:0}}>⚠</span>
-        历史规律不能预测未来，高PE可维持数年。数据来源历史实际值，不构成投资建议。
+        历史案例为手工参考快照，并非可复算的连续时间序列；不用于当前分位或投资决策。
       </div>
     </Card>
   );
@@ -910,14 +942,17 @@ function MarketTemperature({sentiment, isMobile}) {
   // 风险得分：正=风险高，负=恐慌/机会
   // 标普PE / 纳指PE 各 -1~+2，取平均作为 peAvg（-1~+2）
   // 恐慌贪婪 -2~+2，VIX -2~+1，合计范围约 -5~+5
-  const spScore  = !pe   ? null : pe.percentile>=85?2   : pe.percentile>=70?1   : pe.percentile>=45?0 : -1;
-  const nqScore  = nqPe?.percentile==null ? null : nqPe.percentile>=85?2 : nqPe.percentile>=70?1 : nqPe.percentile>=45?0 : -1;
-  const fgScore  = fg?.score==null ? null : fg.score>=75?2 : fg.score>=55?1 : fg.score>=45?0 : fg.score>=25?-1 : -2;
-  const vixScore = !vix  ? null : vix.value>=40?-2 : vix.value>=30?-1 : vix.value>=12?0 : 1;
+  const spPct = Number.isFinite(pe?.percentile) ? pe.percentile : null;
+  const nqPct = Number.isFinite(nqPe?.percentile) ? nqPe.percentile : null;
+  const fearGreed = Number.isFinite(fg?.score) ? fg.score : null;
+  const vixValue = Number.isFinite(vix?.value) ? vix.value : null;
+  const spScore  = spPct==null ? null : spPct>=85?2   : spPct>=70?1   : spPct>=45?0 : -1;
+  const nqScore  = nqPct==null ? null : nqPct>=85?2 : nqPct>=70?1 : nqPct>=45?0 : -1;
+  const fgScore  = fearGreed==null ? null : fearGreed>=75?2 : fearGreed>=55?1 : fearGreed>=45?0 : fearGreed>=25?-1 : -2;
+  const vixScore = vixValue==null ? null : vixValue>=40?-2 : vixValue>=30?-1 : vixValue>=12?0 : 1;
 
-  // 两个 PE 都有才用平均，只有一个就用那个
-  const peAvg = spScore!==null && nqScore!==null ? (spScore+nqScore)/2
-              : spScore!==null ? spScore : nqScore;
+  // 估值口径必须完整才能计算综合信号，避免用单一 PE 冒充“四因子”。
+  const peAvg = spScore!==null && nqScore!==null ? (spScore+nqScore)/2 : null;
 
   const hasData = peAvg!==null && fgScore!==null && vixScore!==null;
   const total   = hasData ? Math.round(peAvg+fgScore+vixScore) : null;
@@ -936,16 +971,16 @@ function MarketTemperature({sentiment, isMobile}) {
   const indicators = [
     {name:"标普500 PE", score:spScore,
      desc:spScore===null?"--":spScore>=2?"极度高估":spScore>=1?"偏高":"合理/低估",
-     detail:pe?`${pe.percentile}%分位 · ${pe.pe}x`:""},
+     detail:Number.isFinite(pe?.pe)?(spScore===null?`${pe.pe}x · 分位不可用`:`${spPct}%分位 · ${pe.pe}x`):""},
     {name:"纳指100 PE", score:nqScore,
      desc:nqScore===null?"--":nqScore>=2?"极度高估":nqScore>=1?"偏高":"合理/低估",
-     detail:nqPe?.pe!=null?`${nqPe.percentile}%分位 · ${nqPe.pe}x`:""},
+     detail:Number.isFinite(nqPe?.pe)?(nqScore===null?`QQQ代理 ${nqPe.pe}x · 分位不可用`:`${nqPct}%分位 · ${nqPe.pe}x`):""},
     {name:"恐慌贪婪",   score:fgScore,
      desc:fgScore===null?"--":fgScore>=2?"极度贪婪":fgScore>=1?"贪婪":fgScore<=(-1)?"恐慌":"中性",
-     detail:fg?.score!=null?`${fg.score}分`:""},
+     detail:fearGreed!=null?`${fearGreed}分`:""},
     {name:"VIX 波动",   score:vixScore,
      desc:vixScore===null?"--":vixScore<=(-2)?"极度恐慌":vixScore<=(-1)?"高度恐慌":vixScore>=1?"过度平静":"正常",
-     detail:vix?`${vix.value}`:""},
+     detail:vixValue!=null?`${vixValue}`:""},
   ];
 
   return (
@@ -957,7 +992,7 @@ function MarketTemperature({sentiment, isMobile}) {
       {/* 标题行 */}
       <div style={{display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap"}}>
         <div style={{fontSize:14, fontWeight:700, color:C.text}}>综合市场温度</div>
-        <div style={{fontSize:11, color:C.textDim}}>标普/纳指PE分位 + 恐慌贪婪 + VIX 四因子合并信号</div>
+        <div style={{fontSize:11, color:C.textDim}}>仅在标普/纳指同口径分位、恐慌贪婪与 VIX 全部可用时计算</div>
       </div>
 
       {/* 上：信号标题居中 + 温度条 */}
@@ -984,7 +1019,7 @@ function MarketTemperature({sentiment, isMobile}) {
             </div>
           </>
         ) : (
-          <div style={{color:C.textDim, fontSize:14}}>数据加载中…</div>
+          <div style={{color:C.textDim, fontSize:14}}>估值口径不完整，暂不生成综合信号</div>
         )}
       </div>
 
@@ -1028,25 +1063,39 @@ function MiniBar({value, max, color}) {
 }
 
 // ─── Badges ───────────────────────────────────────────────────────────────────
-const StatusBadge = ({status}) => {
-  const ok = status==="open";
-  const color = ok?C.green:C.red;
+const StatusBadge = ({status,dailyLimit}) => {
+  const normalized = normalizeSubscriptionStatus(status,dailyLimit);
+  const canonical = status==="limited" ? "limited"
+    : normalized.isLimited ? "limited"
+    : normalized.status;
+  const styles = {
+    open:{color:C.green,bg:C.greenBg,label:"开放申购"},
+    limited:{color:C.orange,bg:C.orangeBg,label:"限额申购"},
+    suspended:{color:C.red,bg:C.redBg,label:"暂停申购"},
+    unknown:{color:C.textDim,bg:C.borderLight,label:"待确认"},
+  };
+  const item=styles[canonical]||styles.unknown;
   return (
-    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:ok?C.greenBg:C.redBg,color,border:`1px solid ${color}22`}}>
-      <span style={{width:5,height:5,borderRadius:"50%",background:color,animation:ok?"statusPulse 2s infinite":"none"}}/>
-      {ok?"开放":"暂停"}
+    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:item.bg,color:item.color,border:`1px solid ${item.color}22`}}>
+      <span style={{width:5,height:5,borderRadius:"50%",background:item.color,animation:canonical==="open"?"statusPulse 2s infinite":"none"}}/>
+      {item.label}
     </span>
   );
 };
 
 function PremiumBadge({value}) {
-  const danger = value>3, high = value>2, mid = value>1;
-  const color = danger?C.red:high?"#ff6b35":mid?C.orange:C.green;
-  const bg    = danger?C.redBg:high?"#ff6b3512":mid?C.orangeBg:C.greenBg;
-  const label = danger?"极高":high?"偏高":mid?"注意":"正常";
+  const model=premiumDisplayModel(value,{warningAt:1,dangerAt:3});
+  if(!model.available){
+    return <span style={{display:"inline-flex",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:C.borderLight,color:C.textDim}}>暂不可用</span>;
+  }
+  const danger = model.severity==="danger", mid=model.severity==="warning";
+  const discount=model.kind==="discount";
+  const color = danger?C.red:mid?C.orange:discount?C.cyan:C.green;
+  const bg    = danger?C.redBg:mid?C.orangeBg:discount?`${C.cyan}14`:C.greenBg;
+  const label = danger?"极高":mid?"注意":discount?"折价":model.kind==="par"?"平价":"正常";
   return (
     <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}30`,animation:danger?"premiumAlert 1.8s ease infinite":"none"}}>
-      {value>0?"+":""}{value}% <span style={{fontSize:10,opacity:0.8}}>{label}</span>
+      {formatPercent(model.value,{digits:2,showPlus:model.value>0})} <span style={{fontSize:10,opacity:0.8}}>{label}</span>
     </span>
   );
 }
@@ -1069,6 +1118,22 @@ function SectionHeader({title,subtitle,count,color=C.accent,timestamp,sortable})
       )}
     </div>
   );
+}
+
+function DataStatusBanner({dataset,label="数据",onRetry}){
+  if(!dataset||dataset.status===DATASET_STATE.FRESH||dataset.status===DATASET_STATE.LOADING) return null;
+  const hasData=Array.isArray(dataset.data)?dataset.data.length>0:Boolean(dataset.data);
+  const tone=dataset.status===DATASET_STATE.ERROR?{bg:C.redBg,color:C.red,border:`${C.red}30`}
+    :dataset.status===DATASET_STATE.EMPTY?{bg:C.borderLight,color:C.textMuted,border:C.border}
+    :{bg:C.orangeBg,color:C.orange,border:`${C.orange}35`};
+  const text=dataset.status===DATASET_STATE.ERROR?`${label}加载失败`
+    :dataset.status===DATASET_STATE.EMPTY?`${label}暂无可用数据`
+    :dataset.status===DATASET_STATE.STALE?`${label}正在使用上次有效数据`
+    :`${label}仅部分字段更新成功`;
+  return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 13px",margin:"0 0 16px",borderRadius:10,background:tone.bg,color:tone.color,border:`1px solid ${tone.border}`,fontSize:12}}>
+    <span>{text}{dataset.asOf?` · 数据截至 ${dataset.asOf}`:""}{dataset.source?` · ${dataset.source}`:""}</span>
+    {onRetry&&<button onClick={onRetry} style={{border:`1px solid ${tone.color}55`,background:"transparent",color:tone.color,borderRadius:7,padding:"4px 9px",cursor:"pointer",fontSize:11,flexShrink:0}}>{hasData?"重新获取":"重试"}</button>}
+  </div>;
 }
 
 // ─── ColTip ───────────────────────────────────────────────────────────────────
@@ -1384,7 +1449,7 @@ function GroupChatModal({onClose}) {
   );
 }
 
-function GalaxyCard({isMobile}) {
+function GalaxyCard() {
   const [showWx, setShowWx] = useState(false);
   const fees = [
     {label:"ETF / LOF",  value:"万0.5，1毛起",  highlight:true,  note:"免五"},
@@ -1597,12 +1662,11 @@ function IndexHistoryCard() {
   // 累计增长曲线（以100为起点，1989年末=100）
   const cumulativeRows = useMemo(() => {
     const years = Object.keys(INDEX_ANNUAL.nasdaq).map(Number).sort((a,b)=>a-b);
-    let nq = 100, sp = 100;
-    return years.map(y => {
-      nq = +(nq * (1 + INDEX_ANNUAL.nasdaq[y] / 100)).toFixed(1);
-      sp = +(sp * (1 + INDEX_ANNUAL.sp500[y]  / 100)).toFixed(1);
-      return { year: String(y), nasdaq: nq, sp500: sp };
-    });
+    return years.reduce((acc,y)=>{
+      const nasdaq=+(acc.nasdaq*(1+INDEX_ANNUAL.nasdaq[y]/100)).toFixed(1);
+      const sp500=+(acc.sp500*(1+INDEX_ANNUAL.sp500[y]/100)).toFixed(1);
+      return {nasdaq,sp500,rows:[...acc.rows,{year:String(y),nasdaq,sp500}]};
+    },{nasdaq:100,sp500:100,rows:[]}).rows;
   }, []);
 
   const cagrEntries = Object.entries(INDEX_CAGR.nasdaq).map(([label, nq], i) => ({
@@ -1811,7 +1875,7 @@ function FXAnalysisCard() {
       try{
         const r=await fetch(`${API_BASE}/fx-index-history`);
         if(r.ok){const d=await r.json();if(d.data?.length>10)setRawData(d.data);}
-      }catch{}
+      }catch{/* 后端不可用时使用年度参考数据 */}
       setApiLoading(false);
     })();
   },[]);
@@ -1847,7 +1911,7 @@ function FXAnalysisCard() {
     });
   },[strategy,monthlyData]);
 
-  const data=monthlyData||annualData||[];
+  const data=useMemo(()=>monthlyData||annualData||[],[monthlyData,annualData]);
   const isMonthly=!!monthlyData;
   const last=data[data.length-1]||{usd:100,cny:100,fx:7.3};
   const usdGain=+(last.usd-100).toFixed(1);
@@ -2006,21 +2070,49 @@ function CompareModal({list,onClose}) {
 
   // ── visual chart panels ──────────────────────────────────────────────────
   const metrics=[
-    {label:"近1年涨幅",key:"ytd_return",unit:"%",higher:"better",color:C.green},
+    {label:"近1年滚动",key:"rolling_1y",unit:"%",higher:"better",color:C.green},
     {label:"年费率",   key:"fee_rate",  unit:"%",higher:"worse", color:C.orange},
     {label:"规模(亿)", key:"scale",     unit:"亿",higher:"better",color:C.accent},
     {label:"跟踪误差", key:"track_error",unit:"%",higher:"worse",color:C.red},
   ];
 
+  const isEtf = fund => fund?.product_type==="etf" || fund?._cat?.includes("场内") || Number.isFinite(fund?.premium);
+  const metricScore = (fund,key,higher) => {
+    const value = fund?.[key];
+    if(!Number.isFinite(value)) return null;
+    const samples = list.map(item=>item?.[key]).filter(Number.isFinite);
+    if(samples.length<2) return 0.5;
+    const min = Math.min(...samples), max = Math.max(...samples);
+    if(max===min) return 0.5;
+    return higher==="better" ? (value-min)/(max-min) : (max-value)/(max-min);
+  };
+  const scoreSpecs = [
+    {key:"rolling_1y",higher:"better",weight:40,label:"滚动收益"},
+    {key:"fee_rate",higher:"worse",weight:25,label:"费率"},
+    {key:"scale",higher:"better",weight:15,label:"规模"},
+    {key:"track_error",higher:"worse",weight:20,label:"误差"},
+  ];
+  const comparisonScores = list.map(fund=>{
+    const parts=scoreSpecs.map(spec=>({...spec,score:metricScore(fund,spec.key,spec.higher)}));
+    const valid=parts.filter(part=>part.score!==null);
+    const availableWeight=valid.reduce((sum,part)=>sum+part.weight,0);
+    const total=availableWeight
+      ? Math.round(valid.reduce((sum,part)=>sum+part.score*part.weight,0)/availableWeight*100)
+      : null;
+    return {total,parts};
+  });
+  const validTotals=comparisonScores.map(item=>item.total).filter(Number.isFinite);
+  const topScore=validTotals.length ? Math.max(...validTotals) : null;
+
   const rows=[
     {label:"分类",          fmt:f=>f._cat||"—"},
     {label:"年费率",        fmt:f=>f.fee_rate!=null?<span style={{color:f.fee_rate>1?C.orange:C.green,fontWeight:700}}>{f.fee_rate}%</span>:"—"},
     {label:"规模(亿)",      fmt:f=>f.scale!=null?`${f.scale}亿`:"—"},
-    {label:"近1年涨幅",     fmt:f=>f.ytd_return!=null?<span style={{color:f.ytd_return>0?C.green:C.red,fontWeight:700}}>{f.ytd_return>0?"+":""}{f.ytd_return}%</span>:"—"},
+    {label:"近1年滚动",     fmt:f=>f.rolling_1y!=null?<span style={{color:f.rolling_1y>0?C.green:C.red,fontWeight:700}}>{f.rolling_1y>0?"+":""}{f.rolling_1y}%</span>:"—"},
     {label:"跟踪误差",      fmt:f=>f.track_error!=null?<span style={{color:f.track_error>2?C.orange:C.textMuted}}>{f.track_error}%</span>:"—"},
-    {label:"申购/交易上限",  fmt:f=>f.daily_limit||"场内交易"},
+    {label:"申购/交易上限",  fmt:f=>isEtf(f)?"场内交易":(f.daily_limit||"—")},
     {label:"溢价率",        fmt:f=>f.premium!=null?<PremiumBadge value={f.premium}/>:"—"},
-    {label:"申购状态",      fmt:f=>f.buy_status?<StatusBadge status={f.buy_status}/>:<span style={{color:C.cyan,fontSize:12}}>场内交易</span>},
+    {label:"申购状态",      fmt:f=>!isEtf(f)?<StatusBadge status={f.subscription_status||f.buy_status} dailyLimit={f.daily_limit}/>:<span style={{color:C.cyan,fontSize:12}}>场内交易</span>},
   ];
 
   return (
@@ -2066,9 +2158,8 @@ function CompareModal({list,onClose}) {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
               {metrics.map(({label,key,unit,higher,color})=>{
                 const vals=list.map(f=>f[key]);
-                const defined=vals.filter(v=>v!=null);
+                const defined=vals.filter(Number.isFinite);
                 if(defined.length===0) return null;
-                const maxAbs=Math.max(...defined.map(v=>Math.abs(v)));
                 const best=higher==="better"?Math.max(...defined):Math.min(...defined);
                 return (
                   <div key={key} style={{background:C.bg,borderRadius:14,padding:"16px 18px",border:`1px solid ${C.border}`}}>
@@ -2079,7 +2170,7 @@ function CompareModal({list,onClose}) {
                     </div>
                     {list.map((f,i)=>{
                       const val=f[key];
-                      if(val==null) return (
+                      if(!Number.isFinite(val)) return (
                         <div key={f.code} style={{marginBottom:12}}>
                           <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"center"}}>
                             <span style={{fontSize:11,color:COLORS[i],fontWeight:600}}>{f.code}</span>
@@ -2088,7 +2179,8 @@ function CompareModal({list,onClose}) {
                           <div style={{height:7,background:C.borderLight,borderRadius:4}}/>
                         </div>
                       );
-                      const pct=maxAbs>0?Math.abs(val)/maxAbs*100:0;
+                      const normalized=metricScore(f,key,higher);
+                      const pct=normalized==null?0:20+normalized*80;
                       const isWinner=val===best;
                       const barColor=isWinner?color:COLORS[i];
                       return (
@@ -2096,7 +2188,7 @@ function CompareModal({list,onClose}) {
                           <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"center"}}>
                             <span style={{fontSize:11,color:COLORS[i],fontWeight:600,maxWidth:"60%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.code}</span>
                             <span style={{fontSize:13,fontWeight:800,color:isWinner?color:C.textMuted}}>
-                              {val>0&&key==="ytd_return"?"+":""}{val}{unit}
+                              {val>0&&key==="rolling_1y"?"+":""}{val}{unit}
                               {isWinner&&<span style={{marginLeft:4,fontSize:10,color:color}}>★</span>}
                             </span>
                           </div>
@@ -2121,52 +2213,33 @@ function CompareModal({list,onClose}) {
                 <div style={{fontSize:12,fontWeight:700,color:C.accent,marginBottom:14}}>综合评分对比</div>
                 <div style={{display:"grid",gridTemplateColumns:`repeat(${list.length},1fr)`,gap:12}}>
                   {list.map((f,i)=>{
-                    // Score: ytd_return (40%) + fee_rate invert (25%) + scale (15%) + track_error invert (20%)
-                    const allYtd=list.map(x=>x.ytd_return||0), maxYtd=Math.max(...allYtd)||1;
-                    const allFee=list.map(x=>x.fee_rate||0).filter(v=>v>0), maxFee=Math.max(...allFee)||1;
-                    const allScale=list.map(x=>x.scale||0), maxScale=Math.max(...allScale)||1;
-                    const allTE=list.map(x=>x.track_error||0).filter(v=>v>0), maxTE=Math.max(...allTE)||1;
-                    const ytdScore=(f.ytd_return||0)/maxYtd*40;
-                    const feeScore=f.fee_rate?((maxFee-(f.fee_rate||maxFee))/maxFee)*25:0;
-                    const scaleScore=(f.scale||0)/maxScale*15;
-                    const teScore=f.track_error?((maxTE-(f.track_error||maxTE))/maxTE)*20:0;
-                    const total=Math.round(ytdScore+feeScore+scaleScore+teScore);
-                    const allScores=list.map(g=>{
-                      const ys=(g.ytd_return||0)/maxYtd*40;
-                      const fs=g.fee_rate?((maxFee-(g.fee_rate||maxFee))/maxFee)*25:0;
-                      const ss=(g.scale||0)/maxScale*15;
-                      const ts=g.track_error?((maxTE-(g.track_error||maxTE))/maxTE)*20:0;
-                      return Math.round(ys+fs+ss+ts);
-                    });
-                    const isTop=total===Math.max(...allScores);
+                    const {total,parts}=comparisonScores[i];
+                    const isTop=total!==null && total===topScore;
                     return (
                       <div key={f.code} style={{textAlign:"center",padding:"16px 10px",background:isTop?COLORS[i]+"14":"#fff",borderRadius:12,border:`1.5px solid ${isTop?COLORS[i]:C.border}`,position:"relative"}}>
                         {isTop&&<div style={{position:"absolute",top:-10,left:"50%",transform:"translateX(-50%)",background:COLORS[i],color:"#fff",fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:10}}>推荐</div>}
                         <div style={{fontSize:11,color:COLORS[i],fontWeight:700,marginBottom:8}}>{f.code}</div>
-                        <div style={{fontSize:32,fontWeight:900,color:isTop?COLORS[i]:C.textMuted,lineHeight:1,marginBottom:4}}>{total}</div>
+                        <div style={{fontSize:32,fontWeight:900,color:isTop?COLORS[i]:C.textMuted,lineHeight:1,marginBottom:4}}>{total??"—"}</div>
                         <div style={{fontSize:10,color:C.textDim}}>综合得分</div>
                         <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:3,textAlign:"left"}}>
-                          {[
-                            {n:"收益",v:Math.round(ytdScore),t:40},
-                            {n:"费率",v:Math.round(feeScore),t:25},
-                            {n:"规模",v:Math.round(scaleScore),t:15},
-                            {n:"误差",v:Math.round(teScore),t:20},
-                          ].map(({n,v,t})=>(
-                            <div key={n} style={{display:"flex",alignItems:"center",gap:4}}>
-                              <span style={{fontSize:9,color:C.textDim,width:22,flexShrink:0}}>{n}</span>
+                          {parts.map(({label,score,weight})=>{
+                            const value=score===null?null:Math.round(score*weight);
+                            return (
+                            <div key={label} style={{display:"flex",alignItems:"center",gap:4}}>
+                              <span style={{fontSize:9,color:C.textDim,width:22,flexShrink:0}}>{label}</span>
                               <div style={{flex:1,height:4,background:C.borderLight,borderRadius:2,overflow:"hidden"}}>
-                                <div style={{height:"100%",width:`${v/t*100}%`,background:COLORS[i],borderRadius:2,opacity:0.7}}/>
+                                <div style={{height:"100%",width:`${score===null?0:score*100}%`,background:COLORS[i],borderRadius:2,opacity:0.7}}/>
                               </div>
-                              <span style={{fontSize:9,color:C.textDim,width:18,textAlign:"right"}}>{v}</span>
+                              <span style={{fontSize:9,color:C.textDim,width:18,textAlign:"right"}}>{value??"—"}</span>
                             </div>
-                          ))}
+                          )})}
                         </div>
                       </div>
                     );
                   })}
                 </div>
                 <div style={{fontSize:10,color:C.textDim,marginTop:12}}>
-                  综合得分 = 近1年收益(40%) + 费率优势(25%) + 规模实力(15%) + 跟踪精度(20%)，仅供参考
+                  综合得分采用有效样本的 min-max 归一化；缺失指标不按 0 分处理，并按可用权重重新折算，仅供参考
                 </div>
               </div>
             </div>
@@ -2176,7 +2249,7 @@ function CompareModal({list,onClose}) {
               <thead>
                 <tr style={{borderBottom:`2px solid ${C.border}`}}>
                   <th style={{width:120,padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textDim,letterSpacing:0.5,textTransform:"uppercase"}}>指标</th>
-                  {list.map((f,i)=>(
+                  {list.map(f=>(
                     <th key={f.code} style={{padding:"10px 12px",textAlign:"center",minWidth:180}}>
                       <div style={{fontSize:11,color:C.textDim,fontFamily:"monospace",marginBottom:4}}>{f.code}</div>
                       <div style={{fontSize:12,fontWeight:700,color:C.text,lineHeight:1.35,maxWidth:175,margin:"0 auto"}}>{f.name}</div>
@@ -2206,55 +2279,28 @@ function CompareModal({list,onClose}) {
 
 // ─── Admin Page ───────────────────────────────────────────────────────────────
 function AdminPage() {
-  const [status,setStatus]=useState(null);
-  const [loading,setLoading]=useState(false);
-  const [log,setLog]=useState([]);
-  const trigger = async()=>{
-    setLoading(true); setStatus(null);
-    const t0=Date.now();
-    const r=await apiFetch("/update");
-    const elapsed=((Date.now()-t0)/1000).toFixed(1);
-    if(r){setStatus({ok:r.status==="success",msg:r.message,elapsed});setLog(p=>[{time:new Date().toLocaleTimeString("zh-CN"),msg:r.message,ok:r.status==="success"},...p.slice(0,9)]);}
-    else{setStatus({ok:false,msg:"无法连接后端 API",elapsed});}
-    setLoading(false);
-  };
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'SF Pro Display',-apple-system,sans-serif"}}>
       <div style={{width:"100%",maxWidth:520,padding:"0 24px"}}>
         <div style={{textAlign:"center",marginBottom:36}}>
           <div style={{fontSize:36,marginBottom:12}}>⚙️</div>
           <h1 style={{fontSize:22,fontWeight:800,color:C.text,margin:"0 0 6px",letterSpacing:-0.5}}>Wise<span style={{color:C.accent}}>ETF</span> 数据管理</h1>
-          <p style={{color:C.textDim,fontSize:13,margin:0}}>手动触发数据更新，从天天基金网拉取最新数据</p>
+          <p style={{color:C.textDim,fontSize:13,margin:0}}>数据刷新由服务端定时任务统一执行</p>
         </div>
         <Card style={{padding:28,marginBottom:20}}>
           <div style={{fontSize:13,color:C.textMuted,marginBottom:20,lineHeight:1.9}}>
-            <div>· 更新场外基金净值、涨幅、申购状态（41 只）</div>
+            <div>· 更新场外基金净值、涨幅、申购状态</div>
             <div>· 更新场内 ETF 行情与溢价率</div>
-            <div>· 预计耗时 2–3 分钟</div>
+            <div>· 管理任务需要服务端密钥，浏览器页面不能直接触发</div>
           </div>
-          <button onClick={trigger} disabled={loading}
-            style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:loading?C.borderLight:`linear-gradient(135deg,${C.accent},${C.accentDim})`,color:loading?C.textDim:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",transition:"all 0.2s",letterSpacing:0.3}}>
-            {loading?"更新中，请稍候...":"立即更新数据"}
+          <button disabled
+            style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:C.borderLight,color:C.textDim,fontSize:15,fontWeight:700,cursor:"not-allowed",letterSpacing:0.3}}>
+            仅限服务端定时刷新
           </button>
         </Card>
-        {status&&(
-          <div style={{background:status.ok?C.greenBg:C.redBg,border:`1px solid ${status.ok?C.green:C.red}22`,borderRadius:12,padding:"12px 16px",marginBottom:16,fontSize:13}}>
-            <span style={{color:status.ok?C.green:C.red,fontWeight:700}}>{status.ok?"✓ 成功":"✗ 失败"}</span>
-            <span style={{color:C.textMuted,marginLeft:10}}>{status.msg} · {status.elapsed}s</span>
-          </div>
-        )}
-        {log.length>0&&(
-          <Card style={{padding:"16px 18px"}}>
-            <div style={{fontSize:11,color:C.textDim,marginBottom:10,letterSpacing:0.6,textTransform:"uppercase",fontWeight:600}}>操作记录</div>
-            {log.map((e,i)=>(
-              <div key={i} style={{fontSize:12,color:C.textMuted,padding:"5px 0",borderBottom:i<log.length-1?`1px solid ${C.border}`:"none",display:"flex",gap:10}}>
-                <span style={{color:C.textDim,fontFamily:"monospace"}}>{e.time}</span>
-                <span style={{color:e.ok?C.green:C.red}}>{e.ok?"✓":"✗"}</span>
-                <span>{e.msg}</span>
-              </div>
-            ))}
-          </Card>
-        )}
+        <div style={{background:C.accentBg,border:`1px solid ${C.accent}22`,borderRadius:12,padding:"12px 16px",fontSize:13,color:C.textMuted,lineHeight:1.7}}>
+          如需立即刷新，请由运维人员在受保护的服务端 cron 入口执行。这样可避免把管理密钥暴露在前端。
+        </div>
         <div style={{textAlign:"center",marginTop:20}}>
           <a href="/" style={{color:C.accent,fontSize:13,textDecoration:"none"}}>← 返回主站</a>
         </div>
@@ -2300,11 +2346,11 @@ const INVEST_METHODS = [
     sublabel:"支付宝/天天基金",
     icon:"📱",
     color:"#ff9a00",
-    ndx:{product:"161130 易方达纳指联接(QDII)",fee:"0.60%/年 + 申购费1.2%",limit:"日限额仅10元",premium:"T+3到账，价格滞后",minBuy:"10元起"},
-    spx:{product:"161125 易方达标普500(QDII)",fee:"0.70%/年 + 申购费1.2%",limit:"日限额受限",premium:"T+3到账，价格滞后",minBuy:"10元起"},
-    pros:["门槛极低10元起","支付宝/天天基金直接操作","无需开股票账户"],
-    cons:["日限额极低（仅10元），实际可买入极少","T+3到账，价格滞后无法实时买卖","综合持有成本最高"],
-    cta:{label:"天天基金 / 支付宝",url:null,tip:"搜索「161130」或「161125」直接购买"},
+    ndx:{product:"纳指100场外联接基金",fee:"以基金最新公告为准",limit:"以当日申购状态为准",premium:"按基金净值申购",minBuy:"以销售平台为准"},
+    spx:{product:"标普500场外联接基金",fee:"以基金最新公告为准",limit:"以当日申购状态为准",premium:"按基金净值申购",minBuy:"以销售平台为准"},
+    pros:["可在常用基金销售平台操作","通常不需要股票账户","按公布净值确认份额"],
+    cons:["申购额度可能动态调整","净值确认和到账存在时差","不同产品费率结构不同"],
+    cta:{label:"查看场外基金页",url:null,tip:"请在上方基金表核对最新限额、状态与费率"},
   },
   {
     id:"exchange",
@@ -2312,11 +2358,11 @@ const INVEST_METHODS = [
     sublabel:"A股证券账户交易",
     icon:"🏦",
     color:"#3d82ff",
-    ndx:{product:"159659 招商纳斯达克100ETF",fee:"0.65%/年（管理0.50%+托管0.15%）",limit:"无限额，随时交易",premium:"溢价波动较大",minBuy:"约100元起"},
-    spx:{product:"513500 博时标普500ETF",fee:"0.80%/年（管理0.60%+托管0.20%）",limit:"无限额，随时交易",premium:"溢价波动较大",minBuy:"约100元起"},
-    pros:["人民币直接买入，无需外汇额度","无限额，随时交易","国内券商App操作简便"],
-    cons:["溢价率波动大，溢价高时买入即亏损","费率偏高（0.65–0.80%/年）","需开通证券账户"],
-    cta:{label:"开通国内券商",url:null,tip:"推荐华泰证券、东方财富，费率较低"},
+    ndx:{product:"纳指100场内ETF",fee:"以基金最新公告为准",limit:"交易时段内按市场成交",premium:"需关注实时溢折价",minBuy:"以券商交易规则为准"},
+    spx:{product:"标普500场内ETF",fee:"以基金最新公告为准",limit:"交易时段内按市场成交",premium:"需关注实时溢折价",minBuy:"以券商交易规则为准"},
+    pros:["人民币场内交易","交易时段内可按市场价格成交","可通过国内证券账户操作"],
+    cons:["溢折价会随行情变化","成交价格可能偏离参考净值","需开通证券账户"],
+    cta:{label:"查看场内ETF页",url:null,tip:"请在上方 ETF 表核对最新溢价率、规模与费率"},
   },
   {
     id:"us",
@@ -2324,16 +2370,16 @@ const INVEST_METHODS = [
     sublabel:"QQQ / VOO",
     icon:"🚀",
     color:"#26c258",
-    ndx:{product:"QQQ (Invesco)",fee:"0.20%/年",limit:"无限额，随时买卖",premium:"无溢价，实时净值",minBuy:"约¥3,200/股起"},
-    spx:{product:"VOO (Vanguard)",fee:"0.03%/年",limit:"无限额，随时买卖",premium:"无溢价，实时净值",minBuy:"约¥3,700/股起"},
-    pros:["费率最低（VOO仅0.03%）","无溢价无限额","直接拥有美股资产"],
+    ndx:{product:"纳指100美国市场ETF",fee:"以发行人最新公告为准",limit:"按券商和市场规则交易",premium:"存在正常市场价差",minBuy:"以券商碎股规则为准"},
+    spx:{product:"标普500美国市场ETF",fee:"以发行人最新公告为准",limit:"按券商和市场规则交易",premium:"存在正常市场价差",minBuy:"以券商碎股规则为准"},
+    pros:["直接持有美国市场ETF","交易流动性通常较好","产品选择较多"],
     cons:["需开海外券商账户","需使用外汇额度（年5万美元）","需了解基本英文操作"],
     cta:{label:"开通复星证券",url:"https://www.fxiaoke.com",tip:"支持港股+美股，适合内地用户"},
   },
 ];
 
 // 生成费率损耗数据：初始10000，毛收益10%，25年
-function buildFeeDragData(upfront, annualFee) {
+function _buildFeeDragData(upfront, annualFee) {
   const gross = 0.10;
   const data = [];
   for (let y = 0; y <= 25; y++) {
@@ -2408,7 +2454,7 @@ const DCA_CHART_DATA = (() => {
 // 总投入本金
 const TOTAL_INVESTED = LUMP_SUM + MONTHLY * 12 * DCA_YEARS;
 
-function FeeDragChart({index, isMobile}) {
+function FeeDragChart({index}) {
   const strategies = DCA_STRATEGIES[index];
   const title    = index === "nasdaq" ? "纳指100 · 定投20年资产对比" : "标普500 · 定投20年资产对比";
   const usLabel  = strategies[2].name;
@@ -2694,13 +2740,6 @@ function GuideTab({isMobile}) {
         })}
       </div>
 
-      {/* Fee drag chart */}
-      <SectionHeader title="定投20年资产对比" subtitle="首投10万 + 每月5,000元定投 · 持续20年 · 纳指假设13%/年 · 标普假设10%/年" color={C.orange}/>
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?24:36}}>
-        <FeeDragChart index="nasdaq" isMobile={isMobile}/>
-        <FeeDragChart index="sp500"  isMobile={isMobile}/>
-      </div>
-
       {/* Broker CTA */}
       <SectionHeader title="开户引导" subtitle="选择适合你的投资渠道" color={C.accent}/>
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?12:20,marginBottom:isMobile?24:40}}>
@@ -2709,7 +2748,7 @@ function GuideTab({isMobile}) {
             <div style={{width:36,height:36,borderRadius:10,background:C.green+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🚀</div>
             <div>
               <div style={{fontSize:14,fontWeight:700,color:C.text}}>美股直购 · QQQ / VOO</div>
-              <div style={{fontSize:11,color:C.textDim}}>费率最低 · 无限额 · 无溢价</div>
+              <div style={{fontSize:11,color:C.textDim}}>直接交易海外市场ETF · 规则以券商为准</div>
             </div>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:16}}>
@@ -2741,7 +2780,7 @@ function GuideTab({isMobile}) {
             <span style={{fontSize:12,fontWeight:700,color:C.green,whiteSpace:"nowrap",marginLeft:12}}>查看教程 →</span>
           </a>
         </Card>
-        <GalaxyCard isMobile={isMobile}/>
+        <GalaxyCard/>
       </div>
 
       <div style={{padding:"14px 18px",borderRadius:12,background:C.bgAlt,border:`1px solid ${C.border}`,fontSize:11,color:C.textDim,lineHeight:1.7,marginBottom:8}}>
@@ -2785,7 +2824,7 @@ function _fit(c,v,maxW){
 }
 
 // ─── Overview Canvas 1: 市场温度与估值 ─────────────────────────────────────
-function drawOverviewCanvas1({sentiment, peHistory}){
+function _drawOverviewCanvas1({sentiment, peHistory}){
   const W=1000,SC=2,PX=28,GAP=14;
   const F=EC.F;
   const L={
@@ -2810,7 +2849,7 @@ function drawOverviewCanvas1({sentiment, peHistory}){
   c.fillStyle=L.headBg;c.fillRect(0,5,W,BRAND_H-5);
   c.font=`bold 16px ${F}`;c.fillStyle=L.blue;c.fillText('Wise ETF',PX,34);
   c.font=`bold 14px ${F}`;c.fillStyle=L.mid;c.fillText('市场温度与估值',PX+88,34);
-  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+  const today=formatShanghaiDate();
   c.font=`12px ${F}`;c.fillStyle=L.muted;c.fillText(today,PX,52);
 
   // ── Section 1: 市场情绪4卡片 ──
@@ -3030,7 +3069,7 @@ function drawOverviewCanvas1({sentiment, peHistory}){
   return cvs;
 }
 
-function drawTableCanvas({titleParts,date,cols,rows}){
+function _drawTableCanvas({titleParts,date,cols,rows}){
   const W=1080,SC=2,PX=20;
   const F=EC.F;
   const BRAND_H=46,TITLE_H=88,CH=44,RH=40,FH=44;
@@ -3130,7 +3169,7 @@ function drawTableCanvas({titleParts,date,cols,rows}){
 }
 
 // ─── Generic Fund Export Canvas Engine ──────────────────────────────────────
-function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
+function _drawFundExportCanvas(rows, {titleParts, colors, cols, snapshotAsOf=null, statusNote=""}, logoImg=null){
   const W=1200,H=1600,SC=2,PX=32;
   const F=EC.F;
   const BRAND_H=82,TITLE_H=132,CH=66,FH=148;
@@ -3171,11 +3210,10 @@ function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
   c.font=`bold ${fs(50)} ${F}`;
   const TY=BRAND_H+70;
   titleParts.forEach(p=>{c.fillStyle=p.color;c.fillText(p.text,ttx,TY);ttx+=c.measureText(p.text).width;});
-  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-  const dd=today.replace(/\//g,'.');
+  const dd=formatShanghaiDate(snapshotAsOf||new Date(),'.');
   c.font=`bold ${fs(32)} ${F}`;c.fillStyle=colors.primary;c.fillText(`  ${dd}`,ttx,TY);
   c.font=`${fs(17)} ${F}`;c.fillStyle='#64748b';
-  c.fillText('数据仅供参考，不构成投资建议',PX+18,BRAND_H+106);
+  c.fillText(statusNote ? `数据快照：${dd} · ${statusNote}` : `数据快照：${dd} · 仅供参考，不构成投资建议`,PX+18,BRAND_H+106);
   c.textAlign='right';
   c.font=`bold ${fs(17)} ${F}`;c.fillStyle=colors.accent;
   c.fillText('wise-etf.com 查看实时数据 →',W-PX,BRAND_H+106);
@@ -3229,6 +3267,7 @@ function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
           c.fillStyle=n!=null?(n>0?'#15803d':'#b91c1c'):'#9ca3af';
           c.fillText(n!=null?`${n>0?'+':''}${n.toFixed(1)}%`:'—',tx,tyR);break;}
         case 'day_change':
+        case 'market_change_pct':
         case 'change_pct':{
           const cp=v!=null?parseFloat(v):null;
           c.font=`bold ${fs(18)} ${F}`;
@@ -3237,14 +3276,22 @@ function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
         case 'daily_limit':
           c.font=`${fs(17)} ${F}`;c.fillStyle='#334155';
           c.fillText(_fit(c,v??'—',col.w-14),tx,tyR);break;
-        case 'buy_status':{
-          const isOpen=v==='open';
+        case 'buy_status':
+        case 'subscription_status':{
+          const canonical=row.subscription_status||row.buy_status||'unknown';
+          const styleMap={
+            open:{label:'可申购',bg:'#dcfce7',border:'#16a34a',text:'#15803d'},
+            limited:{label:'限额',bg:'#fff7ed',border:'#ea580c',text:'#c2410c'},
+            suspended:{label:'暂停',bg:'#fef2f2',border:'#dc2626',text:'#b91c1c'},
+            unknown:{label:'待确认',bg:'#f1f5f9',border:'#d1d5db',text:'#6b7280'},
+          };
+          const badge=styleMap[canonical]||styleMap.unknown;
           const pW=Math.round(72*FS),pH=Math.round(36*FS);
           const px2=xp[ci]+(col.w-pW)/2,py2=ry+(RH-pH)/2;
-          _rr(c,px2,py2,pW,pH,pH/2);c.fillStyle=isOpen?'#dcfce7':'#f1f5f9';c.fill();
-          c.strokeStyle=isOpen?'#16a34a':'#d1d5db';c.lineWidth=1.5;_rr(c,px2,py2,pW,pH,pH/2);c.stroke();
-          c.font=`bold ${fs(15)} ${F}`;c.fillStyle=isOpen?'#15803d':'#6b7280';
-          c.textAlign='center';c.fillText(isOpen?'✓ 可申购':'暂停',px2+pW/2,py2+Math.round(23*FS));
+          _rr(c,px2,py2,pW,pH,pH/2);c.fillStyle=badge.bg;c.fill();
+          c.strokeStyle=badge.border;c.lineWidth=1.5;_rr(c,px2,py2,pW,pH,pH/2);c.stroke();
+          c.font=`bold ${fs(15)} ${F}`;c.fillStyle=badge.text;
+          c.textAlign='center';c.fillText(badge.label,px2+pW/2,py2+Math.round(23*FS));
           c.textAlign='left';break;}
         case 'tracking_index':
           c.font=`${fs(15)} ${F}`;c.fillStyle='#475569';
@@ -3280,8 +3327,6 @@ function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
     const t1=Math.round(28*FS), t2=Math.round(17*FS), t3=Math.round(22*FS);
     const logoH=Math.round(footerH*0.32);
     const logoW=Math.round(logoImg.naturalWidth/logoImg.naturalHeight*logoH);
-    const blockH = t1 + 6 + logoH + 6 + t2;
-    const blockTop = midY - blockH/2;
     // Center column: @WiseInvest + logo + 以上平台同名 + disclaimer
     const t4=Math.round(13*FS);
     const blockH2=t1+6+logoH+6+t2+6+t4;
@@ -3312,7 +3357,7 @@ function _drawFundExportCanvas(rows, {titleParts, colors, cols}, logoImg=null){
   return cvs;
 }
 
-function drawNasdaqExportCanvas(rows,logoImg=null){
+function drawNasdaqExportCanvas(rows,logoImg=null,meta={}){
   return _drawFundExportCanvas(rows,{
     titleParts:[{text:'场外 ',color:'#111827'},{text:'纳斯达克100',color:'#d44f00'},{text:' 被动型基金',color:'#111827'}],
     colors:{
@@ -3330,12 +3375,13 @@ function drawNasdaqExportCanvas(rows,logoImg=null){
       {key:'rolling_1y',label:'近1年涨幅',w:114, align:'right'},
       {key:'day_change',label:'昨日涨跌', w:100, align:'right'},
       {key:'daily_limit',label:'申购上限',w:110, align:'right'},
-      {key:'buy_status',label:'申购状态', w:96,  align:'center'},
+      {key:'subscription_status',label:'申购状态', w:96,  align:'center'},
     ],
+    ...meta,
   },logoImg);
 }
 
-function drawSp500ExportCanvas(rows,logoImg=null){
+function drawSp500ExportCanvas(rows,logoImg=null,meta={}){
   return _drawFundExportCanvas(rows,{
     titleParts:[{text:'场外 ',color:'#111827'},{text:'标普500',color:'#dc2626'},{text:' 被动型基金',color:'#111827'}],
     colors:{
@@ -3353,12 +3399,13 @@ function drawSp500ExportCanvas(rows,logoImg=null){
       {key:'rolling_1y',label:'近1年涨幅',w:114, align:'right'},
       {key:'day_change',label:'昨日涨跌', w:100, align:'right'},
       {key:'daily_limit',label:'申购上限',w:110, align:'right'},
-      {key:'buy_status',label:'申购状态', w:96,  align:'center'},
+      {key:'subscription_status',label:'申购状态', w:96,  align:'center'},
     ],
+    ...meta,
   },logoImg);
 }
 
-function drawEtfExportCanvas(rows,logoImg=null){
+function drawEtfExportCanvas(rows,logoImg=null,meta={}){
   return _drawFundExportCanvas(rows,{
     titleParts:[{text:'场内 ',color:'#111827'},{text:'纳指/标普',color:'#b45309'},{text:' ETF 对比',color:'#111827'}],
     colors:{
@@ -3372,16 +3419,17 @@ function drawEtfExportCanvas(rows,logoImg=null){
       {key:'name',          label:'ETF名称',  w:280, align:'left'},
       {key:'tracking_index',label:'跟踪指数', w:180, align:'left'},
       {key:'scale',         label:'规模(亿)', w:90,  align:'right'},
-      {key:'ytd_return',    label:'25年涨幅',  w:114, align:'right'},
-      {key:'day_change',    label:'昨日涨跌', w:100, align:'right'},
+      {key:'rolling_1y',    label:'近1年涨幅',w:114, align:'right'},
+      {key:'market_change_pct',label:'场内涨跌',w:100,align:'right'},
       {key:'fee_rate',      label:'费率',     w:72,  align:'right'},
       {key:'track_error',   label:'跟踪误差', w:90,  align:'right'},
       {key:'premium',       label:'溢价率',   w:86,  align:'right'},
     ],
+    ...meta,
   },logoImg);
 }
 
-function drawActiveExportCanvas(rows,logoImg=null){
+function drawActiveExportCanvas(rows,logoImg=null,meta={}){
   return _drawFundExportCanvas(rows,{
     titleParts:[{text:'场外 ',color:'#111827'},{text:'美股主动型',color:'#7c3aed'},{text:' 基金对比',color:'#111827'}],
     colors:{
@@ -3398,12 +3446,13 @@ function drawActiveExportCanvas(rows,logoImg=null){
       {key:'rolling_1y', label:'近1年涨幅',w:120, align:'right'},
       {key:'day_change', label:'昨日涨跌', w:100, align:'right'},
       {key:'daily_limit',label:'每日限额', w:120, align:'right'},
-      {key:'buy_status', label:'申购状态', w:96,  align:'center'},
+      {key:'subscription_status', label:'申购状态', w:96,  align:'center'},
     ],
+    ...meta,
   },logoImg);
 }
 
-function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
+function _drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment,monthlyReturns=[]}){
   const W=900,SC=2,PX=28,GAP=14;
   const F=EC.F;
   // Light theme palette
@@ -3416,9 +3465,9 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   };
 
   const avg=(arr,k)=>{const vs=arr.map(e=>e[k]).filter(v=>v!=null);return vs.length?(vs.reduce((a,b)=>a+b,0)/vs.length).toFixed(2):'—';};
-  const nasdaqAvg=avg(nasdaq,'ytd_return');
-  const sp500Avg=avg(sp500,'ytd_return');
-  const activeAvg=avg(active,'ytd_return');
+  const nasdaqAvg=avg(nasdaq,'rolling_1y');
+  const sp500Avg=avg(sp500,'rolling_1y');
+  const activeAvg=avg(active,'rolling_1y');
   const etfAvg=avg(etfs,'premium');
   const openCount=[...nasdaq,...sp500,...active].filter(f=>f.buy_status==='open').length;
   const totalCount=nasdaq.length+sp500.length+active.length;
@@ -3439,7 +3488,7 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   c.fillStyle=L.headBg;c.fillRect(0,5,W,BRAND_H-5);
   c.font=`bold 16px ${F}`;c.fillStyle=L.blue;c.fillText('Wise ETF',PX,34);
   c.font=`bold 14px ${F}`;c.fillStyle=L.mid;c.fillText('每日市场快照',PX+88,34);
-  const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+  const today=formatShanghaiDate();
   c.font=`12px ${F}`;c.fillStyle=L.muted;c.fillText(today,PX,52);
   if(usdcny){
     c.textAlign='right';
@@ -3641,7 +3690,10 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
 
   c.fillStyle=L.blue;c.fillRect(PX,charty+18,3,16);
   c.font=`bold 14px ${F}`;c.fillStyle=L.dark;c.fillText('纳指 vs 标普 · 近12月收益率',PX+10,charty+30);
-  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('美元口径（2025.05 – 2026.04）',PX+10,charty+48);
+  const monthRange=monthlyReturns.length
+    ? `${monthlyReturns[0].date||monthlyReturns[0].month} – ${monthlyReturns[monthlyReturns.length-1].date||monthlyReturns[monthlyReturns.length-1].month}`
+    : '动态月度数据不可用';
+  c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText(`美元价格口径（${monthRange}）`,PX+10,charty+48);
   c.textAlign='right';
   c.fillStyle=L.blue;c.fillRect(W-PX-126,charty+18,12,12);
   c.font=`11px ${F}`;c.fillStyle=L.muted;c.fillText('纳斯达克100',W-PX,charty+29);
@@ -3650,8 +3702,8 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   c.textAlign='left';
 
   const chartX=PX+44,chartTopY=charty+58,chartW=W-PX*2-44,chartH2=176;
-  const allVals=[...MONTHLY_12M.map(d=>d.nasdaq),...MONTHLY_12M.map(d=>d.sp500)];
-  const maxV=Math.ceil(Math.max(...allVals.map(v=>Math.abs(v)))/5)*5||10;
+  const allVals=monthlyReturns.flatMap(d=>[d.nasdaq,d.sp500]).filter(Number.isFinite);
+  const maxV=allVals.length ? (Math.ceil(Math.max(...allVals.map(v=>Math.abs(v)))/5)*5||10) : 10;
   const zeroY=chartTopY+chartH2/2;
 
   [maxV,maxV/2,0,-maxV/2,-maxV].forEach(v=>{
@@ -3663,9 +3715,9 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
   });
   c.textAlign='left';
 
-  const groupW=chartW/MONTHLY_12M.length;
+  const groupW=monthlyReturns.length ? chartW/monthlyReturns.length : chartW;
   const bW=Math.floor(groupW*0.26);
-  MONTHLY_12M.forEach((d,i)=>{
+  monthlyReturns.forEach((d,i)=>{
     const gx=chartX+i*groupW;
     const nx=gx+(groupW-bW*2-3)/2;
     const nh=Math.max(Math.abs(d.nasdaq)/maxV*chartH2/2,1);
@@ -3679,6 +3731,11 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
     c.fillText(d.month,gx+groupW/2,chartTopY+chartH2+18);
     c.textAlign='left';
   });
+  if(!monthlyReturns.length){
+    c.font=`12px ${F}`;c.fillStyle=L.muted;c.textAlign='center';
+    c.fillText('月度数据暂不可用',chartX+chartW/2,chartTopY+chartH2/2);
+    c.textAlign='left';
+  }
 
   // ── 35-year compound curve ────────────────────────────────────────────────
   const histY=BRAND_H+STATS_H+INDEX_H+CHART_H;
@@ -3849,14 +3906,12 @@ function drawOverviewCanvas({nasdaq,sp500,active,etfs,usdcny,sentiment}){
 
 // ─── Report Page ──────────────────────────────────────────────────────────────
 function ReportPage() {
-  // ⚠️ 导出数据规范（禁止修改，如需变更请征得用户同意）：
-  // 1. 导出图片的数据必须与界面展示数据完全一致
-  // 2. 数据来源：/api/funds/* + /api/etfs + /api/live_data（Redis 缓存，由 cron 每日更新）
-  // 3. 严禁使用 FALLBACK 静态数据或 localStorage 作为基础数据源
-  // 4. 必须等所有 API 返回后再生成图片，不允许提前用空数据生成
+  // 导出与首页读取同一份基金/ETF快照；不再二次叠加 legacy live_data。
 
   const [images, setImages] = useState([]);
   const [generating, setGenerating] = useState(true);
+  const [generationError,setGenerationError]=useState(null);
+  const [generationWarning,setGenerationWarning]=useState(null);
   const [toast, setToast] = useState(null);
   const isMobile = typeof window!=="undefined" && window.innerWidth<=768;
 
@@ -3872,62 +3927,75 @@ function ReportPage() {
   };
 
   useEffect(()=>{
-    // ⚠️ 此处数据获取逻辑禁止修改 ⚠️
-    // 并发拉取所有分类数据，等全部返回后再生成图片
-    // /api/funds/* 和 /api/etfs 读取 Redis 缓存（cron 每日写入），不重复调外部接口
-    // /api/live_data 提供 day_change / rolling_1y（昨日涨跌 + 近1年滚动）
-    Promise.all([
-      apiFetch("/funds/nasdaq_passive"),
-      apiFetch("/funds/sp500_passive"),
-      apiFetch("/funds/us_active"),
-      apiFetch("/etfs"),
-      apiFetch("/live_data"),
-    ]).then(([nasdaqRes, sp500Res, activeRes, etfsRes, liveRes])=>{
+    // 导出页也严格串行拉取大接口，避免与冷启动相同的 provider 争抢。
+    apiFetchSequential([
+      "/funds/nasdaq_passive",
+      "/funds/sp500_passive",
+      "/funds/us_active",
+      "/etfs",
+    ]).then(([nasdaqRes, sp500Res, activeRes, etfsRes])=>{
       const nasdaq = nasdaqRes?.data || [];
       const sp500  = sp500Res?.data  || [];
       const active = activeRes?.data || [];
       const etfs   = etfsRes?.data   || [];
-      const liveMap= liveRes?.data   || {};
+      if(!nasdaq.length||!sp500.length||!active.length||!etfs.length){
+        throw new Error("一个或多个数据集为空，已停止生成以避免导出错误数据");
+      }
 
-      // live_data 只补充 day_change / rolling_1y
-      // buy_status / daily_limit 已由 /api/funds/* 提供，不允许被 live_data 覆盖
-      // ytd_return（25年涨幅）永远不覆盖
-      // 此逻辑与主页面 mergeLive 保持完全一致，禁止修改
-      const LIVE_SKIP = new Set(["buy_status","daily_limit","ytd_return"]);
-      const merge = arr => arr.map(f=>{
-        const live = liveMap[f.code];
-        if(!live) return f;
-        const patch = Object.fromEntries(
-          Object.entries(live).filter(([k,v])=>v!=null && !LIVE_SKIP.has(k))
-        );
-        return {...f,...patch};
+      const datasets=[
+        {name:"场外纳指",response:nasdaqRes,rows:nasdaq},
+        {name:"场外标普",response:sp500Res,rows:sp500},
+        {name:"主动基金",response:activeRes,rows:active},
+        {name:"场内ETF",response:etfsRes,rows:etfs},
+      ];
+      const unusable=datasets.filter(({response})=>["empty","error"].includes(response?.status));
+      if(unusable.length){
+        throw new Error(`${unusable.map(item=>item.name).join("、")}快照状态不可用，已停止生成`);
+      }
+      const degraded=datasets.filter(({response})=>["partial","stale"].includes(response?.status));
+      if(degraded.length){
+        setGenerationWarning(`${degraded.map(item=>`${item.name}（${item.response.status}）`).join("、")}不是完整新鲜快照，图片中已明确标记`);
+      }
+      const resolveAsOf=({response,rows})=>{
+        if(response?.as_of) return response.as_of;
+        const dates=rows.flatMap(row=>[row.nav_date,row.market_date,row.premium_as_of,row.as_of]).filter(Boolean).sort();
+        return dates.at(-1)||null;
+      };
+      const metadata=datasets.map(dataset=>{
+        const status=dataset.response?.status;
+        return {
+          snapshotAsOf:resolveAsOf(dataset),
+          statusNote:status==="partial"?"部分字段暂缺":status==="stale"?"使用最近可用快照":"仅供参考，不构成投资建议",
+        };
       });
 
-      const nasdaqData = merge(nasdaq);
-      const sp500Data  = merge(sp500);
-      const activeData = merge(active);
+      const nasdaqData = nasdaq;
+      const sp500Data  = sp500;
+      const activeData = active;
       // 场内ETF：按跟踪误差从低到高排序
-      const etfsData   = merge(etfs).sort((a,b)=>(a.track_error||99)-(b.track_error||99));
+      const etfsData   = [...etfs].sort(nullLastComparator("track_error","asc"));
 
-      const today=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
-      const ds=today.replace(/\//g,'-');
+      const latestAsOf=metadata.map(item=>item.snapshotAsOf).filter(Boolean).sort().at(-1);
+      const ds=formatShanghaiDate(latestAsOf||new Date(),'-');
 
       const logoImg=new Image();
       const proceed=(logo)=>{
         try{
           const imgs=[
-            {title:'场外纳指被动基金',   url:drawNasdaqExportCanvas(byLimit(nasdaqData),logo).toDataURL('image/png'), filename:`wise-etf-nasdaq-${ds}.png`},
-            {title:'场外标普500被动基金', url:drawSp500ExportCanvas(byLimit(sp500Data),logo).toDataURL('image/png'),  filename:`wise-etf-sp500-${ds}.png`},
-            {title:'场内ETF对比',         url:drawEtfExportCanvas(etfsData,logo).toDataURL('image/png'),              filename:`wise-etf-etf-${ds}.png`},
-            {title:'美股主动型基金',      url:drawActiveExportCanvas(byLimit(activeData),logo).toDataURL('image/png'),filename:`wise-etf-active-${ds}.png`},
+            {title:'场外纳指被动基金',   url:drawNasdaqExportCanvas(byLimit(nasdaqData),logo,metadata[0]).toDataURL('image/png'), filename:`wise-etf-nasdaq-${ds}.png`},
+            {title:'场外标普500被动基金', url:drawSp500ExportCanvas(byLimit(sp500Data),logo,metadata[1]).toDataURL('image/png'),  filename:`wise-etf-sp500-${ds}.png`},
+            {title:'场内ETF对比',         url:drawEtfExportCanvas(etfsData,logo,metadata[3]).toDataURL('image/png'),              filename:`wise-etf-etf-${ds}.png`},
+            {title:'美股主动型基金',      url:drawActiveExportCanvas(byLimit(activeData),logo,metadata[2]).toDataURL('image/png'),filename:`wise-etf-active-${ds}.png`},
           ];
           setImages(imgs);
+        }catch(error){
+          setGenerationError(error.message||"图片生成失败");
         }finally{setGenerating(false);}
       };
       logoImg.onload=()=>proceed(logoImg);
       logoImg.onerror=()=>proceed(null);
       logoImg.src=encodeURI('/@Wise 投资有术 (2).png');
-    }).catch(()=>setGenerating(false));
+    }).catch(error=>{setGenerationError(error.message||"数据加载失败");setGenerating(false);});
   },[]);
 
   /* ── 旧版生成逻辑（已暂停，后续优化时恢复） ──────────────────────────────
@@ -3984,6 +4052,8 @@ function ReportPage() {
         {/* Action bar */}
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:32,flexWrap:'wrap'}}>
           {generating&&<span style={{fontSize:13,color:'#94a3b8'}}>图片生成中…</span>}
+          {generationError&&<span style={{fontSize:13,color:'#dc2626',fontWeight:600}}>生成失败：{generationError}</span>}
+          {generationWarning&&<span style={{fontSize:13,color:'#c2410c',fontWeight:600}}>注意：{generationWarning}</span>}
           {images.length>0&&!isMobile&&(
             <button onClick={handleDownloadAll}
               style={{display:'flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:14,border:'none',background:'linear-gradient(135deg,#16a34a,#059669)',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 16px rgba(22,163,74,0.3)'}}>
@@ -4124,6 +4194,14 @@ function SliderCaptcha({ onVerified }) {
 }
 
 // ─── AuthModal ────────────────────────────────────────────────────────────────
+function PasswordVisibilityIcon({show}) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {show ? (<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>) : (<><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>)}
+    </svg>
+  );
+}
+
 function AuthModal({ onClose, onLogin, authRequired }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -4173,12 +4251,6 @@ function AuthModal({ onClose, onLogin, authRequired }) {
   };
 
   const inputStyle = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
-  const EyeIcon = ({ show }) => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      {show ? (<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>) : (<><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>)}
-    </svg>
-  );
-
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={e => { if (!authRequired && e.target === e.currentTarget) onClose(); }}>
@@ -4204,7 +4276,7 @@ function AuthModal({ onClose, onLogin, authRequired }) {
             <div style={{ position: "relative" }}>
               <input type={showPwd ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder={mode === "register" ? "至少8位，含大小写字母和数字" : "请输入密码"} style={{ ...inputStyle, paddingRight: 42 }} onKeyDown={e => e.key === "Enter" && mode === "login" && handleSubmit()} />
               <button type="button" onClick={() => setShowPwd(v => !v)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0, display: "flex", alignItems: "center" }}>
-                <EyeIcon show={showPwd} />
+                <PasswordVisibilityIcon show={showPwd} />
               </button>
             </div>
           </div>
@@ -4214,7 +4286,7 @@ function AuthModal({ onClose, onLogin, authRequired }) {
               <div style={{ position: "relative" }}>
                 <input type={showConfirmPwd ? "text" : "password"} value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)} placeholder="再次输入密码" style={{ ...inputStyle, paddingRight: 42 }} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
                 <button type="button" onClick={() => setShowConfirmPwd(v => !v)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0, display: "flex", alignItems: "center" }}>
-                  <EyeIcon show={showConfirmPwd} />
+                  <PasswordVisibilityIcon show={showConfirmPwd} />
                 </button>
               </div>
             </div>
@@ -4294,13 +4366,13 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
       const mn = Math.min(...valid), mx = Math.max(...valid);
       return vals.map(v => v == null ? null : mx === mn ? 50 : higherBetter ? (v - mn) / (mx - mn) * 100 : (mx - v) / (mx - mn) * 100);
     };
-    const ytdScores    = normalize(funds.map(f => get(f,"ytd_return")),  true);
+    const rollingScores= normalize(funds.map(f => get(f,"rolling_1y")),  true);
     const feeScores    = normalize(funds.map(f => get(f,"fee_rate")),     false);
     const teScores     = normalize(funds.map(f => get(f,"track_error")),  false);
     const scaleScores  = normalize(funds.map(f => get(f,"scale")),        true);
     return Object.fromEntries(funds.map((f, i) => {
       const parts = [
-        [ytdScores[i],   0.40],
+        [rollingScores[i],0.40],
         [feeScores[i],   0.30],
         [teScores[i],    0.20],
         [scaleScores[i], 0.10],
@@ -4308,7 +4380,8 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
       const validParts = parts.filter(([v]) => v != null);
       const totalW = validParts.reduce((s,[,w]) => s+w, 0);
       const raw = totalW > 0 ? validParts.reduce((s,[v,w]) => s + v*(w/totalW), 0) : 50;
-      const bonus = f.buy_status === "open" ? 3 : -3;
+      const subscription=normalizeSubscriptionStatus(f);
+      const bonus = subscription.canSubscribe ? 3 : subscription.isSuspended ? -3 : 0;
       return [f.code, Math.min(100, Math.max(0, Math.round(raw + bonus)))];
     }));
   };
@@ -4386,8 +4459,8 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
                             <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace", marginTop: 2 }}>{f.code}</div>
                           </div>
                           <div style={{ textAlign: "right", flexShrink: 0 }}>
-                            {f.ytd_return != null && <div style={{ fontSize: 13, fontWeight: 700, color: f.ytd_return >= 0 ? "#dc2626" : "#16a34a" }}>{f.ytd_return >= 0 ? "+" : ""}{f.ytd_return.toFixed(2)}%</div>}
-                            <div style={{ fontSize: 10, color: f.buy_status === "open" ? "#16a34a" : "#94a3b8", marginTop: 1 }}>{f.buy_status === "open" ? "开放申购" : "暂停申购"}</div>
+                            {f.rolling_1y != null && <div style={{ fontSize: 13, fontWeight: 700, color: f.rolling_1y >= 0 ? "#dc2626" : "#16a34a" }}>{f.rolling_1y >= 0 ? "+" : ""}{f.rolling_1y.toFixed(2)}%</div>}
+                            <div style={{ fontSize: 10, color: normalizeSubscriptionStatus(f).canSubscribe ? "#16a34a" : "#94a3b8", marginTop: 1 }}>{normalizeSubscriptionStatus(f).label}</div>
                           </div>
                           <div style={{ fontSize: 12, color: "#94a3b8", flexShrink: 0 }}>{isExpanded ? "▲" : "▼"}</div>
                         </div>
@@ -4474,12 +4547,12 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
                   ) : (() => {
                     const funds = compareList.map(c => allFlatFunds.find(f => f.code === c)).filter(Boolean);
                     const METRICS = [
-                      { key: "ytd_return",  label: "今年以来收益", fmt: v => v != null ? `+${v.toFixed(2)}%` : "—", higher: true },
+                      { key: "rolling_1y",  label: "近1年滚动收益", fmt: v => v != null ? `${v>=0?'+':''}${v.toFixed(2)}%` : "—", higher: true },
                       { key: "fee_rate",    label: "年化费率",     fmt: v => v != null ? `${v}%`            : "—", higher: false },
                       { key: "track_error", label: "跟踪误差",     fmt: v => v != null ? `${v}%`            : "—", higher: false },
                       { key: "scale",       label: "基金规模",     fmt: v => v != null ? `${v} 亿`          : "—", higher: true  },
                       { key: "daily_limit", label: "每日限额",     fmt: v => v || "—",                              higher: null  },
-                      { key: "buy_status",  label: "申购状态",     fmt: v => v === "open" ? "开放申购" : "暂停申购", higher: null  },
+                      { key: "subscription_status", label: "申购状态", fmt: (_v,f) => normalizeSubscriptionStatus(f).label, higher: null },
                     ];
                     // best value per metric
                     const best = {};
@@ -4523,8 +4596,8 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
                                     const isBest = m.higher != null && v != null && v === best[m.key];
                                     return (
                                       <td key={f.code} style={{ padding: "12px 12px", textAlign: "center", borderLeft: "1px solid #f1f5f9" }}>
-                                        <span style={{ fontSize: 13, fontWeight: isBest ? 700 : 500, color: m.key === "buy_status" ? (v === "open" ? "#16a34a" : "#94a3b8") : (isBest ? scoreColor(80) : "#1e293b"), background: isBest ? scoreBg(80) : "transparent", padding: isBest ? "2px 8px" : "0", borderRadius: 6 }}>
-                                          {m.fmt(v)}
+                                        <span style={{ fontSize: 13, fontWeight: isBest ? 700 : 500, color: m.key === "subscription_status" ? (normalizeSubscriptionStatus(f).canSubscribe ? "#16a34a" : "#94a3b8") : (isBest ? scoreColor(80) : "#1e293b"), background: isBest ? scoreBg(80) : "transparent", padding: isBest ? "2px 8px" : "0", borderRadius: 6 }}>
+                                          {m.fmt(v,f)}
                                         </span>
                                       </td>
                                     );
@@ -4534,7 +4607,7 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
                             </tbody>
                           </table>
                         </div>
-                        <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8" }}>※ 综合评分基于今年收益（40%）、费率（30%）、跟踪误差（20%）、规模（10%）加权计算，绿色高亮为各项最优值。</div>
+                        <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8" }}>※ 综合评分基于近1年滚动收益（40%）、费率（30%）、跟踪误差（20%）、规模（10%）加权计算；仅用于同类横向参考。</div>
                       </div>
                     );
                   })()}
@@ -4598,11 +4671,15 @@ function UserCenter({ user, onClose, onLogout, favorites, allFunds }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  if(window.location.pathname==="/admin") return <AdminPage/>;
-  if(window.location.pathname==="/export") return <ReportPage/>;
-  if(window.location.pathname==="/lazy") return <LazyPage/>;
-  if(window.location.pathname==="/qdii") return <QDIIPage/>;
+  const path=window.location.pathname;
+  if(path==="/admin") return <AdminPage/>;
+  if(path==="/export") return <ReportPage/>;
+  if(path==="/lazy") return <LazyPage/>;
+  if(path==="/qdii") return <QDIIPage/>;
+  return <MainApp/>;
+}
 
+function MainApp() {
   const getInitialTab = () => {
     const path = window.location.pathname.replace(/^\//, "");
     const valid = ["guide","nasdaq","sp500","etf","active","watchlist"];
@@ -4614,7 +4691,7 @@ export default function App() {
   const [search,setSearch]=useState("");
   const [statusFilter,setStatusFilter]=useState("all");
   const [selETF,setSelETF]=useState("513100");
-  const [scrolled,setScrolled]=useState(false);
+  const [,setScrolled]=useState(false);
   const [showBackToTop,setShowBackToTop]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
   const [showDisclaimer,setShowDisclaimer]=useState(()=>{
@@ -4636,10 +4713,19 @@ export default function App() {
   const [showAuth,setShowAuth]=useState(false);
   const [authRequired,setAuthRequired]=useState(false);
   const [showUserCenter,setShowUserCenter]=useState(false);
-  const [lastUpdate,setLastUpdate]=useState(null);
-  const [dataLoading,setDataLoading]=useState(false);
-  const [usdcny,setUsdcny]=useState(null);
-  const [sentiment,setSentiment]=useState(null);
+  const [reloadToken,setReloadToken]=useState(0);
+  const [datasets,setDatasets]=useState({
+    nasdaq:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
+    sp500:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
+    active:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
+    etfs:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
+    monthly:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
+  });
+  const [,setUsdcny]=useState(null);
+  const [sentimentDataset,setSentimentDataset]=useState({status:DATASET_STATE.LOADING,data:null,source:null,asOf:null,error:null});
+  const sentiment=sentimentDataset.data;
+  const sentimentRequestRef=useRef(0);
+  const [startupReady,setStartupReady]=useState(false);
   const [peHistory,setPeHistory]=useState({sp500:[],nasdaq100:[]});
   const [aiInsight,setAiInsight]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
@@ -4652,31 +4738,37 @@ export default function App() {
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth <= 768;
 
-  const [nasdaq,setNasdaq]=useState(FALLBACK.nasdaq_passive);
-  const [sp500, setSp500 ]=useState(FALLBACK.sp500_passive);
-  const [active,setActive]=useState(FALLBACK.us_active);
-  const [etfs,  setEtfs  ]=useState(FALLBACK.etfs);
-  // 同步读缓存，避免首屏 loading 闪烁
-  const [liveData,setLiveData]=useState(()=>{
+  const [nasdaq,setNasdaq]=useState([]);
+  const [sp500, setSp500 ]=useState([]);
+  const [active,setActive]=useState([]);
+  const [etfs,  setEtfs  ]=useState([]);
+  const [monthlyReturns,setMonthlyReturns]=useState([]);
+  const [monthlyMtd,setMonthlyMtd]=useState(null);
+
+  const loadSentiment=useCallback(async({showLoading=true}={})=>{
+    const requestId=++sentimentRequestRef.current;
+    if(showLoading){
+      setSentimentDataset(prev=>({...prev,status:DATASET_STATE.LOADING,error:null}));
+    }
     try{
-      const raw=localStorage.getItem("wise_etf_live_v2");
-      if(!raw) return {};
-      const {data,ts}=JSON.parse(raw);
-      const H21=21*3600*1000,DAY=24*3600*1000;
-      if(ts>=Math.floor((Date.now()-H21)/DAY)*DAY+H21) return data;
-    }catch{}
-    return {};
-  });
-  const [liveTs,setLiveTs]=useState(()=>{
-    try{
-      const raw=localStorage.getItem("wise_etf_live_v2");
-      if(!raw) return null;
-      const {liveTs,ts}=JSON.parse(raw);
-      const H21=21*3600*1000,DAY=24*3600*1000;
-      if(ts>=Math.floor((Date.now()-H21)/DAY)*DAY+H21) return liveTs||null;
-    }catch{}
-    return null;
-  });
+      const payload=await apiFetch("/market-sentiment");
+      const next=normalizeObjectDataset(payload,{fields:MARKET_SENTIMENT_FIELDS});
+      if(requestId!==sentimentRequestRef.current) return next.status;
+      setSentimentDataset(prev=>{
+        if(!next.data&&prev.data){
+          return {...prev,status:DATASET_STATE.STALE,source:next.source||prev.source,asOf:prev.asOf,error:"本次市场数据返回为空，继续使用上次有效快照"};
+        }
+        return next;
+      });
+      return next.status;
+    }catch(error){
+      if(requestId!==sentimentRequestRef.current) return DATASET_STATE.ERROR;
+      setSentimentDataset(prev=>prev.data
+        ? {...prev,status:DATASET_STATE.STALE,error:error.message}
+        : {status:DATASET_STATE.ERROR,data:null,source:null,asOf:null,error:error.message});
+      return DATASET_STATE.ERROR;
+    }
+  },[]);
 
   useEffect(()=>{
     const h=()=>{setScrolled(window.scrollY>8);setShowBackToTop(window.scrollY>400);};
@@ -4689,6 +4781,7 @@ export default function App() {
       const path=window.location.pathname.replace(/^\//,"");
       const valid=["guide","nasdaq","sp500","etf","active","watchlist"];
       setActiveTab(valid.includes(path)?path:"overview");
+      setSortKey(null);setSearch("");setStatusFilter("all");
     };
     window.addEventListener("popstate",onPop);
     return()=>window.removeEventListener("popstate",onPop);
@@ -4705,91 +4798,116 @@ export default function App() {
   },[activeTab]);
 
   useEffect(()=>{
-    // 仅拉取 overview 时间戳，不阻塞渲染（基金静态数据已内置 FALLBACK）
-    apiFetch("/overview").then(ov=>{ if(ov?.last_update) setLastUpdate(ov.last_update); });
-    // 拉取场内ETF实时行情（含溢价率），以 FALLBACK 为兜底
-    apiFetch("/etfs").then(d=>{ if(d?.data?.length) setEtfs(d.data); });
-    // 拉取基金动态数据（ytd_return / buy_status / daily_limit），以 FALLBACK 为兜底
-    apiFetch("/funds/nasdaq_passive").then(d=>{ if(d?.data?.length) setNasdaq(d.data); });
-    apiFetch("/funds/sp500_passive").then(d=>{ if(d?.data?.length) setSp500(d.data); });
-    apiFetch("/funds/us_active").then(d=>{ if(d?.data?.length) setActive(d.data); });
-    // 拉取市场情绪指标
-    apiFetch("/market-sentiment").then(d=>{ if(d?.data) setSentiment(d.data); });
-    // 拉取标普500 + 纳指100 历史月度 PE
-    apiFetch("/pe-history").then(d=>{ if(d?.data) setPeHistory(d.data); });
-    // 拉取 AI 市场解读（DeepSeek，2小时缓存）
-    setAiLoading(true);
-    apiFetch("/market-ai-insight").then(d=>{
-      if(d?.data?.insights?.length) setAiInsight(d.data);
-      setAiLoading(false);
-    }).catch(()=>setAiLoading(false));
-  },[]);
-
-  // ── 实时行情（day_change / rolling_1y / buy_status / daily_limit）
-  // 数据每日在北京时间凌晨5点（美股收盘后）更新一次，缓存到下一个北京时间5点再失效
-  useEffect(()=>{
-    const CACHE_KEY="wise_etf_live_v2";
-    const H21=21*3600*1000,DAY=24*3600*1000;
-    const lastBeijing5am=()=>Math.floor((Date.now()-H21)/DAY)*DAY+H21;
-    // 已在 useState 初始化时同步加载缓存；这里只在缓存失效时重新拉取
-    try{
-      const raw=localStorage.getItem(CACHE_KEY);
-      if(raw){const {ts}=JSON.parse(raw);if(ts>=lastBeijing5am()) return;}
-    }catch{}
-    apiFetch("/live_data").then(d=>{
-      if(d?.data){
-        const timeStr=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-        setLiveData(d.data);
-        setLiveTs(timeStr);
-        try{ localStorage.setItem(CACHE_KEY,JSON.stringify({data:d.data,ts:Date.now(),liveTs:timeStr})); }catch{}
+    let cancelled=false;
+    const configs=[
+      ["nasdaq","/funds/nasdaq_passive",setNasdaq],
+      ["sp500","/funds/sp500_passive",setSp500],
+      ["active","/funds/us_active",setActive],
+      ["etfs","/etfs",setEtfs],
+    ];
+    const loadList=async([key,path,setter])=>{
+      try{
+        const payload=await apiFetch(path);
+        if(cancelled) return;
+        const envelope=normalizeApiEnvelope(payload);
+        const data=Array.isArray(envelope.data)?envelope.data:[];
+        setter(data);
+        const explicit=payload?.status;
+        const status=explicit==="stale"?DATASET_STATE.STALE
+          :explicit==="partial"?DATASET_STATE.PARTIAL
+          :deriveDatasetState({data,partial:envelope.partial,error:envelope.error});
+        setDatasets(prev=>({...prev,[key]:{status,data,source:envelope.source,asOf:envelope.asOf,error:envelope.error}}));
+        return envelope.asOf;
+      }catch(error){
+        if(cancelled) return;
+        setter([]);
+        setDatasets(prev=>({...prev,[key]:{status:DATASET_STATE.ERROR,data:[],source:null,asOf:null,error:error.message}}));
+        return null;
       }
-    });
-  },[]);
+    };
 
-  useEffect(()=>{
-    (async()=>{
-      // 优先：ExchangeRate-API (免费，数据准确，更新及时)
-      try {
-        const r=await fetch("https://open.er-api.com/v6/latest/USD");
-        const d=await r.json();
-        if(d.result==="success"&&d.rates?.CNY) {setUsdcny(d.rates.CNY.toFixed(4));return;}
-      } catch{}
-      // 备用：Fawazahmed0 CDN
-      try {
-        const r=await fetch("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json");
-        const d=await r.json();
-        if(d.usd?.cny) {setUsdcny(d.usd.cny.toFixed(4));return;}
-      } catch{}
-      // 兜底：使用静态近期值
-      setUsdcny("7.2400");
-    })();
-  },[]);
+    const loadMonthly=async()=>{
+      try{
+        const payload=await apiFetch("/monthly-returns");
+        if(cancelled) return;
+        const body=payload?.data||{};
+        const rows=Array.isArray(body.months)?body.months:[];
+        setMonthlyReturns(rows);
+        setMonthlyMtd(body.mtd||null);
+        const status=payload?.status==="stale"?DATASET_STATE.STALE
+          :body.status==="partial"?DATASET_STATE.PARTIAL
+          :deriveDatasetState({data:rows});
+        setDatasets(prev=>({...prev,monthly:{status,data:rows,source:payload?.source||body.source||"unknown",asOf:body.as_of||null,error:null}}));
+      }catch(error){
+        if(cancelled) return;
+        setMonthlyReturns([]);setMonthlyMtd(null);
+        setDatasets(prev=>({...prev,monthly:{status:DATASET_STATE.ERROR,data:[],source:null,asOf:null,error:error.message}}));
+      }
+    };
+
+    const runStartupQueue=async()=>{
+      setStartupReady(false);
+
+      // 市场概览优先独占 provider；基金与 ETF 大接口随后严格串行。
+      const initialSentimentStatus=await loadSentiment();
+      if(cancelled) return;
+      for(const config of configs){
+        await loadList(config);
+        if(cancelled) return;
+      }
+
+      // 冷启动时 partial/empty 可能是 provider 被占用；列表完成后只补试一次。
+      if(initialSentimentStatus===DATASET_STATE.PARTIAL||initialSentimentStatus===DATASET_STATE.EMPTY){
+        await loadSentiment({showLoading:false});
+        if(cancelled) return;
+      }
+
+      await loadMonthly();
+      if(cancelled) return;
+      try{
+        const history=await apiFetch("/pe-history");
+        if(!cancelled&&history?.data)setPeHistory(history.data);
+      }catch{/* 历史参考失败不清空当前快照 */}
+
+      if(cancelled) return;
+      setAiLoading(true);
+      try{
+        const insight=await apiFetch("/market-ai-insight");
+        if(!cancelled&&insight?.data?.insights?.length)setAiInsight(insight.data);
+      }catch{/* 由规则引擎降级 */}
+      finally{if(!cancelled)setAiLoading(false);}
+
+      if(cancelled) return;
+      try{
+        const fx=await apiFetch("/fx/usdcny");
+        const value=fx?.data?.value;
+        if(!cancelled&&Number.isFinite(value))setUsdcny(value.toFixed(4));
+      }catch{if(!cancelled)setUsdcny(null);}
+      if(!cancelled)setStartupReady(true);
+    };
+
+    runStartupQueue();
+    return()=>{cancelled=true;};
+  },[reloadToken,loadSentiment]);
 
   const handleSort = k => {
     if(sortKey===k) setSortDir(d=>d==="asc"?"desc":"asc");
     else{setSortKey(k);setSortDir("desc");}
   };
-  const parseDailyLimit = v => {
-    if(!v||v==="暂停申购") return -1;
-    if(v==="不限额") return Infinity;
-    const n = parseFloat(String(v).replace(/[^\d.]/g,""));
-    return isNaN(n)?-1:n;
+  const parseDailyLimit = row => {
+    if(Number.isFinite(row?.daily_limit_cny)) return row.daily_limit_cny;
+    const model=normalizeSubscriptionStatus(row);
+    if(model.isUnlimited) return Number.MAX_SAFE_INTEGER;
+    return Number.isFinite(model.limitAmount)?model.limitAmount:null;
   };
   const sortData = data => {
     if(!sortKey) return data;
-    return [...data].sort((a,b)=>{
-      const av=a[sortKey],bv=b[sortKey];
-      if(sortKey==="daily_limit"){
-        const na=parseDailyLimit(av),nb=parseDailyLimit(bv);
-        return sortDir==="asc"?na-nb:nb-na;
-      }
-      if(typeof av==="number"&&typeof bv==="number") return sortDir==="asc"?av-bv:bv-av;
-      return sortDir==="asc"?String(av||"").localeCompare(String(bv||"")):String(bv||"").localeCompare(String(av||""));
-    });
+    const selector=sortKey==="daily_limit"?parseDailyLimit:row=>row?.[sortKey];
+    return [...data].sort(nullLastComparator(selector,sortDir));
   };
   const _PROTECTED_TABS = ["nasdaq","sp500","etf","active","watchlist","lazy","qdii","export"];
   const switchTab = id=>{
-    if(_PROTECTED_TABS.includes(id) && !user){
+    if(shouldRequireAuth({isProtected:_PROTECTED_TABS.includes(id),hasUser:Boolean(user),localBypass:LOCAL_AUTH_BYPASS})){
       setAuthRequired(true);
       setShowAuth(true);
       return;
@@ -4802,23 +4920,31 @@ export default function App() {
 
   const [premHist, setPremHist] = useState([]);
   const [premHistLoading, setPremHistLoading] = useState(false);
+  const [premHistMeta,setPremHistMeta]=useState({status:"loading",source:null,asOf:null});
   useEffect(()=>{
+    if(!startupReady)return;
+    const controller=new AbortController();
     setPremHistLoading(true);
     setPremHist([]);
-    apiFetch(`/premium_history/${selETF}`).then(d=>{
-      if(d?.data?.length) setPremHist(d.data);
-      setPremHistLoading(false);
-    });
-  },[selETF]);
+    setPremHistMeta({status:"loading",source:null,asOf:null});
+    apiFetch(`/premium_history/${selETF}`,{signal:controller.signal}).then(d=>{
+      const rows=Array.isArray(d?.data)?d.data:[];
+      setPremHist(rows);
+      setPremHistMeta({status:d?.status|| (rows.length?"fresh":"empty"),source:d?.source||null,asOf:d?.as_of||null});
+    }).catch(error=>{
+      if(error.name!=="AbortError")setPremHistMeta({status:"error",source:null,asOf:null});
+    }).finally(()=>{if(!controller.signal.aborted)setPremHistLoading(false);});
+    return()=>controller.abort();
+  },[selETF,startupReady]);
 
-  const filterData = data => {
+  const filterData = (data,applyStatus=true) => {
     let filtered = data;
     if(search.trim()){
       const q=search.trim().toLowerCase();
       filtered=filtered.filter(f=>(f.name||"").toLowerCase().includes(q)||(f.code||"").toLowerCase().includes(q));
     }
-    if(statusFilter==="open")      filtered=filtered.filter(f=>f.buy_status==="open");
-    if(statusFilter==="suspended") filtered=filtered.filter(f=>f.buy_status==="suspended");
+    if(applyStatus&&statusFilter==="open") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).canSubscribe);
+    if(applyStatus&&statusFilter==="suspended") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).isSuspended);
     return filtered;
   };
   const toggleFavorite = code=>{
@@ -4839,40 +4965,30 @@ export default function App() {
     });
   };
 
+  // API 分类端点已经是完整日快照，Web 不再叠加 legacy live_data。
+  const nasdaqM = nasdaq;
+  const sp500M  = sp500;
+  const activeM = active;
+  const etfsM   = etfs;
 
-  const avg=(arr,k)=>arr.length?(arr.reduce((s,f)=>s+(f[k]||0),0)/arr.length).toFixed(1):"0";
-  const totalFunds = nasdaq.length+sp500.length+active.length+etfs.length;
-  const openFunds  = [...nasdaq,...sp500,...active].filter(f=>f.buy_status==="open").length+etfs.length;
-  const topPerf    = [...active].sort((a,b)=>(b.ytd_return||0)-(a.ytd_return||0)).slice(0,5);
+  const totalFunds=nasdaqM.length+sp500M.length+activeM.length+etfsM.length;
+  const openFunds=[...nasdaqM,...sp500M,...activeM].filter(f=>normalizeSubscriptionStatus(f).canSubscribe).length;
+  const activeRollingStats=finiteAverage(activeM,"rolling_1y");
+  const validPremiums=etfsM.filter(e=>Number.isFinite(e.premium));
+  const highestPremium=validPremiums.length
+    ? [...validPremiums].sort(nullLastComparator("premium","desc"))[0]
+    : null;
+  const uniqueActive=[...new Map(
+    activeM
+      .filter(f=>f.share_class!=="C"&&Number.isFinite(f.rolling_1y))
+      .map(f=>[f.master_code||f.code,f])
+  ).values()];
+  const topPerf=[...uniqueActive].sort(nullLastComparator("rolling_1y","desc")).slice(0,5);
 
-  // 合并 liveData 到各基金数组
-  // 只合并非 null 字段，API 失败时保留静态兜底值
-  const mergeLive = useCallback((arr)=>arr.map(f=>{
-    const live=liveData[f.code];
-    if(!live) return f;
-    // buy_status/daily_limit 由每日 cron 刷新的 funds 端点管理，不被 live_data 覆盖
-    // ytd_return（25年涨幅）写死，禁止被 live_data 覆盖
-    const SKIP=new Set(["buy_status","daily_limit","ytd_return"]);
-    const patch=Object.fromEntries(Object.entries(live).filter(([k,v])=>v!=null&&!SKIP.has(k)));
-    return {...f,...patch};
-  }),[liveData]);
-  const nasdaqM = useMemo(()=>mergeLive(nasdaq),[nasdaq,mergeLive]);
-  const sp500M  = useMemo(()=>mergeLive(sp500), [sp500, mergeLive]);
-  const activeM = useMemo(()=>mergeLive(active),[active,mergeLive]);
-  const etfsM   = useMemo(()=>mergeLive(etfs),  [etfs,  mergeLive]);
-
-  // ── 申购上限排序（高→低，暂停在底）
-  const byLimit = useCallback((arr)=>{
-    const parse=s=>{
-      if(!s||s==='暂停申购') return -1;
-      if(s==='不限额') return 9999999;
-      return parseFloat(s)||0;
-    };
-    return [...arr].sort((a,b)=>parse(b.daily_limit)-parse(a.daily_limit));
-  },[]);
-
-
-  const maxReturn  = Math.max(...[...nasdaqM,...sp500M,...activeM].map(f=>f.ytd_return||0));
+  const annualValues=[...nasdaqM,...sp500M,...activeM].map(f=>f.annual_return_2025).filter(Number.isFinite);
+  const rollingValues=[...nasdaqM,...sp500M,...activeM,...etfsM].map(f=>f.rolling_1y).filter(Number.isFinite);
+  const maxAnnual=annualValues.length?Math.max(...annualValues.map(Math.abs)):50;
+  const maxRolling=rollingValues.length?Math.max(...rollingValues.map(Math.abs)):50;
 
   const actionsCol=(accent)=>({key:"_act",label:"",sortable:false,align:"center",render:(_,row)=>{
     const isFav=favorites.includes(row.code);
@@ -4903,7 +5019,7 @@ export default function App() {
   const renderRolling1y = v => {
     if(v==null) return <span style={{color:C.textDim,fontSize:11}}>—</span>;
     const n=parseFloat(v);
-    return <MiniBar value={n} max={Math.max(maxReturn,50)} color={n>0?C.green:C.red}/>;
+    return <MiniBar value={n} max={Math.max(maxRolling,50)} color={n>0?C.green:C.red}/>;
   };
 
   const passiveCols=[
@@ -4913,43 +5029,43 @@ export default function App() {
     {key:"code_c", label:"C类代码", sortable:false, tip:"同基金的C类份额：无申购费，有年化0.2%~0.4%销售服务费。持有≤1年选C类可省申购费，持有＞1年A类总费更低。",align:"center",
      render:v=>v?<span style={{fontFamily:"monospace",fontSize:11,color:C.cyan,background:C.cyan+"18",padding:"2px 7px",borderRadius:4,fontWeight:700,letterSpacing:"0.5px"}}>{v}</span>:<span style={{color:C.textDim,fontSize:11}}>—</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），不含申购赎回费，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
-    {key:"scale",  label:"规模(亿)",tip:"基金总规模，规模大流动性好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（pingzhongdata实时计算）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={v>0?C.green:C.red}/>:"—"},
-    {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据，每5分钟更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
+    {key:"scale",  label:"规模(亿)",tip:"最新报告期基金净资产，低频更新",align:"right",render:(v,row)=><span title={row.scale_as_of?`截至 ${row.scale_as_of}`:"未提供报告期"} style={{fontWeight:600}}>{v!=null?v:"—"}</span>},
+    {key:"annual_return_2025",label:"2025全年",tip:"2024年最后有效累计净值至2025年最后有效累计净值",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxAnnual} color={v>0?C.green:C.red}/>:"—"},
+    {key:"rolling_1y",label:"近1年滚动",tip:"截至最新净值日的近一年滚动收益，每日更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
-    {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小越紧密",align:"right",render:v=>v!=null?<span style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
+    {key:"track_error",label:"跟踪误差",tip:"基金产品页披露的年化跟踪误差；每日检查",align:"right",render:(v,row)=>v!=null?<span title={row.track_error_as_of?`披露截至 ${row.track_error_as_of}`:""} style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
     {key:"daily_limit",label:"申购上限",tip:"每日单笔最大申购金额",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
-    {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
+    {key:"subscription_status",label:"申购状态",tip:"开放、限额、暂停和待确认四种状态",align:"center",sortable:false,render:(v,row)=><StatusBadge status={v||row.buy_status} dailyLimit={row.daily_limit}/>},
   ];
   const activeCols=[
     actionsCol(C.purple),
     {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.purple,fontWeight:700,fontSize:12}}>{v}</span>},
     {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12}}>{v}</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），主动型普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
-    {key:"scale",  label:"规模(亿)",tip:"基金总规模",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（pingzhongdata实时计算）",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxReturn} color={C.green}/>:"—"},
-    {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
+    {key:"scale",  label:"规模(亿)",tip:"最新报告期基金净资产",align:"right",render:(v,row)=><span title={row.scale_as_of?`截至 ${row.scale_as_of}`:""} style={{fontWeight:600}}>{v!=null?v:"—"}</span>},
+    {key:"annual_return_2025",label:"2025全年",tip:"累计净值口径的2025自然年度收益",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxAnnual} color={v>0?C.green:C.red}/>:"—"},
+    {key:"rolling_1y",label:"近1年滚动",tip:"截至最新净值日的最近365天滚动涨幅，每日更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
-    {key:"buy_status",label:"申购状态",tip:"当前是否开放申购",align:"center",sortable:false,render:v=><StatusBadge status={v}/>},
+    {key:"subscription_status",label:"申购状态",tip:"开放、限额、暂停和待确认四种状态",align:"center",sortable:false,render:(v,row)=><StatusBadge status={v||row.buy_status} dailyLimit={row.daily_limit}/>},
   ];
   const etfCols=[
     actionsCol(C.cyan),
     {key:"code",  label:"代码",  render:v=><span style={{fontFamily:"monospace",color:C.cyan,fontWeight:700,fontSize:12}}>{v}</span>},
     {key:"name",  label:"ETF名称"},
     {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
-    {key:"scale", label:"规模(亿)",tip:"基金总规模，越大流动性越好",align:"right",render:v=><span style={{fontWeight:600}}>{v||"—"}</span>},
-    {key:"ytd_return",label:"25年涨幅",tip:"2025年全年涨幅（pingzhongdata实时计算）",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={C.green}/>:"—"},
-    {key:"rolling_1y",label:"近1年滚动",tip:"最近365天滚动涨幅，实时数据",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
-    {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
-    {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），场内ETF区间0.65%~1.00%",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
+    {key:"scale", label:"规模(亿)",tip:"最新报告期基金净资产",align:"right",render:(v,row)=><span title={row.scale_as_of?`截至 ${row.scale_as_of}`:""} style={{fontWeight:600}}>{v!=null?v:"—"}</span>},
+    {key:"annual_return_2025",label:"2025全年",tip:"累计净值口径的2025自然年度收益",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={v>0?C.green:C.red}/>:"—"},
+    {key:"rolling_1y",label:"近1年滚动",tip:"截至最新净值日的最近365天滚动涨幅，每日更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
+    {key:"market_change_pct",label:"场内涨跌",tip:"最新A股交易日场内价格涨跌",align:"right",render:(_,row)=>renderDayChange(row.market_change_pct??row.change_pct)},
+    {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），以基金最新公告为准",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
-    {key:"premium",label:"溢价率",tip:"场内价格相对净值的溢价。>1%注意；>2%偏高；>3%极高",align:"center",sortable:false,render:v=>v!=null?<PremiumBadge value={v}/>:"—"},
-    {key:"volume",label:"日均成交(亿)",tip:"日均成交额（亿元），越大流动性越好",align:"center"},
+    {key:"premium",label:"溢价率",tip:"场内收盘价相对最新已公布净值；价格与净值日期可能不同",align:"center",render:v=><PremiumBadge value={v}/>},
+    {key:"turnover_cny_100m",label:"当日成交(亿)",tip:"最新A股交易日成交额（亿元）",align:"center",render:(v,row)=>v??row.volume??"—"},
   ];
 
   // 移动端隐藏次要列，保留核心信息
-  const _mobileHide = new Set(["code_c","fee_rate","ytd_return","track_error"]);
+  const _mobileHide = new Set(["code_c","fee_rate","annual_return_2025","track_error"]);
   const passiveColsF = isMobile ? passiveCols.filter(c=>!_mobileHide.has(c.key)) : passiveCols;
   const activeColsF  = isMobile ? activeCols.filter(c=>c.key!=="fee_rate") : activeCols;
   const etfColsF     = isMobile ? etfCols.filter(c=>!["fee_rate","track_error"].includes(c.key)) : etfCols;
@@ -4989,7 +5105,7 @@ export default function App() {
           ? <TelegramGroupChatModal onClose={()=>setShowBriefing(false)}/>
           : <GroupChatModal onClose={()=>setShowBriefing(false)}/>
       )}
-      {showAuth&&(
+      {!LOCAL_AUTH_BYPASS&&showAuth&&(
         <AuthModal
           authRequired={authRequired}
           onClose={()=>{setShowAuth(false);setAuthRequired(false);}}
@@ -5084,7 +5200,12 @@ export default function App() {
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
               <span style={{fontSize:13}}>💬</span> 加入群聊
             </button>}
-            <button onClick={()=>user?setShowUserCenter(true):(setAuthRequired(false),setShowAuth(true))}
+            {LOCAL_AUTH_BYPASS
+              ? <span title="仅本机开发模式跳过登录"
+                  style={{display:"flex",alignItems:"center",height:30,padding:"0 10px",border:`1px solid ${C.borderLight}`,borderRadius:16,color:C.textMuted,background:C.card,fontSize:12,fontWeight:600,whiteSpace:"nowrap"}}>
+                  本地免登录
+                </span>
+              : <button onClick={()=>user?setShowUserCenter(true):(setAuthRequired(false),setShowAuth(true))}
               style={{display:"flex",alignItems:"center",padding:0,border:`2px solid ${user?"#a5b4fc":C.borderLight}`,borderRadius:"50%",background:"none",cursor:"pointer",transition:"border-color 0.18s",width:32,height:32,overflow:"hidden",flexShrink:0}}
               onMouseEnter={e=>{e.currentTarget.style.borderColor=user?"#6366f1":"#94a3b8";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=user?"#a5b4fc":C.borderLight;}}>
@@ -5092,7 +5213,7 @@ export default function App() {
                 ? <img src={`https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`} alt="avatar" style={{width:"100%",height:"100%",display:"block"}} />
                 : <span style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
               }
-            </button>
+              </button>}
             <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn" aria-label="菜单"
               style={{display:"none",flexDirection:"column",gap:5,background:"none",border:"none",cursor:"pointer",padding:6}}>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(45deg) translateY(7px)":"none"}}/>
@@ -5167,14 +5288,18 @@ export default function App() {
         {/* ════ OVERVIEW ════ */}
         {activeTab==="overview"&&(
           <>
+            {[["nasdaq","纳指被动"],["sp500","标普被动"],["active","主动基金"],["etfs","场内ETF"]].map(([key,label])=>(
+              <DataStatusBanner key={key} dataset={datasets[key]} label={label} onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+            ))}
+            <DataStatusBanner dataset={sentimentDataset} label="市场概览与情绪" onRetry={startupReady?()=>loadSentiment():null}/>
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[
-                {label:"纳指涨幅",value:sentiment?.ndx_price?.returns?.yr1!=null?`+${sentiment.ndx_price.returns.yr1}%`:`+${avg(nasdaq,"ytd_return")}%`,sub:"近一年",color:C.accent},
-                {label:"标普涨幅",value:sentiment?.spx_price?.returns?.yr1!=null?`+${sentiment.spx_price.returns.yr1}%`:`+${avg(sp500,"ytd_return")}%`,sub:"近一年",color:C.cyan},
-                {label:"主动均涨幅",value:`+${avg(active,"ytd_return")}%`,sub:"近一年",color:C.purple},
-                {label:"ETF均溢价",value:`${avg(etfs,"premium")}%`,sub:"当前",color:C.orange},
-                {label:"监控总数",value:String(totalFunds),sub:`${openFunds}只可申购`,color:C.green},
+                {label:"纳指100",value:formatPercent(sentiment?.ndx_price?.returns?.yr1,{digits:2}),sub:`近一年${sentiment?.ndx_price?.as_of?` · ${sentiment.ndx_price.as_of}`:""}`,color:C.accent},
+                {label:"标普500",value:formatPercent(sentiment?.spx_price?.returns?.yr1,{digits:2}),sub:`近一年${sentiment?.spx_price?.as_of?` · ${sentiment.spx_price.as_of}`:""}`,color:C.cyan},
+                {label:"主动基金均值",value:formatPercent(activeRollingStats.average,{digits:1}),sub:`近一年 · ${activeRollingStats.sampleCount}/${activeRollingStats.totalCount}只`,color:C.purple},
+                {label:"ETF最高溢价",value:highestPremium?formatPercent(highestPremium.premium,{digits:2}):"—",sub:highestPremium?`${highestPremium.code} · 相对最新净值`:"暂无有效样本",color:C.orange},
+                {label:"监控总数",value:String(totalFunds),sub:`${openFunds}只场外可申购 · ${etfsM.length}只场内`,color:C.green},
               ].map((s,i)=><StatCard key={s.label} {...s} index={i}/>)}
             </div>
 
@@ -5192,9 +5317,13 @@ export default function App() {
               <Reveal delay={0.05}>
                 <Card style={{padding:"24px 26px"}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
-                  <div style={{fontSize:12,color:C.textDim,marginBottom:20}}>2025年5月 — 2026年4月（美元口径）</div>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={MONTHLY_12M} barGap={3} barCategoryGap="25%">
+                  <div style={{fontSize:12,color:C.textDim,marginBottom:6}}>最近12个完整自然月 · 美元价格收益{datasets.monthly.asOf?` · 截至 ${datasets.monthly.asOf}`:""}</div>
+                  {monthlyMtd?.status!=="unavailable"&&monthlyMtd&&<div style={{fontSize:11,color:C.orange,marginBottom:12}}>本月 MTD（未完结）：纳指 {formatPercent(monthlyMtd.nasdaq,{digits:2})} · 标普 {formatPercent(monthlyMtd.sp500,{digits:2})}</div>}
+                  <DataStatusBanner dataset={datasets.monthly} label="月度收益" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+                  {monthlyReturns.length===0?(
+                    <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>暂无可用月度收益</div>
+                  ):(<ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={monthlyReturns} barGap={3} barCategoryGap="25%">
                       <CartesianGrid strokeDasharray="2 4" stroke={C.borderLight} vertical={false}/>
                       <XAxis dataKey="month" tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false}/>
                       <YAxis tick={{fill:C.textDim,fontSize:11}} axisLine={false} tickLine={false} unit="%"/>
@@ -5204,7 +5333,7 @@ export default function App() {
                       <Bar dataKey="nasdaq" name="纳斯达克100" fill={C.accent} radius={[4,4,0,0]}/>
                       <Bar dataKey="sp500"  name="标普500"    fill={C.cyan}   radius={[4,4,0,0]}/>
                     </BarChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer>)}
                 </Card>
               </Reveal>
 
@@ -5213,16 +5342,25 @@ export default function App() {
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                     <div>
                       <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF溢价走势</div>
-                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>近30交易日 · 真实市价/净值计算</div>
+                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>同日收盘价 / 同日净值{premHistMeta.asOf?` · 截至 ${premHistMeta.asOf}`:""}</div>
                     </div>
                     <select value={selETF} onChange={e=>setSelETF(e.target.value)}
                       style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 10px",fontSize:12,outline:"none",cursor:"pointer"}}>
                       {etfs.map(e=><option key={e.code} value={e.code}>{e.code} {e.name}</option>)}
                     </select>
                   </div>
+                  {(premHistMeta.status==="stale"||premHistMeta.status==="partial")&&(
+                    <div style={{fontSize:11,color:C.orange,margin:"6px 0 10px"}}>
+                      当前为上次有效/参考快照{premHistMeta.asOf?` · 截至 ${premHistMeta.asOf}`:""}，请勿视为今日溢价。
+                    </div>
+                  )}
                   {premHistLoading?(
                     <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
                       正在加载真实溢价率数据…
+                    </div>
+                  ):premHistMeta.status==="error"?(
+                    <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.red,fontSize:13}}>
+                      历史溢价数据加载失败
                     </div>
                   ):premHist.length===0?(
                     <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
@@ -5275,11 +5413,11 @@ export default function App() {
                       <span style={{fontSize:11,color:C.textDim,fontFamily:"monospace"}}>{f.code}</span>
                     </div>
                     <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:14,lineHeight:1.4,paddingRight:40,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
-                    <div style={{fontSize:28,fontWeight:800,color:C.green,letterSpacing:-0.5,marginBottom:6}}>+{f.ytd_return}%</div>
+                    <div style={{fontSize:28,fontWeight:800,color:f.rolling_1y>=0?C.green:C.red,letterSpacing:-0.5,marginBottom:6}}>{formatPercent(f.rolling_1y,{digits:2})}</div>
                     <div style={{height:3,borderRadius:2,background:C.borderLight,overflow:"hidden",marginBottom:8}}>
-                      <div style={{height:"100%",width:`${Math.min(f.ytd_return/120*100,100)}%`,background:`linear-gradient(90deg,${C.green},${C.green}80)`,borderRadius:2}}/>
+                      <div style={{height:"100%",width:`${Math.min(Math.abs(f.rolling_1y)/Math.max(maxRolling,1)*100,100)}%`,background:`linear-gradient(90deg,${f.rolling_1y>=0?C.green:C.red},${f.rolling_1y>=0?C.green:C.red}80)`,borderRadius:2}}/>
                     </div>
-                    <div style={{fontSize:11,color:C.textDim}}>规模 {f.scale}亿 · 限额 {f.daily_limit}</div>
+                    <div style={{fontSize:11,color:C.textDim}}>截至 {f.nav_date||"最新净值日"} · 规模 {f.scale??"—"}亿 · 限额 {f.daily_limit||"待确认"}</div>
                   </Card>
                 ))}
               </div>
@@ -5289,8 +5427,8 @@ export default function App() {
             <Reveal delay={0.1}>
               <SectionHeader title="场内ETF溢价预警" subtitle="溢价 >1% 注意 · >2% 偏高 · >3% 极高建议等待收窄" color={C.orange}/>
               <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:16}}>
-                {etfs.map(e=>{
-                  const prem = e.premium||0;
+                {[...etfsM].sort(nullLastComparator("premium","desc")).map(e=>{
+                  const prem = Number.isFinite(e.premium)?e.premium:null;
                   const barColor = prem>3?C.red:prem>2?"#ff6b35":prem>1?C.orange:C.green;
                   return (
                   <Card key={e.code} style={{padding:isMobile?"14px 16px":"18px 22px",borderColor:prem>3?`${C.red}40`:prem>2?`#ff6b3530`:C.border}}>
@@ -5302,22 +5440,23 @@ export default function App() {
                       </div>
                       <PremiumBadge value={prem}/>
                     </div>
-                    {/* Premium meter — 刻度0/1/2/3/4% */}
-                    <div style={{marginBottom:12}}>
+                    {/* Premium meter — 仅在溢价可用时展示 */}
+                    {prem!=null&&<div style={{marginBottom:12}}>
                       <div style={{position:"relative",height:6,borderRadius:3,background:C.borderLight,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${Math.min(prem/4*100,100)}%`,background:`linear-gradient(90deg,${C.green},${barColor})`,borderRadius:3,transition:"width 0.6s ease"}}/>
+                        <div style={{height:"100%",width:`${Math.min(Math.max(prem/4*100,0),100)}%`,background:`linear-gradient(90deg,${C.green},${barColor})`,borderRadius:3,transition:"width 0.6s ease"}}/>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
                         {["0%","1%","2%","3%","4%+"].map(t=><span key={t} style={{fontSize:9,color:C.textDim}}>{t}</span>)}
                       </div>
-                    </div>
+                    </div>}
                     <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
-                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>近1年</div><div style={{fontSize:13,fontWeight:700,color:C.green}}>+{e.ytd_return}%</div></div>
-                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>规模</div><div style={{fontSize:13,fontWeight:600}}>{e.scale}亿</div></div>
-                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>成交</div><div style={{fontSize:13,fontWeight:600}}>{e.volume}亿</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>近1年</div><div style={{fontSize:13,fontWeight:700,color:(e.rolling_1y??0)>=0?C.green:C.red}}>{formatPercent(e.rolling_1y,{digits:2})}</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>规模</div><div style={{fontSize:13,fontWeight:600}}>{e.scale??"—"}亿</div></div>
+                      <div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>当日成交</div><div style={{fontSize:13,fontWeight:600}}>{e.turnover_cny_100m??e.volume??"—"}亿</div></div>
                       {e.fee_rate!=null&&<div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>费率</div><div style={{fontSize:13,fontWeight:600,color:C.textMuted}}>{e.fee_rate}%</div></div>}
                       {e.track_error!=null&&<div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>跟踪误差</div><div style={{fontSize:13,fontWeight:600,color:e.track_error>1?C.orange:C.textMuted}}>{e.track_error}%</div></div>}
                     </div>
+                    <div style={{fontSize:10,color:C.textDim,marginTop:9,lineHeight:1.5}}>价格 {e.quote_as_of?String(e.quote_as_of).slice(0,16).replace("T"," "):"待更新"} · 净值 {e.nav_as_of||"待更新"}</div>
                   </Card>
                   );
                 })}
@@ -5329,12 +5468,13 @@ export default function App() {
         {/* ════ NASDAQ ════ */}
         {activeTab==="nasdaq"&&(
           <Reveal>
-            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="数据来源：天天基金网" count={filterData(nasdaqM).length} color={C.accent} timestamp={liveTs} sortable/>
+            <SectionHeader title="场外纳斯达克100（被动型）" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(nasdaqM).length} color={C.accent} timestamp={datasets.nasdaq.asOf} sortable/>
+            <DataStatusBanner dataset={datasets.nasdaq} label="纳指被动基金" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
+            {datasets.nasdaq.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
             <AcInfoBox/>
           </Reveal>
         )}
@@ -5342,12 +5482,13 @@ export default function App() {
         {/* ════ SP500 ════ */}
         {activeTab==="sp500"&&(
           <Reveal>
-            <SectionHeader title="场外标普500基金对比" subtitle="数据来源：天天基金网" count={filterData(sp500M).length} color={C.cyan} timestamp={liveTs} sortable/>
+            <SectionHeader title="场外标普500基金对比" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(sp500M).length} color={C.cyan} timestamp={datasets.sp500.asOf} sortable/>
+            <DataStatusBanner dataset={datasets.sp500} label="标普被动基金" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
+            {datasets.sp500.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
             <AcInfoBox/>
           </Reveal>
         )}
@@ -5355,12 +5496,13 @@ export default function App() {
         {/* ════ ACTIVE ════ */}
         {activeTab==="active"&&(
           <Reveal>
-            <SectionHeader title="场外美股（主动型）基金对比" subtitle="数据来源：天天基金网" count={filterData(activeM).length} color={C.purple} timestamp={liveTs} sortable/>
+            <SectionHeader title="场外美股（主动型）基金对比" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(activeM).length} color={C.purple} timestamp={datasets.active.asOf} sortable/>
+            <DataStatusBanner dataset={datasets.active} label="主动基金" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
+            {datasets.active.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
           </Reveal>
         )}
 
@@ -5373,16 +5515,17 @@ export default function App() {
         {/* ════ ETF ════ */}
         {activeTab==="etf"&&(
           <Reveal>
-            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="可在A股账户直接交易，关注溢价风险" count={filterData(etfsM).length} color={C.orange} timestamp={liveTs} sortable/>
+            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价率相对最新已公布净值" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
+            <DataStatusBanner dataset={datasets.etfs} label="场内ETF" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
             </div>
-            {dataLoading?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfColsF} data={sortData(filterData(etfsM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM).length===0&&<EmptyResult query={search}/>}</>}
+            {datasets.etfs.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfColsF} data={sortData(filterData(etfsM,false))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM,false).length===0&&<EmptyResult query={search}/>}</>}
             <Card style={{marginTop:24,padding:"24px 26px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div>
                   <div style={{fontSize:15,fontWeight:700,color:C.text}}>溢价率历史走势（近30交易日）</div>
-                  <div style={{fontSize:12,color:C.textDim,marginTop:2}}>真实市价/净值计算 · 来源：新浪财经 + 东方财富</div>
+                  <div style={{fontSize:12,color:C.textDim,marginTop:2}}>同日收盘价 / 同日净值{premHistMeta.asOf?` · 截至 ${premHistMeta.asOf}`:""}{premHistMeta.source?` · ${premHistMeta.source}`:""}</div>
                 </div>
                 <select value={selETF} onChange={e=>setSelETF(e.target.value)}
                   style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 12px",fontSize:12,outline:"none"}}>
@@ -5392,6 +5535,10 @@ export default function App() {
               {premHistLoading?(
                 <div style={{height:280,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>
                   正在加载真实溢价率数据…
+                </div>
+              ):premHistMeta.status==="error"?(
+                <div style={{height:280,display:"flex",alignItems:"center",justifyContent:"center",color:C.red,fontSize:13}}>
+                  历史溢价数据加载失败
                 </div>
               ):premHist.length===0?(
                 <div style={{height:280,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>

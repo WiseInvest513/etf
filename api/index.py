@@ -1,21 +1,20 @@
-"""
-Wise-ETF Serverless API  v4.0
-==============================
-缓存策略（Redis 持久化）：
-  1. Redis (Upstash) — 持久化存储，cron 每日写入，永不丢失
-  2. 静态兜底        — 代码内嵌数据，Redis 不可用时保底
+"""Wise-ETF Serverless API v5.
 
 数据分层：
-  不变字段: code / name / fee_rate / scale / track_error / tracking_index
-  日更字段: ytd_return / nav / nav_date / buy_status / live_data  → cron 09:30 更新
-  实时字段: ETF market_price / nav / premium / volume / change_pct → 5min TTL
+  - 产品目录：代码、名称、费率、规模、2025 自然年度收益等低频元数据。
+  - 场外日更：昨日涨跌、滚动一年、跟踪误差、申购状态与额度。
+  - 场内日更：收盘价、场内涨跌、成交额、滚动一年、跟踪误差与溢价率。
 
-定时预热（vercel.json crons）：
-  UTC 01:30 / 北京 09:30 — /api/cron/refresh 写入 Redis
+缓存分层：带 TTL 的 Redis 热缓存 + 独立永久 Last-Known-Good。部分抓取只
+进入热缓存，不覆盖完整 LKG；前端会收到 fresh/partial/stale/reference 状态。
+
+定时任务（UTC）：01:30 场外基金；07:30 工作日 ETF 收盘快照；23:30
+工作日补齐历史溢价。所有 cron/admin 路由默认要求 CRON_SECRET。
 """
 
 import json, os, re, logging, time, xml.etree.ElementTree as ET
 import hmac, hashlib, secrets, base64
+from threading import BoundedSemaphore, Lock, local
 
 # 加载 .env.local（本地开发环境）
 def _load_env_local():
@@ -30,19 +29,28 @@ def _load_env_local():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 _load_env_local()
-import urllib3; urllib3.disable_warnings()
 from concurrent.futures import ThreadPoolExecutor, wait
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, List
 
 import requests
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from upstash_redis import Redis
 
+from api.wise_etf import (
+    calculate_etf_premium,
+    normalize_purchase,
+    normalize_yahoo_monthly_returns,
+    parse_number,
+    rolling_nav_return,
+    safe_sort,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+_CHINA_TZ = timezone(timedelta(hours=8))
 
 # ─── Redis 缓存层 ───────────────────────────────────────────────────────────────
 
@@ -61,20 +69,56 @@ def _get_redis() -> Optional[Redis]:
     return _redis
 
 CACHE_TTL = {
-    "funds":           14 * 3600,  # cron 每日 09:30 更新，14h TTL 覆盖到次日 cron
-    "etfs":            5  * 60,    # ETF 实时行情，5min 有效
+    "funds":           36 * 3600,  # 日更字段；跨过一次失败的 cron 仍可读取热缓存
+    "etfs":            36 * 3600,  # 每个 A 股交易日收盘后固化，不再做 5 分钟轮询
     "fx_history":      24 * 3600,  # 汇率历史，24h 有效
     "news":            30 * 60,    # 市场新闻，30min 缓存
     "premium_history": 12 * 3600,  # 溢价率历史，cron 每日更新
-    "live_data":       4  * 3600,
+    "live_data":       36 * 3600,
+    "monthly_returns": 36 * 3600,
+    "market_sentiment": 20 * 3600,
+    "fx_current":       20 * 3600,
 }
+# 不完整/过期热快照只用于短暂兜底，必须尽快给下一次请求恢复机会。
+RECOVERY_CACHE_TTL = 5 * 60
+RECOVERY_GATE_PREFIX = "recovery_gate:"
+
+# A partial cache deliberately bypasses the normal hot-cache fast path.  Keep
+# that recovery from becoming a thundering herd when several tabs request the
+# same key at once: one request refreshes, followers serve the existing partial
+# snapshot immediately.
+_RECOVERY_REFRESH_LOCKS: dict = {}
+_RECOVERY_REFRESH_LOCKS_GUARD = Lock()
+
+
+def _try_recovery_refresh(cache_key: str):
+    with _RECOVERY_REFRESH_LOCKS_GUARD:
+        lock = _RECOVERY_REFRESH_LOCKS.setdefault(cache_key, Lock())
+    return lock if lock.acquire(blocking=False) else None
+
+LKG_PREFIX = "lkg:"
+DATA_CACHE_NAMESPACE = "wise:data:v2:"
+_VERSIONED_DATA_KEYS = {
+    "etfs", "live_data", "live_data:meta", "monthly_returns_v1",
+    "market_sentiment", "market_sentiment_v2", "pe_history_v3", "fx_history", "fx_usdcny",
+    "news", "market_ai_insight_v2",
+}
+_VERSIONED_DATA_PREFIXES = ("funds_", "prem_hist_", RECOVERY_GATE_PREFIX)
+
+
+def _storage_key(key: str) -> str:
+    """Version market-data keys without moving users, favorites or QDII state."""
+    core = key[len(LKG_PREFIX):] if key.startswith(LKG_PREFIX) else key
+    if core in _VERSIONED_DATA_KEYS or core.startswith(_VERSIONED_DATA_PREFIXES):
+        return f"{DATA_CACHE_NAMESPACE}{key}"
+    return key
 
 def _cache_get(key: str) -> Optional[any]:
     r = _get_redis()
     if not r:
         return None
     try:
-        val = r.get(key)
+        val = r.get(_storage_key(key))
         if val:
             logger.info(f"[redis] hit {key}")
             return json.loads(val) if isinstance(val, str) else val
@@ -87,20 +131,58 @@ def _cache_set(key: str, data: any, ttl: int):
     if not r:
         return
     try:
-        r.set(key, json.dumps(data, ensure_ascii=False), ex=ttl)
+        r.set(_storage_key(key), json.dumps(data, ensure_ascii=False), ex=ttl)
         logger.info(f"[redis] set {key} ttl={ttl}s")
     except Exception as e:
         logger.warning(f"[redis:set] {key}: {e}")
+
+
+def _lkg_get(key: str) -> Optional[any]:
+    """读取永久 Last-Known-Good；它和热缓存使用不同 Redis key。"""
+    return _cache_get(f"{LKG_PREFIX}{key}")
+
+
+def _lkg_set(key: str, data: any):
+    """只在候选数据通过校验后写入，不设置 TTL。"""
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        r.set(_storage_key(f"{LKG_PREFIX}{key}"), json.dumps(data, ensure_ascii=False))
+        logger.info(f"[redis] lkg set {key}")
+    except Exception as e:
+        logger.warning(f"[redis:lkg:set] {key}: {e}")
+
+
+def _publish_cache(key: str, data: any, ttl: int):
+    """先保存永久好数据，再发布热缓存；不会预删当前可读数据。"""
+    _lkg_set(key, data)
+    _cache_set(key, data, ttl)
+    _cache_delete(f"{RECOVERY_GATE_PREFIX}{key}")
 
 def _cache_delete(key: str):
     r = _get_redis()
     if not r:
         return
     try:
-        r.delete(key)
+        r.delete(_storage_key(key))
         logger.info(f"[redis] del {key}")
     except Exception as e:
         logger.warning(f"[redis:del] {key}: {e}")
+
+
+def _recovery_gate_active(cache_key: str) -> bool:
+    return bool(_cache_get(f"{RECOVERY_GATE_PREFIX}{cache_key}"))
+
+
+def _cache_recovery_snapshot(cache_key: str, data: any) -> None:
+    """Publish a short-lived fallback and a same-length retry backoff marker."""
+    _cache_set(cache_key, data, RECOVERY_CACHE_TTL)
+    _cache_set(
+        f"{RECOVERY_GATE_PREFIX}{cache_key}",
+        {"active": True},
+        RECOVERY_CACHE_TTL,
+    )
 
 def _cache_mget(keys: List[str]) -> Dict[str, any]:
     """批量 MGET，返回 {key: value} 字典（缺失的 key 不在字典里）"""
@@ -139,19 +221,6 @@ def _cache_mset(items: Dict[str, any], ttl: int):
     except Exception as e:
         logger.warning(f"[redis:mset] {e}")
 
-def _cache_delete_pattern(pattern: str):
-    """批量删除匹配 pattern 的所有 Redis key（用于 force refresh 清股价缓存）"""
-    r = _get_redis()
-    if not r:
-        return
-    try:
-        keys = r.keys(pattern)
-        if keys:
-            r.delete(*keys)
-            logger.info(f"[redis] del pattern={pattern} count={len(keys)}")
-    except Exception as e:
-        logger.warning(f"[redis:del_pattern] {pattern}: {e}")
-
 def _mem_get(key: str, kind: str) -> Optional[any]:
     return _cache_get(key)
 
@@ -160,10 +229,10 @@ def _mem_set(key: str, data: any):
     _cache_set(key, data, ttl)
 
 def _file_save(key: str, data: any):
-    pass  # Redis 已持久化，无需额外写文件
+    _lkg_set(key, data)
 
 def _file_load(key: str) -> Optional[any]:
-    return _cache_get(key)
+    return _lkg_get(key)
 
 def kind_of(key: str) -> str:
     """根据 key 推断缓存类型"""
@@ -171,15 +240,17 @@ def kind_of(key: str) -> str:
     if key.startswith("prem_hist_"):    return "premium_history"
     if key == "etfs":                   return "etfs"
     if key == "live_data":              return "live_data"
+    if key == "monthly_returns_v1":     return "monthly_returns"
     if key == "fx_history":             return "fx_history"
+    if key == "fx_usdcny":              return "fx_current"
     if key == "news":                   return "news"
+    if key in ("market_sentiment", "market_sentiment_v2"):
+        return "market_sentiment"
     return "funds"
 
-# ─── 静态数据（与 App.jsx FALLBACK 严格同步）─────────────────────────────────
-# 这些是不变字段：费率、规模、跟踪误差、每日限额
-# 动态字段（ytd_return/nav/buy_status）会被实时数据覆盖，此处为保底值
-
-# 静态基金数据 — 2026-04-09 更新
+# ─── 迁移期旧字面量 ──────────────────────────────────────────────────────────
+# 仅供离线 catalog bootstrap 和显式灾备；正常 API 启动后会被产品目录替换。
+# 这些 2026-04 旧值不参与生产数据展示，也不得作为动态字段的静默兜底。
 STATIC_FUNDS: Dict[str, List[dict]] = {
     "nasdaq_passive": [
         {"code":"019524","name":"华泰柏瑞纳斯达克100ETF联接(QDII)A","fee_rate":0.65,"scale":6.8,"ytd_return":16.66,"track_error":1.65,"daily_limit":"10元", "buy_status":"open",  "code_c":"019525"},
@@ -245,9 +316,8 @@ STATIC_FUNDS: Dict[str, List[dict]] = {
     ],
 }
 
-# 场内ETF — 名称/tracking_index/scale/ytd_return 为稳定字段（经 fundgz 实测验证）
-# market_price/nav/premium/volume/change_pct 为实时字段，由 _build_etfs 每次回填
-# 静态 nav/premium 基于 2026-03-27 fundgz 数据，是合理的兜底显示值
+# 以下字面量仅供初次 catalog bootstrap 和显式 ALLOW_LEGACY_CATALOG 灾备。
+# 正常运行会由 catalog/products.v1.json 完整替换；其中旧行情绝不作为展示兜底。
 STATIC_ETFS: List[dict] = [
     # ── 纳斯达克100 ──  scale/ytd_return/fee_rate 基于 2026-04-02 实测数据
     {"code":"513100","name":"国泰纳斯达克100ETF",        "tracking_index":"纳斯达克100",        "scale":167.9,"ytd_return":16.99,"market_price":1.708,"nav":1.6276,"premium":4.94,"volume":3.6, "change_pct":0.0,"fee_rate":0.80,"track_error":1.07},
@@ -269,6 +339,83 @@ STATIC_ETFS: List[dict] = [
     {"code":"159612","name":"国泰标普500ETF(QDII)",       "tracking_index":"标普500",            "scale":7.9,  "ytd_return":13.74,"market_price":1.735,"nav":1.6582,"premium":4.63,"volume":0.1, "change_pct":0.0,"fee_rate":0.75,"track_error":1.01},
     {"code":"513650","name":"南方标普500ETF(QDII)",       "tracking_index":"标普500",            "scale":46.8, "ytd_return":13.82,"market_price":1.661,"nav":1.6117,"premium":3.06,"volume":1.0, "change_pct":0.0,"fee_rate":0.75,"track_error":1.05},
 ]
+
+# QDII 估值模块本轮不改，保留它原先使用的主动基金集合。
+_LEGACY_QDII_CODES = [row["code"] for row in STATIC_FUNDS["us_active"]]
+
+
+def _load_product_catalog() -> Optional[tuple]:
+    """从唯一产品目录生成 API 运行时静态元数据；生产环境失败即停止启动。"""
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "catalog", "products.v1.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            catalog = json.load(handle)
+        funds = {"nasdaq_passive": [], "sp500_passive": [], "us_active": []}
+        etfs = []
+        for product in catalog.get("products", []):
+            # 产品目录是 Web/API 的唯一清单；QDII 估值仍使用上方冻结的旧集合。
+            code = str(product["code"])
+            snapshot = product.get("static_snapshot") or {}
+            metadata_as_of = product.get("metadata_as_of")
+            annual = snapshot.get("annual_return_2025")
+            common = {
+                "code": code,
+                "name": product.get("name") or code,
+                "fee_rate": snapshot.get("fee"),
+                "scale": snapshot.get("scale"),
+                "scale_as_of": snapshot.get("scale_as_of") or metadata_as_of,
+                "ytd_return": annual,                  # legacy v1 alias
+                "annual_return_2025": annual,
+                "annual_return_2025_as_of": snapshot.get("annual_return_2025_as_of") or (
+                    "2025-12-31" if annual is not None else None
+                ),
+                # 没有独立上游披露日的旧误差值不可作为产品真值。
+                "track_error": snapshot.get("track_error") if snapshot.get("track_error_as_of") else None,
+                # 跟踪误差的日期不能借用规模报告期；没有独立日期就明确为空。
+                "track_error_as_of": snapshot.get("track_error_as_of"),
+                "metadata_source": "catalog/products.v1.json",
+                "share_class": product.get("share_class"),
+                "master_code": product.get("master_code") or code,
+            }
+            if product.get("product_type") == "etf":
+                etfs.append({
+                    **common,
+                    "tracking_index": product.get("tracking_index"),
+                    # 行情字段只允许由每日快照写入。
+                    "market_price": None,
+                    "nav": None,
+                    "premium": None,
+                    "volume": None,
+                    "change_pct": None,
+                })
+                continue
+
+            related = product.get("related_share_codes") or []
+            row = {
+                **common,
+                "code_c": related[0] if related else None,
+                # 申购状态/额度是日更字段；目录中的迁移旧值只保留审计，不作冷启动真值。
+                "daily_limit": "待确认",
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+            }
+            for category in product.get("categories") or []:
+                if category in funds:
+                    funds[category].append(dict(row))
+
+        if not all(funds.values()) or not etfs:
+            raise ValueError("catalog is missing a required product category")
+        return funds, etfs
+    except Exception as exc:
+        if os.environ.get("ALLOW_LEGACY_CATALOG", "").lower() in {"1", "true", "yes"}:
+            logger.error(f"[catalog] explicitly using legacy literals after catalog failure: {exc}")
+            return None
+        raise RuntimeError(f"required product catalog could not be loaded: {exc}") from exc
+
+
+_catalog_runtime = _load_product_catalog()
+if _catalog_runtime:
+    STATIC_FUNDS, STATIC_ETFS = _catalog_runtime
 
 # 汇率/指数月度静态数据（Yahoo Finance 被墙时的兜底，来源：Wind / Bloomberg 公开数据）
 STATIC_FX_HISTORY = [
@@ -303,7 +450,7 @@ STATIC_FX_HISTORY = [
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "http://fund.eastmoney.com/",
+    "Referer": "https://fund.eastmoney.com/",
 }
 
 YF_HEADERS = {
@@ -315,6 +462,21 @@ YF_HEADERS = {
 # ─── Yahoo Finance crumb 认证 ────────────────────────────────────────────────
 # Yahoo Finance 2024 起强制要求 cookie+crumb，不带则返回 429
 _YF_CRUMB: dict = {"crumb": None, "cookies": None, "ts": 0.0}
+_YF_CRUMB_LOCK = Lock()
+
+
+def _yf_invalidate_crumb(expected_crumb: Optional[str] = None):
+    """Invalidate only the credential that actually failed.
+
+    The expected value prevents a late 401 from deleting a credential another
+    request has already refreshed.
+    """
+    with _YF_CRUMB_LOCK:
+        current = _YF_CRUMB.get("crumb")
+        if expected_crumb is not None and current not in (None, expected_crumb):
+            return
+        _YF_CRUMB.update({"crumb": None, "cookies": None, "ts": 0.0})
+        _cache_delete("yf_crumb")
 
 def _yf_get_crumb() -> tuple:
     """
@@ -323,31 +485,40 @@ def _yf_get_crumb() -> tuple:
     """
     now = time.time()
     if _YF_CRUMB["crumb"] and now - _YF_CRUMB["ts"] < 12 * 3600:
-        return _YF_CRUMB["crumb"], _YF_CRUMB["cookies"]
+        return _YF_CRUMB["crumb"], _YF_CRUMB["cookies"] or {}
 
-    cached = _cache_get("yf_crumb")
-    if cached and cached.get("crumb"):
-        _YF_CRUMB.update({**cached, "ts": now})
-        return cached["crumb"], cached.get("cookies") or {}
+    # A cold page starts several Yahoo consumers concurrently.  Serialize the
+    # cookie/crumb handshake and re-check state after acquiring the lock.
+    with _YF_CRUMB_LOCK:
+        now = time.time()
+        if _YF_CRUMB["crumb"] and now - _YF_CRUMB["ts"] < 12 * 3600:
+            return _YF_CRUMB["crumb"], _YF_CRUMB["cookies"] or {}
 
-    try:
-        import requests as _req
-        sess = _req.Session()
-        sess.get("https://finance.yahoo.com/", headers=YF_HEADERS, timeout=(5, 15), verify=False)
-        resp = sess.get(
-            "https://query1.finance.yahoo.com/v1/test/getcrumb",
-            headers=YF_HEADERS, timeout=(4, 10), verify=False,
-        )
-        if resp.ok and resp.text.strip():
-            crumb   = resp.text.strip()
-            cookies = dict(sess.cookies)
-            _YF_CRUMB.update({"crumb": crumb, "cookies": cookies, "ts": now})
-            _cache_set("yf_crumb", {"crumb": crumb, "cookies": cookies}, 12 * 3600)
-            logger.info(f"[yf_crumb] obtained crumb={crumb[:8]}…")
-            return crumb, cookies
-    except Exception as e:
-        logger.warning(f"[yf_crumb] failed: {e}")
-    return None, {}
+        cached = _cache_get("yf_crumb")
+        if cached and cached.get("crumb"):
+            _YF_CRUMB.update({**cached, "ts": now})
+            return cached["crumb"], cached.get("cookies") or {}
+
+        try:
+            import requests as _req
+            # fc.yahoo.com returns the A3 cookie even though the page itself is
+            # 404.  finance.yahoo.com can return a cookie-less regional page.
+            sess = _req.Session()
+            sess.get("https://fc.yahoo.com", headers=YF_HEADERS, timeout=(5, 15))
+            resp = sess.get(
+                "https://query1.finance.yahoo.com/v1/test/getcrumb",
+                headers=YF_HEADERS, timeout=(4, 10),
+            )
+            crumb = resp.text.strip() if resp.ok else ""
+            if crumb and not crumb.startswith(("{", "<")):
+                cookies = dict(sess.cookies)
+                _YF_CRUMB.update({"crumb": crumb, "cookies": cookies, "ts": now})
+                _cache_set("yf_crumb", {"crumb": crumb, "cookies": cookies}, 12 * 3600)
+                logger.info(f"[yf_crumb] obtained crumb={crumb[:8]}…")
+                return crumb, cookies
+        except Exception as e:
+            logger.warning(f"[yf_crumb] failed: {e}")
+        return None, {}
 
 
 def _yf_chart(symbol: str, interval: str = "1d", range_: str = "5d") -> Optional[dict]:
@@ -368,11 +539,12 @@ def _yf_chart(symbol: str, interval: str = "1d", range_: str = "5d") -> Optional
                 cookies=cookies or {},
                 timeout=(4, 10),
             )
-            if resp and resp.status_code == 429 and attempt == 0:
+            if resp is not None and resp.status_code in (401, 429) and attempt == 0:
                 # crumb 可能过期，重置后重试
-                _YF_CRUMB["crumb"] = None
-                _cache_delete("yf_crumb")
-                logger.warning(f"[yf_chart] 429 for {symbol}, resetting crumb and retrying")
+                _yf_invalidate_crumb(crumb)
+                logger.warning(
+                    f"[yf_chart] {resp.status_code} for {symbol}, resetting crumb and retrying"
+                )
                 continue
             if resp and resp.ok:
                 return resp.json()["chart"]["result"][0]
@@ -426,19 +598,42 @@ def _nasdaq_fetch(symbol: str) -> dict:
 
 # ─── HTTP 工具 ─────────────────────────────────────────────────────────────────
 
+try:
+    _PROVIDER_MAX_CONCURRENCY = max(2, min(20, int(os.environ.get("PROVIDER_MAX_CONCURRENCY", "12"))))
+except ValueError:
+    _PROVIDER_MAX_CONCURRENCY = 12
+_PROVIDER_SEMAPHORE = BoundedSemaphore(_PROVIDER_MAX_CONCURRENCY)
+_HTTP_LOCAL = local()
+
+
+def _thread_http_session() -> requests.Session:
+    session = getattr(_HTTP_LOCAL, "session", None)
+    if session is None:
+        session = requests.Session()
+        _HTTP_LOCAL.session = session
+    return session
+
 def _get(url, **kwargs) -> Optional[requests.Response]:
-    """安全 GET：2s 建连超时 + 4s 读取超时，被墙时快速失败"""
+    """有全局并发上限的安全 GET；避免一次 cron 对上游产生请求风暴。"""
+    # Builders never create more workers than this semaphore, but independent
+    # routes can briefly overlap during a cold page load.  Queue briefly rather
+    # than dropping an otherwise valid provider request after only two seconds.
+    if not _PROVIDER_SEMAPHORE.acquire(timeout=8):
+        logger.warning(f"GET skipped (provider concurrency limit) {url[:60]}")
+        return None
     try:
-        return requests.get(url, timeout=kwargs.pop("timeout", (2, 4)), **kwargs)
+        return _thread_http_session().get(url, timeout=kwargs.pop("timeout", (2, 4)), **kwargs)
     except Exception as e:
         logger.warning(f"GET {url[:60]}: {e}")
         return None
+    finally:
+        _PROVIDER_SEMAPHORE.release()
 
 # ─── 数据抓取 ──────────────────────────────────────────────────────────────────
 
 def fetch_fund_realtime(code: str) -> dict:
     """天天基金实时估值（JSONP）"""
-    resp = _get(f"http://fundgz.1234567.com.cn/js/{code}.js", headers=HEADERS)
+    resp = _get(f"https://fundgz.1234567.com.cn/js/{code}.js", headers=HEADERS)
     if resp and resp.ok:
         m = re.search(r"jsonpgz\((.+)\)", resp.text)
         if m:
@@ -465,78 +660,292 @@ def fetch_fund_performance(code: str) -> list:
     return []
 
 
-# 只包含会变动的字段（fee_rate/track_error 不变；scale 季度更新；daily_limit/buy_status 每日可能变化）
-# ⚠️  ytd_return（25年涨幅）已从此集合移除，永远使用 STATIC_FUNDS 中的写死值，禁止动态覆盖。
-# ⚠️  如需修改 ytd_return 数据，必须直接编辑 STATIC_FUNDS / FALLBACK，并征得用户同意后才能改动。
-_VOLATILE_FUND_FIELDS = {"nav", "nav_date", "buy_status", "daily_limit", "scale"}
+def _fetch_basic_information(code: str) -> Optional[dict]:
+    """获取东方财富基金基础行情；空 ``Datas`` 不计为成功。"""
+    for attempt in range(2):
+        try:
+            resp = _get(
+                "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation",
+                params={
+                    "FCODE": code,
+                    "deviceid": "wise-etf",
+                    "plat": "Wap",
+                    "product": "EFund",
+                    "version": "6.5.0",
+                },
+                headers=_MOBILE_HEADERS,
+                timeout=(3, 8),
+            )
+            if not (resp and resp.ok):
+                continue
+            payload = resp.json()
+            data = payload.get("Datas") if payload.get("ErrCode") == 0 else None
+            if isinstance(data, dict) and data:
+                return data
+        except Exception as exc:
+            logger.warning(f"[fund_basic] {code} attempt={attempt + 1}: {exc}")
+    return None
+
+
+_TRACK_ERROR_RE = re.compile(r"年化跟踪误差\s+同类平均跟踪误差[\s\S]{0,160}?([0-9]+(?:\.[0-9]+)?)%")
+_TRACK_ERROR_DATE_RE = re.compile(r"年化跟踪误差[\s\S]{0,1200}?截止至[：:]\s*(\d{4}-\d{2}-\d{2})")
+
+
+def _fetch_tracking_error(code: str) -> Optional[dict]:
+    """从基金特色数据页读取披露值与披露日；失败不返回伪默认值。"""
+    try:
+        resp = _get(
+            f"https://fundf10.eastmoney.com/tsdata_{code}.html",
+            headers=HEADERS,
+            timeout=(3, 8),
+        )
+        if not (resp and resp.ok):
+            return None
+        import html as _html
+        plain = _html.unescape(re.sub(r"<[^>]+>", " ", resp.text))
+        plain = re.sub(r"\s+", " ", plain)
+        match = _TRACK_ERROR_RE.search(plain)
+        date_match = _TRACK_ERROR_DATE_RE.search(plain)
+        value = parse_number(match.group(1)) if match else None
+        disclosed_as_of = date_match.group(1) if date_match else None
+        if value is None or value < 0 or not disclosed_as_of:
+            return None
+        return {
+            "track_error": round(value, 2),
+            "track_error_as_of": disclosed_as_of,
+            "track_error_source": "eastmoney_tsdata",
+            "track_error_fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    except Exception as exc:
+        logger.warning(f"[track_error] {code}: {exc}")
+        return None
+
+
+def _format_daily_limit(status: str, limit_cny: Optional[float]) -> str:
+    if status == "suspended":
+        return "暂停申购"
+    if status == "limited" and limit_cny is not None:
+        value = int(limit_cny) if float(limit_cny).is_integer() else round(limit_cny, 2)
+        return f"{value}元"
+    if status == "open":
+        return "不限额"
+    return "待确认"
+
+
+def _normalize_basic_information(code: str, data: dict) -> dict:
+    """把东方财富字段投影成清晰字段，同时保留旧客户端所需字段。"""
+    nav = parse_number(data.get("DWJZ"))
+    day_change = parse_number(data.get("RZDF"))
+    rolling_1y = parse_number(data.get("SYL_1N"))
+    return_ytd = parse_number(data.get("SYL_JN"))
+    nav_date = str(data.get("FSRQ") or "").strip() or None
+    purchase = normalize_purchase(data.get("SGZT"), data.get("MAXSG"))
+    status = purchase.status
+    # legacy v1 中 limited 仍视为可申购，避免旧小程序把它误画成暂停。
+    legacy_status = "open" if status in ("open", "limited") else status
+    fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    return {
+        "code": code,
+        "nav": nav,
+        "nav_date": nav_date,
+        "rolling_1y_as_of": nav_date,
+        "day_change_as_of": nav_date,
+        "day_change": day_change,
+        "rolling_1y": rolling_1y,
+        "return_ytd": return_ytd,
+        "buy_status": legacy_status,
+        "subscription_status": status,
+        "subscription_status_status": "fresh" if status != "unknown" else "unavailable",
+        "daily_limit": _format_daily_limit(status, purchase.daily_limit_cny),
+        "daily_limit_cny": purchase.daily_limit_cny,
+        "subscription_as_of": datetime.now(_CHINA_TZ).date().isoformat(),
+        "source": "eastmoney_basic",
+        "daily_source_status": "full",
+        "fetched_at": fetched_at,
+    }
+
+
+_NET_WORTH_TREND_RE = re.compile(r"Data_netWorthTrend\s*=\s*(\[.*?\]);", re.DOTALL)
+_AC_WORTH_TREND_RE = re.compile(r"Data_ACWorthTrend\s*=\s*(\[.*?\]);", re.DOTALL)
+
+
+def _valid_iso_date(value: object) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        date.fromisoformat(value.strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _valid_iso_datetime(value: object) -> bool:
+    if not isinstance(value, str) or "T" not in value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.tzinfo is not None
+    except ValueError:
+        return False
+
+
+def _china_date_from_timestamp_ms(value: object) -> Optional[str]:
+    timestamp_ms = parse_number(value)
+    if timestamp_ms is None or timestamp_ms <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp_ms / 1000, _CHINA_TZ).date().isoformat()
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def _latest_ac_nav_date(points: list) -> Optional[str]:
+    for point in reversed(points or []):
+        if isinstance(point, dict):
+            timestamp, nav = point.get("x"), point.get("y")
+        elif isinstance(point, (list, tuple)) and len(point) >= 2:
+            timestamp, nav = point[0], point[1]
+        else:
+            continue
+        if (parse_number(nav) or 0) > 0:
+            as_of = _china_date_from_timestamp_ms(timestamp)
+            if as_of:
+                return as_of
+    return None
+
+
+def _parse_pingzhong_daily(code: str, script: str) -> Optional[dict]:
+    """Parse Eastmoney's public NAV script without inferring purchase state."""
+    try:
+        trend_match = _NET_WORTH_TREND_RE.search(script or "")
+        trend = json.loads(trend_match.group(1)) if trend_match else []
+        latest = next(
+            (
+                point for point in reversed(trend)
+                if isinstance(point, dict)
+                and parse_number(point.get("x")) is not None
+                and (parse_number(point.get("y")) or 0) > 0
+            ),
+            None,
+        )
+        if not latest:
+            return None
+
+        timestamp_ms = parse_number(latest.get("x"))
+        nav = parse_number(latest.get("y"))
+        if timestamp_ms is None or nav is None or timestamp_ms <= 0 or nav <= 0:
+            return None
+        # Eastmoney serializes a China-local midnight as epoch milliseconds.
+        # Interpreting it as a UTC calendar date shifts the observation back
+        # one day, so convert the instant to UTC+8 before extracting the date.
+        nav_date = _china_date_from_timestamp_ms(timestamp_ms)
+        if not nav_date:
+            return None
+
+        ac_match = _AC_WORTH_TREND_RE.search(script or "")
+        ac_trend = json.loads(ac_match.group(1)) if ac_match else []
+        rolling_1y = rolling_nav_return(ac_trend)
+        rolling_as_of = _latest_ac_nav_date(ac_trend) if rolling_1y is not None else None
+        return {
+            "code": code,
+            "nav": nav,
+            "nav_date": nav_date,
+            "rolling_1y_as_of": rolling_as_of,
+            "day_change_as_of": nav_date,
+            "day_change": parse_number(latest.get("equityReturn")),
+            "rolling_1y": rolling_1y,
+            "source": "eastmoney_pingzhongdata",
+            # This source has current NAV history, but deliberately has no
+            # authoritative purchase status or limit.
+            "daily_source_status": "partial",
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    except (TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+        logger.warning(f"[pingzhong_parse] {code}: {exc}")
+        return None
+
+
+def _fetch_pingzhong_daily(code: str) -> Optional[dict]:
+    """Fallback for daily NAV fields when BasicInformation is unavailable."""
+    try:
+        resp = _get(
+            f"https://fund.eastmoney.com/pingzhongdata/{code}.js",
+            headers=HEADERS,
+            timeout=(3, 8),
+        )
+        if not (resp and resp.ok):
+            return None
+        return _parse_pingzhong_daily(code, resp.text)
+    except Exception as exc:
+        logger.warning(f"[pingzhong_daily] {code}: {exc}")
+        return None
+
+
+def _fetch_daily_snapshot(code: str) -> Optional[dict]:
+    """Fetch a daily product snapshot with a same-provider NAV fallback.
+
+    BasicInformation remains the only source for purchase status and limits.
+    The fallback is allowed to fill NAV-derived fields, never subscription
+    fields, so a stale limit cannot be presented as current.
+    """
+    basic = _fetch_basic_information(code)
+    if basic:
+        snapshot = _normalize_basic_information(code, basic)
+        daily_groups = (
+            ("nav", "nav_date"),
+            ("day_change", "day_change_as_of"),
+            ("rolling_1y", "rolling_1y_as_of"),
+        )
+        if any(snapshot.get(value) is None or not _valid_iso_date(snapshot.get(as_of)) for value, as_of in daily_groups):
+            fallback = _fetch_pingzhong_daily(code)
+        else:
+            fallback = None
+        if fallback:
+            # Each value/date pair is indivisible.  Never attach a fallback
+            # value to BasicInformation's date (or vice versa).
+            for value, as_of in daily_groups:
+                if fallback.get(value) is not None and _valid_iso_date(fallback.get(as_of)):
+                    snapshot[value] = fallback[value]
+                    snapshot[as_of] = fallback[as_of]
+            snapshot["source"] = "eastmoney_basic+pingzhongdata"
+        # Remove half-valid groups rather than publishing a value with the
+        # wrong or missing observation date.
+        for value, as_of in daily_groups:
+            if snapshot.get(value) is None or not _valid_iso_date(snapshot.get(as_of)):
+                snapshot[value] = None
+                snapshot[as_of] = None
+        snapshot["daily_source_status"] = "full" if (
+            snapshot.get("nav") is not None
+            and _valid_iso_date(snapshot.get("nav_date"))
+            and snapshot.get("day_change") is not None
+            and _valid_iso_date(snapshot.get("day_change_as_of"))
+            and snapshot.get("rolling_1y") is not None
+            and _valid_iso_date(snapshot.get("rolling_1y_as_of"))
+            and snapshot.get("subscription_status") != "unknown"
+        ) else "partial"
+        return snapshot
+    return _fetch_pingzhong_daily(code)
+
+
+# 每日会变的字段；规模、费率和自然年度收益由低频元数据任务维护。
+_VOLATILE_FUND_FIELDS = {
+    "nav", "nav_date", "day_change", "day_change_as_of", "rolling_1y",
+    "rolling_1y_as_of", "return_ytd",
+    "buy_status", "subscription_status", "daily_limit", "daily_limit_cny",
+    "subscription_as_of", "subscription_status_status", "source", "fetched_at", "track_error",
+    "track_error_as_of", "track_error_source", "track_error_fetched_at",
+    "daily_source_status",
+}
 
 
 def fetch_one_fund(code: str, category: str, _meta_cached=None) -> Optional[dict]:
-    realtime = fetch_fund_realtime(code)
-    name     = realtime.get("name", "")
-
-    # FOF/部分QDII基金 fundgz 接口无数据，不 early-return，仍继续拉申购状态
-    if name:
-        result: dict = {
-            "code":     code,
-            "nav":      float(realtime.get("dwjz", 0)),
-            "nav_date": realtime.get("jzrq", ""),
-        }
-    else:
-        result: dict = {"code": code}
-
-    # 实时申购状态 & 每日限额（SGZT/MAXSG）
-    try:
-        r = _get(
-            "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation",
-            params={"FCODE": code, "deviceid": "wise-etf",
-                    "plat": "Wap", "product": "EFund", "version": "6.5.0"},
-            headers=_MOBILE_HEADERS, timeout=(3, 8))
-        if r and r.ok:
-            d = r.json().get("Datas", {})
-            if d:
-                sgzt = d.get("SGZT", "")
-                maxsg = d.get("MAXSG", "")
-                # 已限购写死：暂停申购
-                if code in ("160213",):
-                    result["buy_status"] = "suspended"
-                    result["daily_limit"] = "暂停申购"
-                elif sgzt:
-                    has_limit = maxsg and str(maxsg) not in ("", "--", "0", "None")
-                    # SGZT 优先：含"暂停"直接短路，MAXSG 残留值不干扰判断
-                    if "暂停" in sgzt:
-                        result["buy_status"] = "suspended"
-                        result["daily_limit"] = "暂停申购"
-                    else:
-                        if has_limit:
-                            try:
-                                val = int(float(maxsg))
-                                result["daily_limit"] = "不限额" if val >= 500_000 else f"{val}元"
-                            except (ValueError, TypeError):
-                                result["daily_limit"] = f"{maxsg}元"
-                            result["buy_status"] = "open"
-                        else:
-                            result["buy_status"] = "open"
-                            result["daily_limit"] = "不限额"
-    except Exception:
-        pass
-
-    # 从 pingzhongdata 获取：2025全年收益率（与近1年滚动区分）+ us_active规模（缓存 12h）
-    try:
-        meta = fetch_fund_meta(code, _meta_cached)
-        if meta.get("ytd_return") is not None:
-            result["ytd_return"] = meta["ytd_return"]
-        if category == "us_active" and meta.get("scale") is not None:
-            result["scale"] = meta["scale"]
-    except Exception:
-        pass
-
-    return result
+    return _fetch_daily_snapshot(code)
 
 
 _SINA_HEADERS = {
     "User-Agent": HEADERS["User-Agent"],
-    "Referer":    "http://finance.sina.com.cn/",
+    "Referer":    "https://finance.sina.com.cn/",
 }
 
 def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
@@ -550,7 +959,7 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
         return "sh" if c.startswith("5") else "sz"
 
     symbols = ",".join(f"{_prefix(c)}{c}" for c in codes)
-    resp    = _get(f"http://hq.sinajs.cn/list={symbols}",
+    resp    = _get(f"https://hq.sinajs.cn/list={symbols}",
                    headers=_SINA_HEADERS, timeout=(2, 6))
     if not (resp and resp.ok):
         return {}
@@ -579,7 +988,14 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
             result[code] = {
                 "market_price": curr_price,
                 "volume":       round(volume_cny / 1e8, 2),   # 转换为亿
+                "turnover_cny_100m": round(volume_cny / 1e8, 2),
                 "change_pct":   change_pct,
+                "market_change_pct": change_pct,
+                "quote_as_of": (
+                    f"{parts[30]}T{parts[31]}+08:00" if len(parts) > 31 and parts[30] and parts[31]
+                    else None
+                ),
+                "quote_source": "sina",
             }
         except Exception:
             continue
@@ -624,7 +1040,7 @@ def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
 
     symbols_str = ",".join(sina_to_yahoo.keys())
     try:
-        resp = _get(f"http://hq.sinajs.cn/list={symbols_str}",
+        resp = _get(f"https://hq.sinajs.cn/list={symbols_str}",
                     headers=_SINA_HEADERS, timeout=(3, 8))
         if not (resp and resp.ok):
             return {}
@@ -745,18 +1161,23 @@ def _fetch_intl_stocks(symbols: List[str]) -> Dict[str, float]:
 
 def fetch_etfs_em_fallback(codes: List[str]) -> Dict[str, dict]:
     """
-    东方财富行情 — Sina 未返回数据时的备用（仅针对缺失 ETF）。
-    f43: 最新价（×1000 → yuan）  f170: 涨跌幅（×100 → %）
+    东方财富 ETF 行情（首选源）。
+    f43: 最新价（×1000 → 元）  f170: 涨跌幅（×100 → %）
+    f48: 成交额（元）           f86: 行情 Unix 时间
     """
     def _secid(c: str) -> str:
         return f"1.{c}" if c.startswith("5") else f"0.{c}"
 
     def _fetch_one(c: str) -> Optional[dict]:
-        resp = _get(
-            "https://push2.eastmoney.com/api/qt/stock/get",
-            params={"secid": _secid(c), "fields": "f43,f170", "cb": "cb"},
-            headers=HEADERS, timeout=(2, 4),
-        )
+        resp = None
+        for _attempt in range(2):
+            resp = _get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={"secid": _secid(c), "fields": "f43,f48,f86,f170", "cb": "cb"},
+                headers=HEADERS, timeout=(3, 6),
+            )
+            if resp and resp.ok:
+                break
         if not (resp and resp.ok):
             return None
         try:
@@ -764,19 +1185,34 @@ def fetch_etfs_em_fallback(codes: List[str]) -> Dict[str, dict]:
             if not m:
                 return None
             d = json.loads(m.group(1)).get("data") or {}
-            price_raw = d.get("f43", 0)
-            chg_raw   = d.get("f170", 0)
-            if not price_raw or price_raw <= 0:
+            price_raw = parse_number(d.get("f43"))
+            chg_raw   = parse_number(d.get("f170"))
+            turnover_raw = parse_number(d.get("f48"))
+            quote_ts = parse_number(d.get("f86"))
+            if price_raw is None or price_raw <= 0:
                 return None
+            quote_as_of = None
+            if quote_ts and quote_ts > 0:
+                try:
+                    quote_as_of = datetime.fromtimestamp(quote_ts, timezone.utc).isoformat(timespec="seconds")
+                except (ValueError, OSError, OverflowError):
+                    pass
+            turnover = round(turnover_raw / 1e8, 2) if turnover_raw is not None else None
             return {
                 "market_price": round(price_raw / 1000, 4),
-                "change_pct":   round(chg_raw / 100, 2),
-                "volume":       0.0,
+                "change_pct":   round(chg_raw / 100, 2) if chg_raw is not None else None,
+                "market_change_pct": round(chg_raw / 100, 2) if chg_raw is not None else None,
+                "volume":       turnover,
+                "turnover_cny_100m": turnover,
+                "quote_as_of": quote_as_of,
+                "quote_source": "eastmoney_push2",
             }
         except Exception:
             return None
 
-    ex  = ThreadPoolExecutor(max_workers=len(codes))
+    if not codes:
+        return {}
+    ex  = ThreadPoolExecutor(max_workers=min(8, len(codes)))
     res: Dict[str, dict] = {}
     try:
         futs = {ex.submit(_fetch_one, c): c for c in codes}
@@ -820,7 +1256,7 @@ def fetch_index_price(symbol: str) -> dict:
         def pct(n):
             if len(pairs) < n + 1:
                 return None
-            base = pairs[-n][1]
+            base = pairs[-(n + 1)][1]
             return round((price - base) / base * 100, 2) if base else None
         def yr1():
             if len(pairs) < 2:
@@ -838,7 +1274,12 @@ def fetch_index_price(symbol: str) -> dict:
             {"date": datetime.utcfromtimestamp(ts).strftime("%m/%d"), "close": round(c, 2)}
             for ts, c in pairs[-15:]
         ]
-        today_str = datetime.utcnow().strftime("%m/%d")
+        market_timestamp = parse_number(meta.get("regularMarketTime"))
+        today_str = (
+            datetime.fromtimestamp(market_timestamp, timezone.utc).strftime("%m/%d")
+            if market_timestamp is not None and market_timestamp > 0
+            else datetime.fromtimestamp(pairs[-1][0], timezone.utc).strftime("%m/%d")
+        )
         if history and history[-1]["date"] != today_str:
             history.append({"date": today_str, "close": round(price, 2)})
         # 今日涨跌（用 regularMarketPreviousClose/previousClose，避免 chartPreviousClose 取到年初价格）
@@ -868,6 +1309,12 @@ def fetch_index_price(symbol: str) -> dict:
             "yr_high": yr_high,
             "yr_low": yr_low,
             "pct_from_high": pct_from_high,  # 距年内高点的差距
+            "as_of": datetime.fromtimestamp(
+                market_timestamp if market_timestamp is not None and market_timestamp > 0 else pairs[-1][0],
+                timezone.utc,
+            ).date().isoformat(),
+            "source": "Yahoo Finance chart",
+            "return_type": "price",
         }
     except Exception as e:
         logger.warning(f"[index_price:{symbol}] {e}")
@@ -875,7 +1322,7 @@ def fetch_index_price(symbol: str) -> dict:
 
 
 def fetch_vix() -> dict:
-    """从 CBOE 官方 API 获取 VIX 恐慌指数（实时，官方权威数据源）"""
+    """从 CBOE 官方延迟行情 API 获取 VIX 恐慌指数。"""
     try:
         url = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
         resp = _get(url, timeout=(4, 10), headers={
@@ -885,15 +1332,20 @@ def fetch_vix() -> dict:
         if not (resp and resp.ok):
             return {}
         d = resp.json().get("data", {})
-        price = d.get("current_price")
-        if not price:
+        price = parse_number(d.get("current_price"))
+        if price is None or price <= 0:
             return {}
         ts = d.get("last_trade_time", "")[:10]
+        change = parse_number(d.get("price_change"))
+        change_pct = parse_number(d.get("price_change_percent"))
         return {
-            "value": round(float(price), 2),
-            "change": round(float(d.get("price_change", 0)), 2),
-            "change_pct": round(float(d.get("price_change_percent", 0)), 2),
+            "value": round(price, 2),
+            "change": round(change, 2) if change is not None else None,
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
             "date": ts,
+            "as_of": ts or None,
+            "source": "CBOE delayed quotes",
+            "status": "fresh" if ts else "partial",
         }
     except Exception as e:
         logger.warning(f"[vix] {e}")
@@ -911,13 +1363,20 @@ def fetch_fear_greed() -> dict:
         if not (resp and resp.ok):
             return {}
         fg = resp.json().get("fear_and_greed", {})
+        score = parse_number(fg.get("score"))
+        if score is None or not 0 <= score <= 100:
+            return {}
         prev_close = fg.get("previous_close")
         prev_week  = fg.get("previous_1_week")
+        timestamp = str(fg.get("timestamp") or "").strip() or None
         return {
-            "score": round(float(fg.get("score", 0)), 1),
+            "score": round(score, 1),
             "rating": fg.get("rating", ""),
             "previous_close": round(float(prev_close), 1) if prev_close is not None else None,
             "previous_1_week": round(float(prev_week), 1) if prev_week is not None else None,
+            "as_of": timestamp,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source": "CNN Fear & Greed",
         }
     except Exception as e:
         logger.warning(f"[fear_greed] {e}")
@@ -955,6 +1414,7 @@ def fetch_sp500_pe() -> dict:
             return _re.sub(r"<[^>]+>", "", s).strip()
         texts = [strip_tags(c) for c in cells]
         current_pe = None
+        current_date = None
         i = 0
         while i < len(texts) - 1:
             date_t = texts[i]
@@ -965,22 +1425,40 @@ def fetch_sp500_pe() -> dict:
                     v = float(m.group(1))
                     if 3.0 < v < 150.0:  # 有效 PE 范围
                         current_pe = v
+                        current_date = date_t
                         break
             i += 1
         if current_pe is None:
             return {}
         rank = sum(1 for x in _PE_HIST if x <= current_pe)
         percentile = round(rank / len(_PE_HIST) * 100)
-        return {"pe": round(current_pe, 1), "percentile": percentile}
+        parsed_date = None
+        if current_date:
+            for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y"):
+                try:
+                    parsed_date = datetime.strptime(current_date, fmt).date().isoformat()
+                    break
+                except ValueError:
+                    pass
+        return {
+            "pe": round(current_pe, 1),
+            "percentile": percentile,
+            "as_of": parsed_date,
+            "source": "Multpl / S&P 500 PE Ratio",
+            "pe_type": "trailing",
+            "percentile_basis": "annual_observations_1950_2025",
+            "percentile_status": "approximate",
+        }
     except Exception as e:
         logger.warning(f"[sp500_pe] {e}")
     return {}
 
 
 def fetch_sp500_pe_history(start_year: int = 1990) -> list:
-    """S&P500 历史月度 PE（start_year 至今）。
-    优先从 multpl.com 抓全量月度数据；若返回数据不足（网站结构变化），
-    则用内嵌年度数据线性插值生成月度序列，并把实时最新 PE 追加到末尾。
+    """S&P500 历史 PE 参考序列。
+
+    Multpl 抓取值标记为 observed；仅有年度样本时生成的月度插值明确
+    标记为 estimated。调用方不得把 estimated 序列描述成月度实测值。
     """
     # ── 内嵌年度 PE（1990–2025，来源 multpl.com 年度均值）────────────────
     _ANNUAL_SP = {
@@ -995,9 +1473,8 @@ def fetch_sp500_pe_history(start_year: int = 1990) -> list:
     }
 
     def _interpolate_annual(annual: dict, from_year: int) -> list:
-        from datetime import date as _date
         years = sorted(annual.keys())
-        current_ym = _date.today().strftime("%Y-%m")
+        current_ym = datetime.now(_CHINA_TZ).strftime("%Y-%m")
         result = []
         for i, yr in enumerate(years):
             if yr < from_year:
@@ -1008,7 +1485,12 @@ def fetch_sp500_pe_history(start_year: int = 1990) -> list:
                 ym = f"{yr}-{mo:02d}"
                 if ym > current_ym:
                     break
-                result.append({"date": ym, "pe": round(pe_s + (pe_e - pe_s) * (mo - 1) / 12, 2)})
+                result.append({
+                    "date": ym,
+                    "pe": round(pe_s + (pe_e - pe_s) * (mo - 1) / 12, 2),
+                    "quality": "estimated",
+                    "source": "embedded_annual_interpolation",
+                })
         return result
 
     # ── 先尝试 multpl.com ────────────────────────────────────────────────
@@ -1036,21 +1518,26 @@ def fetch_sp500_pe_history(start_year: int = 1990) -> list:
                     if m_v:
                         v = float(m_v.group(1))
                         if 3.0 < v < 200.0:
-                            scraped.append({"date": f"{yr}-{_MONTH_MAP.get(mon,1):02d}", "pe": round(v, 2)})
+                            scraped.append({
+                                "date": f"{yr}-{_MONTH_MAP.get(mon,1):02d}",
+                                "pe": round(v, 2),
+                                "quality": "observed",
+                                "source": "multpl_monthly_table",
+                            })
                 i += 1
             scraped.sort(key=lambda x: x["date"])
             # 若数据足够完整（从 2000 年前开始，超过 200 条）直接使用
             if len(scraped) > 200 and scraped[0]["date"] < "2005-01":
                 logger.info(f"[sp500_pe_history] multpl ok, {len(scraped)} pts")
                 return [r for r in scraped if r["date"] >= f"{start_year}-01"]
-            # 否则：用插值历史 + 把抓到的近期实际值覆盖末尾
+            # 否则：用插值历史打底，再与抓到的实测月份取并集。年度表只到
+            # 2025，不能因此把已抓到的 2026 实测行丢掉。
             base = _interpolate_annual(_ANNUAL_SP, start_year)
             if scraped:
-                scraped_map = {r["date"]: r["pe"] for r in scraped}
-                for r in base:
-                    if r["date"] in scraped_map:
-                        r["pe"] = scraped_map[r["date"]]
-            logger.info(f"[sp500_pe_history] fallback+patch, {len(base)} pts")
+                merged = {r["date"]: r for r in base}
+                merged.update({r["date"]: r for r in scraped if r["date"] >= f"{start_year}-01"})
+                base = [merged[key] for key in sorted(merged)]
+            logger.info(f"[sp500_pe_history] fallback+union, {len(base)} pts")
             return base
     except Exception as e:
         logger.warning(f"[sp500_pe_history] {e}")
@@ -1060,63 +1547,73 @@ def fetch_sp500_pe_history(start_year: int = 1990) -> list:
 
 
 def fetch_nasdaq100_pe() -> dict:
-    """获取 QQQ（纳斯达克100）当前市盈率，结合历史年度 PE 分布计算分位。
-    当前 PE：优先直接调 Yahoo Finance quoteSummary API（快速）；备用 yfinance。
-    历史分位：使用 2000–2025 年度 PE 数据（Trailing PE，gurufocus.com 口径）。
+    """获取 QQQ PE，作为纳指100估值代理。
+
+    不再把 2026-04 的硬编码值冒充当前值，也不再用来源混杂的年度数组
+    计算伪精确分位。没有同口径历史序列时 percentile 明确返回 ``None``。
     """
-    # 纳斯达克100年度 PE 历史分布（2000–2025）
-    # 来源：QQQ / NASDAQ-100 历史 PE 数据（Trailing PE）
-    _PE_HIST = [
-        102.37, 48.91, 26.14, 30.39, 26.37, 22.84, 21.44, 24.58, 20.16, 19.53,  # 2000–2009
-        21.28, 18.97, 20.31, 23.15, 23.76, 23.45, 22.78, 26.59, 23.42, 29.84,   # 2010–2019
-        36.20, 38.50, 24.36, 32.18, 34.62, 31.50,                                # 2020–2025
-    ]
-
-    def _calc(pe_val):
-        if not pe_val or not (5.0 < pe_val < 500.0):
-            return {}
-        rank = sum(1 for x in _PE_HIST if x <= pe_val)
-        percentile = round(rank / len(_PE_HIST) * 100)
-        return {"pe": round(pe_val, 1), "percentile": percentile}
-
-    # 方案1：直接调 Yahoo Finance v10 quoteSummary（短超时，避免拖慢整体）
-    try:
-        resp = _get(
-            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/QQQ",
-            params={"modules": "summaryDetail"},
-            timeout=(3, 6),
-            headers={**YF_HEADERS, "Accept": "application/json"},
-        )
-        if resp and resp.ok:
-            detail = resp.json()["quoteSummary"]["result"][0]["summaryDetail"]
-            pe = detail.get("trailingPE", {}).get("raw")
-            result = _calc(pe)
-            if result:
-                return result
-    except Exception as e:
-        logger.warning(f"[nasdaq100_pe] yahoo direct: {e}")
-
-    # 方案2：硬编码兜底（外部API不可达时立即返回，不依赖任何网络请求）
-    from datetime import date as _date
-    _FALLBACK = {
-        "2026-04": 35.1, "2026-03": 30.5, "2026-02": 32.0,
-        "2026-01": 32.8, "2025-12": 32.4, "2025-11": 32.6,
+    # Invesco 是 QQQ 基金管理人；该接口给出带 effectiveDate 的组合加权
+    # harmonic trailing PE，不依赖 Yahoo 的区域性 cookie/crumb 权限。
+    invesco_url = "https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/46090E103"
+    invesco_params = {
+        "variationType": "fundCharacteristics",
+        "idType": "cusip",
+        "productType": "ETF",
     }
-    cur_ym = _date.today().strftime("%Y-%m")
-    for ym in sorted(_FALLBACK.keys(), reverse=True):
-        if ym <= cur_ym:
-            result = _calc(_FALLBACK[ym])
-            if result:
-                logger.info(f"[nasdaq100_pe] fallback {ym}: {_FALLBACK[ym]}")
-                return result
+    invesco_headers = {
+        "User-Agent": YF_HEADERS["User-Agent"],
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.invesco.com/",
+        "Origin": "https://www.invesco.com",
+    }
+    for attempt in range(2):
+        try:
+            resp = _get(
+                invesco_url,
+                params=invesco_params,
+                timeout=(4, 10),
+                headers=invesco_headers,
+            )
+            if resp is not None and resp.ok:
+                payload = resp.json() or {}
+                pe = parse_number(payload.get("priceToEarningsRatio"))
+                effective_date = str(payload.get("effectiveDate") or "").strip() or None
+                if pe is not None and 5.0 < pe < 500.0 and _valid_iso_date(effective_date):
+                    return {
+                        "pe": round(pe, 1),
+                        "percentile": None,
+                        "as_of": effective_date,
+                        "source": "Invesco QQQ fund characteristics",
+                        "pe_type": "weighted_harmonic_trailing",
+                        "proxy": True,
+                        "data_status": "fresh",
+                        "percentile_status": "unavailable_same_basis_history",
+                    }
+        except Exception as e:
+            logger.warning(f"[nasdaq100_pe] invesco attempt {attempt}: {e}")
+        if attempt == 0:
+            time.sleep(0.15)
 
-    return {}
+    # Last resort is an explicitly dated, official published reference.  It is
+    # displayable but must keep the overall market snapshot partial.
+    return {
+        "pe": 34.45,
+        "percentile": None,
+        "as_of": "2026-06-30",
+        "source": "Invesco QQQ Q2 2026 factsheet",
+        "pe_type": "weighted_harmonic_trailing",
+        "proxy": True,
+        "data_status": "reference",
+        "percentile_status": "unavailable_same_basis_history",
+    }
 
 
-def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
-    """获取纳斯达克100历史年度PE（1990–今），插值为月度序列。
-    数据来源：内嵌年度实际值（来自 QQQ/Nasdaq-100 历史记录）。
-    current_pe：当前实时 PE，用于校准近期月度估算；若不传则跳过 yfinance patch。
+def fetch_nasdaq100_pe_history(_current_pe: float = None) -> list:
+    """获取纳指100/QQQ PE 历史参考序列。
+
+    只有来源返回的连续序列标为 observed；fallback 是年度参考值的线性插值，
+    标为 estimated，且不会用价格比例或当前 PE 伪造缺失月份。
     """
     # 年度实际 PE（1990–2025）来源：macrotrends / QQQ factsheet / 多方核对
     _ANNUAL = {
@@ -1127,14 +1624,7 @@ def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
         2010: 21.3,  2011: 19.0,  2012: 20.3,  2013: 23.2,  2014: 23.8,
         2015: 23.5,  2016: 22.8,  2017: 26.6,  2018: 23.4,  2019: 29.8,
         2020: 36.2,  2021: 38.5,  2022: 24.4,  2023: 32.2,  2024: 34.6,
-        2025: 31.5,  2026: 35.1,
-    }
-    # 近期月度 PE 实际值（yfinance 价格比例法估算，优先于年度插值）
-    # 来源：QQQ trailingPE × (月末收盘价 / 当前价格)，2026-04-27 计算
-    _RECENT_MONTHLY = {
-        "2025-09": 31.6, "2025-10": 33.15, "2025-11": 32.63,
-        "2025-12": 32.37,
-        "2026-01": 32.81, "2026-02": 32.04, "2026-03": 30.45, "2026-04": 35.1,
+        2025: 31.5,
     }
     # 尝试 macrotrends 月度数据
     try:
@@ -1158,7 +1648,12 @@ def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
                         try:
                             v = float(val)
                             if 3.0 < v < 500.0:
-                                result.append({"date": date_s, "pe": round(v, 2)})
+                                result.append({
+                                    "date": date_s,
+                                    "pe": round(v, 2),
+                                    "quality": "observed",
+                                    "source": "macrotrends_qqq_pe",
+                                })
                         except (ValueError, TypeError):
                             pass
                 result.sort(key=lambda x: x["date"])
@@ -1170,10 +1665,9 @@ def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
         logger.warning(f"[nasdaq100_pe_history macrotrends] {e}")
 
     # Fallback：年度数据线性插值为月度
-    from datetime import date as _date
     years = sorted(_ANNUAL.keys())
     result = []
-    current_ym = _date.today().strftime("%Y-%m")
+    current_ym = datetime.now(_CHINA_TZ).strftime("%Y-%m")
     for i, yr in enumerate(years):
         pe_start = _ANNUAL[yr]
         pe_end   = _ANNUAL[years[i + 1]] if i < len(years) - 1 else pe_start
@@ -1182,39 +1676,13 @@ def fetch_nasdaq100_pe_history(current_pe: float = None) -> list:
             if ym > current_ym:
                 break
             frac = (mo - 1) / 12
-            result.append({"date": ym, "pe": round(pe_start + (pe_end - pe_start) * frac, 2)})
+            result.append({
+                "date": ym,
+                "pe": round(pe_start + (pe_end - pe_start) * frac, 2),
+                "quality": "estimated",
+                "source": "embedded_annual_interpolation",
+            })
     result.sort(key=lambda x: x["date"])
-
-    # 覆盖近期月度 PE（_RECENT_MONTHLY 优先于年度插值）
-    result_map = {r["date"]: r for r in result}
-    for ym, pe_val in _RECENT_MONTHLY.items():
-        if ym in result_map:
-            result_map[ym]["pe"] = pe_val
-        else:
-            result.append({"date": ym, "pe": pe_val})
-    result.sort(key=lambda x: x["date"])
-    # 若传入当前 PE，再尝试用 yfinance 价格比例法更新最新月
-    if current_pe and current_pe > 5.0:
-        try:
-            import yfinance as _yf
-            hist = _yf.Ticker("QQQ").history(period="3mo", interval="1mo")
-            if not hist.empty:
-                current_price = float(hist["Close"].iloc[-1])
-                result_map2 = {r["date"]: r for r in result}
-                for ts, row in hist.iterrows():
-                    ym = ts.strftime("%Y-%m")
-                    if ym < "2026-01":
-                        continue
-                    est_pe = round(float(current_pe) * float(row["Close"]) / current_price, 2)
-                    if ym in result_map2:
-                        result_map2[ym]["pe"] = est_pe
-                    else:
-                        result.append({"date": ym, "pe": est_pe})
-                result.sort(key=lambda x: x["date"])
-                logger.info(f"[nasdaq100_pe_history] yfinance recent patch applied")
-        except Exception as e:
-            logger.warning(f"[nasdaq100_pe_history yfinance patch] {e}")
-
     logger.info(f"[nasdaq100_pe_history] fallback interpolated, {len(result)} points")
     return result
 
@@ -1240,140 +1708,394 @@ def _build_funds(category: str) -> tuple:
 
     codes = [f["code"] for f in static]
     live_map: Dict[str, dict] = {}
+    track_map: Dict[str, dict] = {}
+    previous = _lkg_get(f"funds_{category}") or []
+    previous_map = {
+        item.get("code"): item for item in previous
+        if isinstance(item, dict) and item.get("code")
+    }
 
-    # 批量预读 qdii_meta（1 次 RTT 替代 N 次串行读）
-    _meta_pre = _cache_mget([f"qdii_meta_{c}" for c in codes])
-
-    ex = ThreadPoolExecutor(max_workers=10)
+    needs_tracking = category in ("nasdaq_passive", "sp500_passive")
+    ex = ThreadPoolExecutor(
+        max_workers=min(16 if needs_tracking else 10, _PROVIDER_MAX_CONCURRENCY)
+    )
     try:
-        fs = {ex.submit(fetch_one_fund, code, category, _meta_pre.get(code)): code for code in codes}
-        done, not_done = wait(fs, timeout=18)   # 每只基金 3 个串行接口，最多等 18 秒
+        fs = {ex.submit(fetch_one_fund, code, category): code for code in codes}
+        track_fs = {ex.submit(_fetch_tracking_error, code): code for code in codes} if needs_tracking else {}
+        done, not_done = wait(list(fs) + list(track_fs), timeout=20)
         for fut in not_done:
             fut.cancel()
         for fut in done:
-            try:
-                item = fut.result()
-                if item:
-                    live_map[item["code"]] = item
-            except Exception:
-                pass
+            if fut in fs:
+                try:
+                    item = fut.result()
+                    if item:
+                        live_map[item["code"]] = item
+                except Exception:
+                    pass
+            elif fut in track_fs:
+                try:
+                    item = fut.result()
+                    if item:
+                        track_map[track_fs[fut]] = item
+                except Exception:
+                    pass
     finally:
-        ex.shutdown(wait=False)  # 不阻塞等待超时线程
+        # Running futures cannot be cancelled.  Wait for their bounded HTTP
+        # timeouts so the next sequential cron category cannot overlap them.
+        ex.shutdown(wait=True, cancel_futures=True)
 
     success_rate = len(live_map) / len(codes)
     logger.info(f"[{category}] {len(live_map)}/{len(codes)} live ({success_rate:.0%})")
 
-    # 静态字段打底，实时字段覆盖（只覆盖 _VOLATILE_FUND_FIELDS）
+    # 目录静态元数据始终优先；LKG 只补日更字段，不能把旧规模/费率覆盖回来。
     results = []
     for fb in static:
         live = live_map.get(fb["code"]) or {}
-        volatile_update = {k: v for k, v in live.items() if k in _VOLATILE_FUND_FIELDS}
-        results.append({**fb, **volatile_update})
+        track = track_map.get(fb["code"]) or {}
+        previous_row = previous_map.get(fb["code"]) or {}
+        previous_dynamic = {
+            k: v for k, v in previous_row.items()
+            if k in _VOLATILE_FUND_FIELDS and v is not None
+        }
+        # 目录可能刚完成一次低频更新；较旧的运行时跟踪误差不得反向覆盖它。
+        if (
+            previous_dynamic.get("track_error_as_of")
+            and fb.get("track_error_as_of")
+            and previous_dynamic["track_error_as_of"] < fb["track_error_as_of"]
+        ):
+            for key in ("track_error", "track_error_as_of", "track_error_source"):
+                previous_dynamic.pop(key, None)
+        volatile_update = {
+            k: v for k, v in {**track, **live}.items()
+            if k in _VOLATILE_FUND_FIELDS and v is not None
+        }
+        merged = {**fb, **previous_dynamic, **volatile_update}
+        merged.setdefault("annual_return_2025", merged.get("ytd_return"))
+        if "subscription_status" not in merged:
+            if merged.get("buy_status") == "suspended":
+                merged["subscription_status"] = "suspended"
+            elif merged.get("buy_status") == "open":
+                limit = parse_number(merged.get("daily_limit"))
+                merged["subscription_status"] = "limited" if limit and limit > 0 else "open"
+            else:
+                merged["subscription_status"] = "unknown"
+        track_required = needs_tracking and (
+            (fb.get("track_error") is not None and _valid_iso_date(fb.get("track_error_as_of")))
+            or (
+                previous_dynamic.get("track_error") is not None
+                and _valid_iso_date(previous_dynamic.get("track_error_as_of"))
+            )
+        )
+        if track:
+            merged["track_error_status"] = "fresh"
+        elif merged.get("track_error") is not None and _valid_iso_date(merged.get("track_error_as_of")):
+            merged["track_error_status"] = "stale"
+        else:
+            merged["track_error_status"] = "unavailable"
 
-    results.sort(key=lambda x: x.get("ytd_return", 0), reverse=True)
-    source = "live" if success_rate >= 0.5 else ("partial" if success_rate > 0 else "none")
+        if live:
+            daily_full = live.get("daily_source_status") == "full"
+            subscription_fresh = live.get("subscription_status_status") == "fresh"
+            if not subscription_fresh:
+                # A NAV-only fallback must never make a retained purchase
+                # limit look current.
+                merged.update({
+                    "buy_status": "unknown",
+                    "subscription_status": "unknown",
+                    "subscription_status_status": "unavailable",
+                    "daily_limit": "待确认",
+                    "daily_limit_cny": None,
+                    "subscription_as_of": None,
+                })
+            row_fresh = daily_full and (not track_required or bool(track))
+            merged["data_status"] = "fresh" if row_fresh else "partial"
+            merged["daily_status"] = "fresh" if daily_full else "partial"
+        else:
+            merged["data_status"] = "stale" if fb["code"] in previous_map else "reference"
+            merged["daily_status"] = "stale" if fb["code"] in previous_map else "unavailable"
+            if fb["code"] in previous_map:
+                merged["subscription_status_status"] = "stale"
+        results.append(merged)
+
+    results = safe_sort(
+        results,
+        key=lambda row: row.get("rolling_1y"),
+        reverse=True,
+    )
+    source = "live" if results and all(row.get("data_status") == "fresh" for row in results) else (
+        "partial" if success_rate > 0 else "none"
+    )
     return results, source
 
 
 def _build_etfs() -> tuple:
     """
-    并发抓取 ETF 实时行情，返回 (results, source)。
-    数据来源：
-      - 新浪财经（批量，单次请求）→ market_price / volume / change_pct
-      - 天天基金 fundgz（并发）    → nav（计算溢价率用）
+    构建每日 ETF 收盘快照，返回 (results, source)。
+
+    - 东方财富 Push2：市价、场内涨跌、成交额、行情时间（首选）
+    - 新浪财经：仅补齐缺失市价
+    - 东方财富 BasicInformation：最新已公布 NAV、净值日期、滚动一年
+    - 同站 pingzhongdata：BasicInformation 失败时补 NAV 派生字段
+
+    任一侧缺失时 premium 必须为 ``None``，绝不沿用静态旧溢价。
     """
     codes = [etf["code"] for etf in STATIC_ETFS]
 
-    sina_map: Dict[str, dict] = {}
-    nav_map:  Dict[str, float] = {}
+    quote_map: Dict[str, dict] = {}
+    basic_map: Dict[str, dict] = {}
+    track_map: Dict[str, dict] = {}
+    previous = _lkg_get("etfs") or []
+    previous_map = {
+        item.get("code"): item for item in previous
+        if isinstance(item, dict) and item.get("code")
+    }
 
-    ex = ThreadPoolExecutor(max_workers=12)
+    ex = ThreadPoolExecutor(max_workers=min(16, _PROVIDER_MAX_CONCURRENCY))
     try:
-        sina_fut = ex.submit(fetch_etfs_sina_batch, codes)
-        nav_futs: Dict = {ex.submit(fetch_fund_realtime, c): c for c in codes}
+        quote_fut = ex.submit(fetch_etfs_em_fallback, codes)
+        basic_futs: Dict = {ex.submit(_fetch_daily_snapshot, c): c for c in codes}
+        track_futs: Dict = {ex.submit(_fetch_tracking_error, c): c for c in codes}
 
-        all_futs = [sina_fut] + list(nav_futs.keys())
-        done, not_done = wait(all_futs, timeout=8)
+        all_futs = [quote_fut] + list(basic_futs.keys()) + list(track_futs.keys())
+        done, not_done = wait(all_futs, timeout=18)
 
         for fut in not_done:
             fut.cancel()
         for fut in done:
-            if fut is sina_fut:
+            if fut is quote_fut:
                 try:
-                    sina_map = fut.result() or {}
+                    quote_map = fut.result() or {}
                 except Exception:
                     pass
-            elif fut in nav_futs:
-                code = nav_futs[fut]
+            elif fut in basic_futs:
+                code = basic_futs[fut]
                 try:
-                    rt  = fut.result() or {}
-                    nav = float(rt.get("dwjz", 0))
-                    if nav > 0:
-                        nav_map[code] = nav
+                    data = fut.result()
+                    if data:
+                        basic_map[code] = data
+                except Exception:
+                    pass
+            elif fut in track_futs:
+                code = track_futs[fut]
+                try:
+                    data = fut.result()
+                    if data:
+                        track_map[code] = data
                 except Exception:
                     pass
     finally:
-        ex.shutdown(wait=False)
+        ex.shutdown(wait=True, cancel_futures=True)
 
-    # 东方财富补充：Sina 未返回数据的 ETF 用东方财富补齐 market_price
-    missing = [c for c in codes if c not in sina_map]
+    # 东方财富缺失时才调用新浪，减少重复外部请求。
+    missing = [c for c in codes if c not in quote_map]
     if missing:
-        em_map = fetch_etfs_em_fallback(missing)
-        sina_map.update(em_map)
+        quote_map.update(fetch_etfs_sina_batch(missing))
 
-    live_count = 0
-    results    = []
+    quote_count = 0
+    premium_count = 0
+    results = []
     for fb in STATIC_ETFS:
-        code  = fb["code"]
-        sina  = sina_map.get(code, {})
-        nav   = nav_map.get(code, 0.0)
-        mp    = sina.get("market_price", 0.0)
+        code = fb["code"]
+        quote = quote_map.get(code) or {}
+        basic = basic_map.get(code) or {}
+        track = track_map.get(code) or {}
+        previous_row = previous_map.get(code) or {}
+        market_price = parse_number(quote.get("market_price"))
+        nav = parse_number(basic.get("nav"))
+        nav_date = str(basic.get("nav_date") or "").strip() or None
+        quote_is_current = (
+            market_price is not None
+            and market_price > 0
+            and _valid_iso_datetime(quote.get("quote_as_of"))
+        )
+        nav_is_current = nav is not None and nav > 0 and _valid_iso_date(nav_date)
+        # 只允许同一轮同时拿到的行情和净值参与计算。任一侧失败时保留上次
+        # premium 及其原日期，绝不跨日期拼出一个“新”溢价率。
+        premium = calculate_etf_premium(market_price, nav)
+        if quote_is_current:
+            quote_count += 1
+        if quote_is_current and nav_is_current and premium is not None:
+            premium_count += 1
 
-        nav_ok = nav > 0
-        mp_ok  = mp > 0
-        if nav_ok and mp_ok:
-            premium: Optional[float] = round((mp - nav) / nav * 100, 2)
-        elif mp_ok:
-            # 有市价但 NAV 拉取失败 → 不保留过期溢价，显示 N/A
-            premium = None
-        else:
-            # 市场休市或双侧均失败 → 保留静态兜底值
-            premium = 0.0  # sentinel：过滤掉，由静态数据兜底
+        normalized_basic = basic
+        quote_fields = (
+            "market_price", "market_change_pct", "change_pct", "turnover_cny_100m",
+            "volume", "quote_as_of", "quote_source",
+        )
+        nav_fields = (
+            "nav", "nav_date", "nav_as_of", "nav_source", "rolling_1y",
+            "rolling_1y_as_of", "day_change", "day_change_as_of",
+        )
+        premium_fields = (
+            "premium", "premium_pct", "premium_as_of", "premium_quote_as_of",
+            "premium_nav_as_of", "premium_basis",
+        )
+        track_fields = ("track_error", "track_error_as_of", "track_error_source", "track_error_fetched_at")
+        retained = {
+            key: previous_row.get(key)
+            for key in (*quote_fields, *nav_fields, *premium_fields, *track_fields)
+            if previous_row.get(key) is not None
+        }
+        merged = {**fb, **retained}
+        if quote_is_current:
+            merged.update({
+                "market_price": market_price,
+                "market_change_pct": quote.get("market_change_pct"),
+                "change_pct": quote.get("change_pct"),
+                "turnover_cny_100m": quote.get("turnover_cny_100m"),
+                "volume": quote.get("volume"),
+                "quote_as_of": quote.get("quote_as_of"),
+                "quote_source": quote.get("quote_source"),
+            })
+        if nav_is_current:
+            nav_update = {
+                "nav": nav,
+                "nav_date": nav_date,
+                "nav_as_of": nav_date,
+                "nav_source": normalized_basic.get("source"),
+            }
+            for field in ("rolling_1y", "rolling_1y_as_of", "day_change", "day_change_as_of"):
+                if normalized_basic.get(field) is not None:
+                    nav_update[field] = normalized_basic[field]
+            merged.update(nav_update)
+        if track:
+            merged.update({key: track.get(key) for key in track_fields if track.get(key) is not None})
+        elif fb.get("track_error_as_of") and (
+            not merged.get("track_error_as_of") or merged["track_error_as_of"] < fb["track_error_as_of"]
+        ):
+            merged.update({key: fb.get(key) for key in track_fields})
+        if quote_is_current and nav_is_current and premium is not None:
+            merged.update({
+                "premium": premium,
+                "premium_pct": premium,
+                "premium_as_of": quote.get("quote_as_of"),
+                "premium_quote_as_of": quote.get("quote_as_of"),
+                "premium_nav_as_of": nav_date,
+                "premium_basis": "market_close_vs_latest_published_nav",
+            })
 
-        if mp_ok:
-            live_count += 1
-
-        live_update = {**sina, "nav": nav, "premium": premium}
-        patch: dict = {}
-        for k, v in live_update.items():
-            if k == "premium":
-                if v is None:
-                    patch[k] = None          # NAV 失败，清除过期溢价
-                elif v != 0.0 or nav_ok:     # 成功计算（含溢价恰好为0的情况）
-                    patch[k] = v
-                # else: 休市 sentinel，跳过，保留静态兜底
-            else:
-                if v != 0:
-                    patch[k] = v
-        merged = {**fb, **patch}
+        daily_complete = (
+            nav_is_current
+            and normalized_basic.get("rolling_1y") is not None
+            and _valid_iso_date(normalized_basic.get("rolling_1y_as_of"))
+            and normalized_basic.get("day_change") is not None
+            and _valid_iso_date(normalized_basic.get("day_change_as_of"))
+        )
+        quote_complete = quote_is_current and quote.get("market_change_pct") is not None
+        track_required = (
+            (fb.get("track_error") is not None and _valid_iso_date(fb.get("track_error_as_of")))
+            or (
+                previous_row.get("track_error") is not None
+                and _valid_iso_date(previous_row.get("track_error_as_of"))
+            )
+        )
+        any_current = quote_is_current or nav_is_current or bool(track)
+        fully_current = (
+            quote_complete
+            and daily_complete
+            and (not track_required or bool(track))
+            and premium is not None
+        )
+        merged.update({
+            "quote_status": "fresh" if quote_is_current else ("stale" if previous_row.get("market_price") is not None else "unavailable"),
+            "nav_status": "fresh" if nav_is_current else ("stale" if previous_row.get("nav") is not None else "unavailable"),
+            "fund_daily_status": "fresh" if daily_complete else (
+                "partial" if nav_is_current else ("stale" if previous_row else "unavailable")
+            ),
+            "premium_status": "fresh" if quote_is_current and nav_is_current and premium is not None else (
+                "stale" if previous_row.get("premium") is not None else "unavailable"
+            ),
+            "track_error_status": "fresh" if track else ("stale" if merged.get("track_error") is not None else "unavailable"),
+            "source": "eastmoney+sina" if quote.get("quote_source") == "sina" else "eastmoney",
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds") if any_current else previous_row.get("fetched_at"),
+            "data_status": "fresh" if fully_current else ("partial" if any_current else ("stale" if previous_row else "reference")),
+        })
+        merged.setdefault("annual_return_2025", fb.get("ytd_return"))
         results.append(merged)
 
-    success_rate = live_count / len(codes) if codes else 0
-    logger.info(f"[etfs] sina={len(sina_map)}, nav={len(nav_map)}/{len(codes)} ({success_rate:.0%})")
-    results.sort(key=lambda x: abs(x.get("premium", 0)), reverse=True)
-    source = "live" if success_rate >= 0.5 else ("partial" if success_rate > 0 else "none")
+    quote_rate = quote_count / len(codes) if codes else 0
+    premium_rate = premium_count / len(codes) if codes else 0
+    logger.info(
+        f"[etfs] quote={quote_count}/{len(codes)}, premium={premium_count}/{len(codes)} "
+        f"({premium_rate:.0%})"
+    )
+    results = safe_sort(
+        results,
+        key=lambda row: abs(row["premium"]) if row.get("premium") is not None else None,
+        reverse=True,
+    )
+    source = "live" if results and all(row.get("data_status") == "fresh" for row in results) else (
+        "partial" if any(row.get("data_status") == "partial" for row in results) else "none"
+    )
     return results, source
 
 # ─── FastAPI ──────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Wise-ETF API", version="3.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Wise-ETF API", version="5.0.0")
+_cors_env = [origin.strip() for origin in os.environ.get("CORS_ORIGINS", "").split(",") if origin.strip()]
+_cors_origins = _cors_env or ["https://wise-etf.com", "https://www.wise-etf.com"]
+if os.environ.get("APP_ENV", "").lower() in {"development", "dev", "local", "test"}:
+    _cors_origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 def _cache_header(response: Response, seconds: int):
     # 不做 CDN 边缘缓存，避免 Vercel Edge 提供过期数据
     # 缓存由函数内部 Redis 层控制，每次请求必须打到 serverless 函数
     response.headers["Cache-Control"] = "no-store"
+
+
+def _latest_field_date(rows: list, fields: tuple) -> Optional[str]:
+    values = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field in fields:
+            value = row.get(field)
+            if isinstance(value, str) and value:
+                values.append(value)
+    return max(values) if values else None
+
+
+def _dataset_status(rows: list, source: str) -> str:
+    if not rows:
+        return "empty"
+    if source in ("static", "reference", "lkg", "file_cache"):
+        return "stale"
+    states = {row.get("data_status") for row in rows if isinstance(row, dict)}
+    if states and states.issubset({"stale", "reference"}):
+        return "stale"
+    if "partial" in states or "stale" in states or "reference" in states or source == "partial":
+        return "partial"
+    return "fresh"
+
+
+def _reference_etfs() -> list:
+    """冷启动参考快照不能把历史行情伪装成当前行情。"""
+    dynamic_fields = {
+        "market_price": None,
+        "nav": None,
+        "nav_date": None,
+        "nav_as_of": None,
+        "premium": None,
+        "premium_pct": None,
+        "volume": None,
+        "turnover_cny_100m": None,
+        "change_pct": None,
+        "market_change_pct": None,
+        "quote_as_of": None,
+        "premium_as_of": None,
+        "premium_quote_as_of": None,
+        "premium_nav_as_of": None,
+        "data_status": "reference",
+    }
+    return [{**item, **dynamic_fields} for item in STATIC_ETFS]
 
 
 @app.get("/api/funds/{category}")
@@ -1385,33 +2107,98 @@ def get_funds(category: str, response: Response):
 
     # 1. 内存缓存
     cached = _mem_get(cache_key, "funds")
-    if cached is not None:
+    cached_status = _dataset_status(cached, "cache") if cached is not None else None
+    if cached is not None and cached_status == "fresh":
         _cache_header(response, 3600)
-        return {"data": cached, "count": len(cached), "source": "cache"}
+        return {
+            "data": cached,
+            "count": len(cached),
+            "source": "cache",
+            "status": cached_status,
+            "as_of": _latest_field_date(cached, ("nav_date", "subscription_as_of", "track_error_as_of")),
+            "schema_version": "2.0",
+        }
+    if cached is not None and _recovery_gate_active(cache_key):
+        _cache_header(response, 3600)
+        return {
+            "data": cached,
+            "count": len(cached),
+            "source": "cache",
+            "status": cached_status,
+            "as_of": _latest_field_date(cached, ("nav_date", "subscription_as_of", "track_error_as_of")),
+            "schema_version": "2.0",
+        }
 
     static = STATIC_FUNDS.get(category, [])
     if not static:
         return {"data": [], "count": 0, "source": "empty"}
 
-    # 2. 实时抓取
-    results, source = _build_funds(category)
+    refresh_lock = _try_recovery_refresh(cache_key)
+    if refresh_lock is None:
+        if cached is not None:
+            _cache_header(response, 3600)
+            return {
+                "data": cached,
+                "count": len(cached),
+                "source": "cache",
+                "status": cached_status,
+                "as_of": _latest_field_date(cached, ("nav_date", "subscription_as_of", "track_error_as_of")),
+                "schema_version": "2.0",
+            }
+        previous = _file_load(cache_key) or []
+        reference = (
+            [{**row, "data_status": "stale", "daily_status": "stale"} for row in previous]
+            if previous else
+            [{**row, "data_status": "reference"} for row in static]
+        )
+        _cache_header(response, 3600)
+        return {
+            "data": reference,
+            "count": len(reference),
+            "source": "lkg" if previous else "refresh_in_progress",
+            "status": "stale",
+            "as_of": _latest_field_date(reference, ("nav_date", "subscription_as_of", "track_error_as_of")),
+            "schema_version": "2.0",
+        }
 
-    if source in ("live", "partial"):
-        _cache_set(cache_key, results, CACHE_TTL["funds"])
-    else:
-        # 3. 文件缓存（上次成功数据）
-        file_data = _file_load(cache_key)
-        if file_data:
-            _mem_set(cache_key, file_data)
-            results = file_data
-            source  = "file_cache"
+    try:
+        # 2. 实时抓取
+        results, source = _build_funds(category)
+
+        if source == "live":
+            _publish_cache(cache_key, results, CACHE_TTL["funds"])
+        elif source == "partial":
+            # 部分刷新可供当前请求使用，但不能替换永久完整快照。
+            _cache_recovery_snapshot(cache_key, results)
         else:
-            # 4. 完全静态兜底
-            results = static
-            source  = "static"
+            # 3. 永久 Last-Known-Good（上次成功数据）
+            file_data = _file_load(cache_key)
+            if file_data:
+                results = [{**row, "data_status": "stale", "daily_status": "stale"} for row in file_data]
+                _cache_recovery_snapshot(cache_key, results)
+                source  = "lkg"
+            elif cached is not None:
+                # A failed recovery must not erase the short-lived partial snapshot.
+                results = cached
+                _cache_recovery_snapshot(cache_key, results)
+                source = "cache"
+            else:
+                # 4. 带明确状态的参考快照
+                results = [{**row, "data_status": "reference"} for row in static]
+                source  = "reference"
+    finally:
+        if refresh_lock is not None:
+            refresh_lock.release()
 
     _cache_header(response, 3600)
-    return {"data": results, "count": len(results), "source": source}
+    return {
+        "data": results,
+        "count": len(results),
+        "source": source,
+        "status": _dataset_status(results, source),
+        "as_of": _latest_field_date(results, ("nav_date", "subscription_as_of", "track_error_as_of")),
+        "schema_version": "2.0",
+    }
 
 
 @app.get("/api/etfs")
@@ -1422,26 +2209,99 @@ def get_etfs(response: Response):
     cache_key = "etfs"
 
     cached = _mem_get(cache_key, "etfs")
-    if cached is not None:
+    cached_status = _dataset_status(cached, "cache") if cached is not None else None
+    if cached is not None and cached_status == "fresh":
         _cache_header(response, 300)
-        return {"data": cached, "count": len(cached), "source": "cache"}
+        return {
+            "data": cached,
+            "count": len(cached),
+            "source": "cache",
+            "status": cached_status,
+            "as_of": _latest_field_date(cached, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
+            "schema_version": "2.0",
+        }
+    if cached is not None and _recovery_gate_active(cache_key):
+        _cache_header(response, 300)
+        return {
+            "data": cached,
+            "count": len(cached),
+            "source": "cache",
+            "status": cached_status,
+            "as_of": _latest_field_date(cached, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
+            "schema_version": "2.0",
+        }
 
-    results, source = _build_etfs()
+    refresh_lock = _try_recovery_refresh(cache_key)
+    if refresh_lock is None:
+        if cached is not None:
+            _cache_header(response, 300)
+            return {
+                "data": cached,
+                "count": len(cached),
+                "source": "cache",
+                "status": cached_status,
+                "as_of": _latest_field_date(cached, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
+                "schema_version": "2.0",
+            }
+        previous = _file_load(cache_key) or []
+        reference = ([{
+            **row,
+            "data_status": "stale",
+            "quote_status": "stale" if row.get("market_price") is not None else "unavailable",
+            "nav_status": "stale" if row.get("nav") is not None else "unavailable",
+            "premium_status": "stale" if row.get("premium") is not None else "unavailable",
+            "fund_daily_status": "stale",
+        } for row in previous] if previous else _reference_etfs())
+        _cache_header(response, 300)
+        return {
+            "data": reference,
+            "count": len(reference),
+            "source": "lkg" if previous else "refresh_in_progress",
+            "status": "stale",
+            "as_of": _latest_field_date(reference, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
+            "schema_version": "2.0",
+        }
 
-    if source in ("live", "partial"):
-        _cache_set(cache_key, results, CACHE_TTL["etfs"])
-    else:
-        file_data = _file_load(cache_key)
-        if file_data:
-            _mem_set(cache_key, file_data)
-            results = file_data
-            source  = "file_cache"
+    try:
+        results, source = _build_etfs()
+
+        if source == "live":
+            _publish_cache(cache_key, results, CACHE_TTL["etfs"])
+        elif source == "partial":
+            _cache_recovery_snapshot(cache_key, results)
         else:
-            results = STATIC_ETFS
-            source  = "static"
+            file_data = _file_load(cache_key)
+            if file_data:
+                results = [{
+                    **row,
+                    "data_status": "stale",
+                    "quote_status": "stale" if row.get("market_price") is not None else "unavailable",
+                    "nav_status": "stale" if row.get("nav") is not None else "unavailable",
+                    "premium_status": "stale" if row.get("premium") is not None else "unavailable",
+                    "fund_daily_status": "stale",
+                } for row in file_data]
+                _cache_recovery_snapshot(cache_key, results)
+                source  = "lkg"
+            elif cached is not None:
+                results = cached
+                _cache_recovery_snapshot(cache_key, results)
+                source = "cache"
+            else:
+                results = _reference_etfs()
+                source  = "reference"
+    finally:
+        if refresh_lock is not None:
+            refresh_lock.release()
 
     _cache_header(response, 300)
-    return {"data": results, "count": len(results), "source": source}
+    return {
+        "data": results,
+        "count": len(results),
+        "source": source,
+        "status": _dataset_status(results, source),
+        "as_of": _latest_field_date(results, ("quote_as_of", "nav_as_of", "track_error_as_of", "premium_as_of")),
+        "schema_version": "2.0",
+    }
 
 
 @app.get("/api/overview")
@@ -1450,8 +2310,158 @@ def get_overview(response: Response):
     return {
         "stats": {**{k: {"count": len(v)} for k, v in STATIC_FUNDS.items()},
                   **{"etf": {"count": len(STATIC_ETFS)}}},
-        "last_update": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "last_update": datetime.now(_CHINA_TZ).strftime("%Y-%m-%d %H:%M"),
         "total_funds": sum(len(v) for v in STATIC_FUNDS.values()) + len(STATIC_ETFS),
+    }
+
+
+@app.get("/api/fx/usdcny")
+def get_usdcny(response: Response):
+    """USD/CNY 最近交易价；失败时仅返回带 stale 标记的永久快照。"""
+    cache_key = "fx_usdcny"
+    cached = _cache_get(cache_key)
+    if cached:
+        _cache_header(response, 3600)
+        return {"data": cached, "source": "cache", "status": "fresh", "as_of": cached.get("as_of")}
+
+    data = None
+    try:
+        result = _yf_chart("USDCNY=X", interval="1d", range_="5d") or {}
+        meta = result.get("meta") or {}
+        value = parse_number(meta.get("regularMarketPrice"))
+        timestamps = result.get("timestamp") or []
+        if value is not None and value > 0:
+            as_of = datetime.fromtimestamp(timestamps[-1], timezone.utc).date().isoformat() if timestamps else None
+            data = {
+                "pair": "USD/CNY",
+                "value": round(value, 4),
+                "as_of": as_of,
+                "source": "Yahoo Finance USDCNY=X",
+            }
+    except Exception as exc:
+        logger.warning(f"[fx_usdcny] {exc}")
+
+    if data:
+        _publish_cache(cache_key, data, CACHE_TTL["fx_current"])
+        source = "live"
+        status = "fresh"
+    else:
+        data = _lkg_get(cache_key)
+        source = "lkg" if data else "empty"
+        status = "stale" if data else "empty"
+    _cache_header(response, 3600)
+    return {"data": data, "source": source, "status": status, "as_of": (data or {}).get("as_of")}
+
+
+def _monthly_return_payload() -> dict:
+    """抓取日线后按完整自然月计算，当前月单列为 MTD。"""
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_ndx = ex.submit(_yf_chart, "^NDX", "1d", "2y")
+        f_spx = ex.submit(_yf_chart, "^GSPC", "1d", "2y")
+        ndx_raw = f_ndx.result(timeout=15)
+        spx_raw = f_spx.result(timeout=15)
+
+    def wrap(result):
+        return {"chart": {"result": [result] if result else None, "error": None}}
+
+    today = datetime.now(_CHINA_TZ).date()
+    ndx = normalize_yahoo_monthly_returns(wrap(ndx_raw), "NDX", reference_date=today)
+    spx = normalize_yahoo_monthly_returns(wrap(spx_raw), "SPX", reference_date=today)
+    ndx_months = {row["month"]: row for row in ndx["months"]}
+    spx_months = {row["month"]: row for row in spx["months"]}
+    labels = sorted(set(ndx_months) | set(spx_months))
+    months = []
+    for label in labels:
+        nq = ndx_months.get(label) or {}
+        sp = spx_months.get(label) or {}
+        months.append({
+            "month": label,
+            "nasdaq": nq.get("value"),
+            "sp500": sp.get("value"),
+            "nasdaq_as_of": nq.get("as_of"),
+            "sp500_as_of": sp.get("as_of"),
+            "status": "ok" if nq.get("status") == "ok" and sp.get("status") == "ok" else "partial",
+        })
+
+    mtd = {
+        "month": ndx["mtd"].get("month") or spx["mtd"].get("month"),
+        "nasdaq": ndx["mtd"].get("value"),
+        "sp500": spx["mtd"].get("value"),
+        "nasdaq_as_of": ndx["mtd"].get("as_of"),
+        "sp500_as_of": spx["mtd"].get("as_of"),
+        "status": "partial" if ndx["mtd"].get("value") is not None or spx["mtd"].get("value") is not None else "unavailable",
+        "is_partial": True,
+    }
+    available = sum(1 for row in months if row["nasdaq"] is not None and row["sp500"] is not None)
+    return {
+        "months": months,
+        "mtd": mtd,
+        "as_of": max(filter(None, (ndx.get("as_of"), spx.get("as_of"))), default=None),
+        "source": "Yahoo Finance chart",
+        "status": "fresh" if available == 12 else ("partial" if available else "empty"),
+        "return_type": "price",
+        "currency": "USD",
+    }
+
+
+@app.get("/api/monthly-returns")
+def get_monthly_returns(response: Response):
+    """最近 12 个完整自然月收益；当前未完结月份单独返回为 MTD。"""
+    cache_key = "monthly_returns_v1"
+    cached = _cache_get(cache_key)
+    if cached and cached.get("status") == "fresh":
+        _cache_header(response, 21600)
+        return {"data": cached, "source": "cache", "status": cached.get("status", "fresh")}
+    if cached and _recovery_gate_active(cache_key):
+        _cache_header(response, 21600)
+        return {"data": cached, "source": "cache", "status": cached.get("status", "partial")}
+
+    refresh_lock = _try_recovery_refresh(cache_key)
+    if refresh_lock is None:
+        if cached:
+            _cache_header(response, 21600)
+            return {"data": cached, "source": "cache", "status": cached.get("status", "partial")}
+        lkg = _lkg_get(cache_key)
+        _cache_header(response, 21600)
+        return {
+            "data": lkg,
+            "source": "lkg" if lkg else "refresh_in_progress",
+            "status": "stale" if lkg else "unavailable",
+        }
+
+    try:
+        try:
+            data = _monthly_return_payload()
+        except Exception as exc:
+            logger.warning(f"[monthly_returns] {exc}")
+            data = None
+        if data and data.get("months") and data.get("status") == "fresh":
+            _publish_cache(cache_key, data, CACHE_TTL["monthly_returns"])
+            source = "live"
+        elif data and data.get("months"):
+            _cache_recovery_snapshot(cache_key, data)
+            source = "partial"
+        else:
+            lkg = _lkg_get(cache_key)
+            if lkg:
+                data = lkg
+                source = "lkg"
+            elif cached:
+                data = cached
+                source = "cache"
+            else:
+                data = None
+                source = "empty"
+            if data:
+                _cache_recovery_snapshot(cache_key, data)
+    finally:
+        if refresh_lock is not None:
+            refresh_lock.release()
+    _cache_header(response, 21600)
+    return {
+        "data": data,
+        "source": source,
+        "status": "stale" if source == "lkg" else ((data or {}).get("status", "empty")),
     }
 
 
@@ -1629,70 +2639,159 @@ def get_news(response: Response):
     return {"data": data, "source": "live" if data else "empty"}
 
 
+def _require_job_secret(authorization: Optional[str]) -> None:
+    """Protect cron/admin routes; insecure access is opt-in for local development."""
+    expected = os.environ.get("CRON_SECRET")
+    if not expected:
+        is_explicit_dev = os.environ.get("APP_ENV", "").lower() in {"development", "dev", "local", "test"}
+        allow_insecure = os.environ.get("ALLOW_INSECURE_LOCAL_JOBS", "").lower() in {"1", "true", "yes"}
+        if is_explicit_dev or allow_insecure:
+            return
+        raise HTTPException(status_code=503, detail="CRON_SECRET is not configured")
+    supplied = authorization or ""
+    token = supplied[7:] if supplied.lower().startswith("bearer ") else supplied
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _store_snapshot(cache_key: str, data: list, source: str, ttl: int) -> None:
+    """发布完整快照；部分快照只进入热缓存，不降级永久 LKG。"""
+    if source == "live":
+        _publish_cache(cache_key, data, ttl)
+    elif source == "partial":
+        _cache_recovery_snapshot(cache_key, data)
+
+
+def _publish_live_projection(rows: list) -> dict:
+    """把同轮成功的基金日更字段投影给旧客户端，并保留未刷新的 LKG 行。"""
+    fresh_rows = {}
+    for row in rows:
+        code = row.get("code") if isinstance(row, dict) else None
+        if not code or not (row.get("daily_status") == "fresh" or row.get("fund_daily_status") == "fresh"):
+            continue
+        projected = {
+            key: row.get(key) for key in (
+                "day_change", "rolling_1y", "return_ytd", "buy_status",
+                "subscription_status", "daily_limit", "daily_limit_cny",
+                "nav", "nav_date", "subscription_as_of", "fetched_at",
+            ) if row.get(key) is not None
+        }
+        if projected:
+            fresh_rows[code] = projected
+
+    if not fresh_rows:
+        return {"status": "empty", "fresh_count": 0, "total_count": len(set(_ALL_CODES))}
+
+    previous = _cache_get("live_data") or _lkg_get("live_data") or {}
+    merged = {**previous, **fresh_rows}
+    cycle_date = datetime.now(_CHINA_TZ).date().isoformat()
+    previous_meta = _cache_get("live_data:meta") or {}
+    prior_codes = set(previous_meta.get("fresh_codes") or []) if previous_meta.get("cycle_date") == cycle_date else set()
+    fresh_codes = sorted(prior_codes | set(fresh_rows))
+    is_complete = len(fresh_codes) == len(set(_ALL_CODES))
+    meta = {
+        "status": "fresh" if is_complete else "partial",
+        "fresh_count": len(fresh_codes),
+        "total_count": len(set(_ALL_CODES)),
+        "as_of": _latest_field_date(list(fresh_rows.values()), ("nav_date", "subscription_as_of")) or previous_meta.get("as_of"),
+        "cycle_date": cycle_date,
+        "fresh_codes": fresh_codes,
+    }
+    if is_complete:
+        _publish_cache("live_data", merged, CACHE_TTL["live_data"])
+        _lkg_set("live_data:meta", meta)
+        meta_ttl = CACHE_TTL["live_data"]
+    else:
+        _cache_recovery_snapshot("live_data", merged)
+        meta_ttl = RECOVERY_CACHE_TTL
+    _cache_set("live_data:meta", meta, meta_ttl)
+    return meta
+
+
 @app.get("/api/cron/refresh")
-def cron_refresh():
-    """Vercel Cron Job（UTC 01:30 / 北京 09:30）：拉取全量最新数据写入 Redis"""
+def cron_refresh(authorization: Optional[str] = Header(default=None)):
+    """北京时间 09:30：仅更新场外基金净值、滚动收益、申购与跟踪误差。"""
+    _require_job_secret(authorization)
     results: dict = {}
+    published_rows: list = []
 
-    # 先删掉旧缓存，确保新数据立即生效
-    r = _get_redis()
-    if r:
-        try:
-            old_keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data"]
-            r.delete(*old_keys)
-            logger.info(f"[cron] cleared {len(old_keys)} stale cache keys")
-        except Exception as e:
-            logger.warning(f"[cron] cache clear failed: {e}")
-
-    # 三个基金分类 + ETF 并行构建
+    # 分类顺序刷新：每个 builder 内部已经有 10–16 个 worker。若再套三分类
+    # 并行，会让几十个请求同时争用全局 provider semaphore 并自相超时。
+    # ETF 仍在 A 股收盘后由 /api/cron/etfs 单独更新。
     def _refresh_category(category: str):
         data, source = _build_funds(category)
-        if source != "none":
-            _cache_set(f"funds_{category}", data, CACHE_TTL["funds"])
-        return category, {"count": len(data), "source": source}
+        _store_snapshot(f"funds_{category}", data, source, CACHE_TTL["funds"])
+        return category, {"count": len(data), "source": source}, data
 
-    def _refresh_etfs():
-        data, source = _build_etfs()
-        if source != "none":
-            _cache_set("etfs", data, CACHE_TTL["etfs"])
-        return "etfs", {"count": len(data), "source": source}
+    for category in STATIC_FUNDS:
+        try:
+            key, val, data = _refresh_category(category)
+            results[key] = val
+            published_rows.extend(data)
+        except Exception as e:
+            results[f"error_{category}"] = str(e)
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = [ex.submit(_refresh_category, cat) for cat in STATIC_FUNDS]
-        futs.append(ex.submit(_refresh_etfs))
-        for fut in futs:
-            try:
-                key, val = fut.result(timeout=25)
-                results[key] = val
-            except Exception as e:
-                results[f"error_{id(fut)}"] = str(e)
+    results["live_data"] = {**_publish_live_projection(published_rows), "source": "same_snapshot"}
 
-    return {"ts": datetime.now().isoformat(), "v": "v5", "results": results}
+    return {"ts": datetime.now(_CHINA_TZ).isoformat(), "v": "v5", "results": results}
+
+
+@app.get("/api/cron/etfs")
+def cron_etfs(authorization: Optional[str] = Header(default=None)):
+    """A 股收盘后更新 ETF 市价、滚动收益、跟踪误差和溢价快照。"""
+    _require_job_secret(authorization)
+    data, source = _build_etfs()
+    _store_snapshot("etfs", data, source, CACHE_TTL["etfs"])
+    live_meta = _publish_live_projection(data)
+    return {
+        "ts": datetime.now(_CHINA_TZ).isoformat(),
+        "v": "v5",
+        "results": {
+            "etfs": {"count": len(data), "source": source},
+            "live_data": {**live_meta, "source": "same_snapshot"},
+        },
+    }
 
 
 @app.get("/api/cron/prem")
-def cron_prem():
+def cron_prem(authorization: Optional[str] = Header(default=None)):
     """独立 cron：只刷溢价率历史（数据量大，单独跑避免主 cron 超时）"""
+    _require_job_secret(authorization)
     results = {}
-    for etf in STATIC_ETFS:
-        code = etf["code"]
-        try:
-            hist = fetch_premium_history(code)
-            if hist:
-                _cache_set(f"prem_hist_{code}", hist, CACHE_TTL["premium_history"])
-            results[code] = len(hist)
-        except Exception as e:
-            results[code] = str(e)
-    return {"ts": datetime.now().isoformat(), "results": results}
+
+    def _refresh_one(code: str):
+        hist = fetch_premium_history(code)
+        if hist:
+            _publish_cache(f"prem_hist_{code}", hist, CACHE_TTL["premium_history"])
+        return code, len(hist)
+
+    ex = ThreadPoolExecutor(max_workers=6)
+    try:
+        futures = {ex.submit(_refresh_one, etf["code"]): etf["code"] for etf in STATIC_ETFS}
+        done, not_done = wait(list(futures), timeout=26)
+        for future in not_done:
+            future.cancel()
+            results[futures[future]] = "timeout"
+        for future in done:
+            code = futures[future]
+            try:
+                _, count = future.result()
+                results[code] = count
+            except Exception as exc:
+                results[code] = str(exc)
+    finally:
+        ex.shutdown(wait=False)
+    return {"ts": datetime.now(_CHINA_TZ).isoformat(), "results": results}
 
 
 @app.get("/api/cron/live")
-def cron_live():
+def cron_live(authorization: Optional[str] = Header(default=None)):
     """
     每5分钟由 Vercel Cron 触发，拉取实时股价写入 Redis（qdii:live:{sym}，7min TTL）。
     post_market 时段额外写 qdii:close（今日正规收盘，72h TTL）。
     a_share / weekend 时段跳过（无需实时股价）。
     """
+    _require_job_secret(authorization)
     session = _current_session()
     if session in ("a_share", "weekend"):
         return {"ok": True, "skipped": True, "session": session}
@@ -1741,7 +2840,13 @@ def cron_live():
 
 # ─── 用户认证 ──────────────────────────────────────────────────────────────────
 
-_JWT_SECRET = os.environ.get("JWT_SECRET", "wise-etf-jwt-secret-2026-xk9p")
+_JWT_SECRET = os.environ.get("JWT_SECRET", "")
+
+
+def _require_jwt_secret() -> str:
+    if not _JWT_SECRET:
+        raise HTTPException(status_code=503, detail="JWT_SECRET is not configured")
+    return _JWT_SECRET
 
 def _hash_password(password: str) -> str:
     """PBKDF2-SHA256 加密密码，返回 salt:hash"""
@@ -1760,22 +2865,29 @@ def _verify_password(password: str, stored: str) -> bool:
 
 def _make_token(email: str) -> str:
     """生成 30 天有效的 HMAC-SHA256 token"""
+    secret = _require_jwt_secret()
+    user = _user_get(email) or {}
+    token_version = int(user.get("token_version") or 1)
     exp = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    payload = f"{email}|{exp}"
-    sig = hmac.new(_JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    payload = f"{email}|{exp}|{token_version}"
+    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
 
 def _verify_token(token: str) -> Optional[str]:
     """验证 token，返回 email 或 None"""
+    if not _JWT_SECRET:
+        return None
     try:
         decoded = base64.urlsafe_b64decode(token.encode() + b"==").decode()
-        *parts, sig = decoded.split("|")
-        payload = "|".join(parts)
+        email, exp_str, version_text, sig = decoded.split("|", 3)
+        payload = f"{email}|{exp_str}|{version_text}"
         expected = hmac.new(_JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             return None
-        email, exp_str = payload.rsplit("|", 1)
         if datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ") < datetime.utcnow():
+            return None
+        user = _user_get(email)
+        if not user or int(user.get("token_version") or 1) != int(version_text):
             return None
         return email
     except Exception:
@@ -1785,16 +2897,20 @@ def _user_get(email: str) -> Optional[dict]:
     """从 Redis 读取用户"""
     return _cache_get(f"wise_user:{email.lower()}")
 
-def _user_save(email: str, password_hash: str) -> bool:
+def _user_save(email: str, password_hash: str, *, rotate_tokens: bool = False) -> bool:
     """永久存储用户到 Redis"""
     r = _get_redis()
     if not r:
         return False
     try:
+        existing = _user_get(email) or {}
+        token_version = int(existing.get("token_version") or 1) + (1 if rotate_tokens else 0)
         r.set(f"wise_user:{email.lower()}", json.dumps({
             "email": email.lower(),
             "password": password_hash,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": existing.get("created_at") or datetime.utcnow().isoformat(),
+            "password_updated_at": datetime.utcnow().isoformat() if rotate_tokens else existing.get("password_updated_at"),
+            "token_version": token_version,
         }))
         return True
     except Exception:
@@ -1803,15 +2919,37 @@ def _user_save(email: str, password_hash: str) -> bool:
 
 from fastapi import Request as _Request, Header as _Header
 
+
+def _rate_limit(scope: str, identifier: str, *, limit: int, window_seconds: int) -> None:
+    """Small Redis-backed auth throttle; unavailable Redis already prevents auth writes."""
+    r = _get_redis()
+    if not r:
+        return
+    digest = hashlib.sha256(identifier.encode("utf-8", "ignore")).hexdigest()[:24]
+    key = f"rate:{scope}:{digest}"
+    try:
+        count = int(r.incr(key))
+        if count == 1:
+            r.expire(key, window_seconds)
+        if count > limit:
+            raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(f"[rate_limit] {scope}: {exc}")
+
 @app.post("/api/auth/register")
 async def auth_register(request: _Request):
     """用户注册：邮箱 + 密码（加密存 Redis）"""
+    _require_jwt_secret()
     try:
         body = await request.json()
     except Exception:
         return {"ok": False, "msg": "请求格式错误"}
     email    = body.get("email", "").strip().lower()
     password = body.get("password", "")
+    client_ip = request.client.host if request.client else "unknown"
+    _rate_limit("register", client_ip, limit=5, window_seconds=3600)
     if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
         return {"ok": False, "msg": "邮箱格式不正确"}
     if len(password) < 8:
@@ -1834,12 +2972,15 @@ async def auth_register(request: _Request):
 @app.post("/api/auth/login")
 async def auth_login(request: _Request):
     """用户登录"""
+    _require_jwt_secret()
     try:
         body = await request.json()
     except Exception:
         return {"ok": False, "msg": "请求格式错误"}
     email    = body.get("email", "").strip().lower()
     password = body.get("password", "")
+    client_ip = request.client.host if request.client else "unknown"
+    _rate_limit("login", f"{client_ip}|{email}", limit=10, window_seconds=600)
     user = _user_get(email)
     if not user or not _verify_password(password, user.get("password", "")):
         return {"ok": False, "msg": "邮箱或密码错误"}
@@ -1851,6 +2992,7 @@ async def auth_login(request: _Request):
 @app.get("/api/auth/me")
 def auth_me(authorization: str = _Header(None)):
     """验证 token，返回用户信息"""
+    _require_jwt_secret()
     if not authorization or not authorization.startswith("Bearer "):
         return {"ok": False, "msg": "未登录"}
     email = _verify_token(authorization[7:])
@@ -1862,6 +3004,7 @@ def auth_me(authorization: str = _Header(None)):
 @app.post("/api/auth/change_password")
 async def auth_change_password(request: _Request, authorization: str = _Header(None)):
     """修改密码：验证旧密码后更新"""
+    _require_jwt_secret()
     if not authorization or not authorization.startswith("Bearer "):
         return {"ok": False, "msg": "未登录"}
     email = _verify_token(authorization[7:])
@@ -1886,19 +3029,20 @@ async def auth_change_password(request: _Request, authorization: str = _Header(N
         return {"ok": False, "msg": "新密码需包含数字"}
     if old_password == new_password:
         return {"ok": False, "msg": "新密码不能与当前密码相同"}
-    if not _user_save(email, _hash_password(new_password)):
+    if not _user_save(email, _hash_password(new_password), rotate_tokens=True):
         return {"ok": False, "msg": "修改失败，请稍后重试"}
     logger.info(f"[auth] change_password: {email}")
     return {"ok": True, "msg": "密码修改成功"}
 
 
 @app.get("/api/cron/post_snap")
-def cron_post_snap():
+def cron_post_snap(authorization: Optional[str] = Header(default=None)):
     """
     HKT 08:05 触发（夜盘结束后）：写入最终收盘 + 夜盘涨跌幅，72h TTL 覆盖周末。
       qdii:close:{sym}  收盘涨跌幅（Nasdaq regular；国际市场/港股/A股用 Yahoo v8）
       qdii:post:{sym}   夜盘涨跌幅（Yahoo v8 prefer_post，无夜盘股票跳过）
     """
+    _require_job_secret(authorization)
     yf_syms: set = set()
     hk_a_syms: set = set()
     for code in QDII_CODES:
@@ -1961,37 +3105,48 @@ def cron_post_snap():
 
 
 @app.get("/api/cron/clear")
-def cron_clear():
-    """清空 Redis 基金缓存，下次用户请求时自动重拉（用于强制刷新）"""
+def cron_clear(authorization: Optional[str] = Header(default=None)):
+    """只清热缓存，永久 Last-Known-Good 不会被删除。"""
+    _require_job_secret(authorization)
     r = _get_redis()
     if not r:
         return {"ok": False, "msg": "Redis unavailable"}
-    keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data"]
+    keys = [f"funds_{cat}" for cat in STATIC_FUNDS] + ["etfs", "live_data", "live_data:meta"]
     try:
-        r.delete(*keys)
+        for key in keys:
+            _cache_delete(key)
         return {"ok": True, "cleared": keys}
     except Exception as e:
         return {"ok": False, "msg": str(e)}
 
 
 @app.get("/api/cache/delete")
-def cache_delete_key(key: str = ""):
-    """删除指定 Redis key。
-    GET /api/cache/delete?key=qdii:chg:post:KLAC
-    支持精确 key，也支持通配符（如 qdii:chg:pre:* 会删除所有匹配的 key）。
-    """
+def cache_delete_key(
+    key: str = "",
+    authorization: Optional[str] = Header(default=None),
+):
+    """受保护的精确 key 删除；禁止通配符及用户/收藏命名空间。"""
+    _require_job_secret(authorization)
     if not key:
-        return {"ok": False, "msg": "key is required"}
+        raise HTTPException(status_code=400, detail="key is required")
+    if "*" in key or "?" in key or "[" in key:
+        raise HTTPException(status_code=400, detail="wildcard deletion is disabled")
+
+    public_cache_keys = {
+        "etfs", "live_data", "market_sentiment", "market_sentiment_v2", "pe_history_v3",
+        "monthly_returns_v1", "fx_history", "fx_usdcny", "news",
+        *{f"funds_{category}" for category in STATIC_FUNDS},
+        *{f"prem_hist_{item['code']}" for item in STATIC_ETFS},
+    }
+    qdii_exact = bool(re.fullmatch(r"qdii:(?:chg|close|post|live):[A-Za-z0-9._-]+", key))
+    if key not in public_cache_keys and not qdii_exact:
+        raise HTTPException(status_code=403, detail="key is not in the cache allowlist")
     r = _get_redis()
     if not r:
         return {"ok": False, "msg": "Redis unavailable"}
     try:
-        if "*" in key:
-            _cache_delete_pattern(key)
-            return {"ok": True, "pattern": key}
-        else:
-            _cache_delete(key)
-            return {"ok": True, "deleted": [key]}
+        _cache_delete(key)
+        return {"ok": True, "deleted": [key]}
     except Exception as e:
         return {"ok": False, "msg": str(e)}
 
@@ -2015,48 +3170,11 @@ _MOBILE_HEADERS = {
 
 
 def _fetch_live_one(code: str) -> tuple:
-    """单次调用 FundMNBasicInformation 获取 RZDF/SYL_1N/SGZT/MAXSG"""
-    day_change, rolling_1y, buy_status, daily_limit = None, None, None, None
-    for attempt in range(2):
-        try:
-            resp = requests.get(
-                "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation",
-                params={"FCODE": code, "deviceid": "wise-etf",
-                        "plat": "Wap", "product": "EFund", "version": "6.5.0"},
-                headers=_MOBILE_HEADERS, timeout=(4, 8), verify=False)
-            if resp.ok:
-                d = resp.json()
-                if d.get("ErrCode") == 0:
-                    data = d.get("Datas", {})
-                    rzdf = data.get("RZDF", "")
-                    if rzdf not in ("", "--", None):
-                        day_change = float(rzdf)
-                    syl1n = data.get("SYL_1N", "")
-                    if syl1n not in ("", "--", None):
-                        rolling_1y = float(syl1n)
-                    sgzt  = data.get("SGZT", "")
-                    maxsg = data.get("MAXSG", "")
-                    if sgzt:
-                        has_limit = maxsg and str(maxsg) not in ("", "--", "0", "None")
-                        if has_limit:
-                            try:
-                                val = int(float(maxsg))
-                                daily_limit = "不限额" if val >= 500_000 else f"{val}元"
-                            except (ValueError, TypeError):
-                                daily_limit = f"{maxsg}元"
-                            buy_status = "open"
-                        elif "暂停" in sgzt:
-                            buy_status = "suspended"
-                            daily_limit = "暂停申购"
-                        else:
-                            buy_status = "open"
-                            daily_limit = "不限额"
-            break
-        except Exception:
-            if attempt == 0:
-                time.sleep(0.5)
-    return code, {"day_change": day_change, "rolling_1y": rolling_1y,
-                  "buy_status": buy_status, "daily_limit": daily_limit}
+    """单次获取每日字段，和 `/api/funds` 共用完全相同的解析规则。"""
+    data = _fetch_basic_information(code)
+    if not data:
+        return code, {}
+    return code, _normalize_basic_information(code, data)
 
 
 # ─── ETF 溢价率历史 ──────────────────────────────────────────────────────────────
@@ -2081,7 +3199,7 @@ def fetch_premium_history(code: str, days: int = 35) -> list:
             "https://api.fund.eastmoney.com/f10/lsjz",
             params={"fundCode": code, "pageIndex": 1, "pageSize": days + 5},
             headers={**HEADERS, "Referer": "https://fundf10.eastmoney.com/"},
-            timeout=(3, 6), verify=False,
+            timeout=(3, 6),
         )
         if resp and resp.ok:
             for item in resp.json().get("Data", {}).get("LSJZList", []):
@@ -2125,7 +3243,15 @@ def fetch_premium_history(code: str, days: int = 35) -> list:
         premium = round((price - nav) / nav * 100, 2)
         parts   = full_date.split("-")
         label   = f"{int(parts[1])}/{int(parts[2])}" if len(parts) == 3 else full_date
-        result.append({"date": label, "premium": premium})
+        result.append({
+            "date": label,
+            "full_date": full_date,
+            "premium": premium,
+            "market_price": price,
+            "nav": nav,
+            "basis": "same_day_close_vs_same_day_nav",
+            "source": "eastmoney_nav+sina_close",
+        })
 
     logger.info(f"[prem_hist] {code}: {len(result)} points (nav={len(nav_map)}, price={len(price_map)})")
     return result
@@ -2154,28 +3280,44 @@ def get_premium_history(code: str, response: Response):
     cached = _mem_get(cache_key, "premium_history")
     if cached is not None:
         _cache_header(response, 1800)
-        return {"data": cached, "source": "cache"}
+        return {
+            "data": cached,
+            "source": "cache",
+            "status": "fresh",
+            "as_of": _latest_field_date(cached, ("full_date",)),
+        }
 
     data = fetch_premium_history(code)
     if data:
-        _mem_set(cache_key, data)
+        _publish_cache(cache_key, data, CACHE_TTL["premium_history"])
+        source = "live"
     else:
-        # 实时抓取失败，使用静态兜底
-        data = STATIC_PREMIUM_HISTORY.get(code, [])
+        data = _lkg_get(cache_key) or []
         if data:
-            logger.info(f"[prem_hist] {code} fallback to static data")
+            source = "lkg"
+        else:
+            # 最后才展示带明确日期的历史参考数据。
+            data = STATIC_PREMIUM_HISTORY.get(code, [])
+            source = "reference" if data else "empty"
+            if data:
+                logger.info(f"[prem_hist] {code} fallback to reference snapshot")
 
     _cache_header(response, 1800)
-    return {"data": data, "source": "live" if data else "empty"}
+    return {
+        "data": data,
+        "source": source,
+        "status": "fresh" if source in ("live", "cache") else ("stale" if data else "empty"),
+        "as_of": _latest_field_date(data, ("full_date",)) or ("2026-03-31" if data else None),
+    }
 
 
 @app.get("/api/debug_live/{code}")
-def debug_live(code: str):
+def debug_live(code: str, authorization: Optional[str] = Header(default=None)):
     """调试：单只基金实时行情"""
-    import urllib3; urllib3.disable_warnings()
+    _require_job_secret(authorization)
     rt_resp = None; perf_resp_json = None; err = None
     try:
-        r = requests.get(f"http://fundgz.1234567.com.cn/js/{code}.js", headers=HEADERS, timeout=(4,8))
+        r = requests.get(f"https://fundgz.1234567.com.cn/js/{code}.js", headers=HEADERS, timeout=(4,8))
         m = re.search(r"jsonpgz\((.+)\)", r.text)
         rt_resp = json.loads(m.group(1)) if m else r.text[:200]
     except Exception as e:
@@ -2189,7 +3331,7 @@ def debug_live(code: str):
                 "Origin": "https://mpservice.com",
                 "Accept": "application/json, text/plain, */*",
             },
-            timeout=(6,12), verify=False)
+            timeout=(6,12))
         perf_resp_json = r2.json()
     except Exception as e:
         err = str(e)
@@ -2198,12 +3340,14 @@ def debug_live(code: str):
 def _build_live_data() -> dict:
     """并发拉取所有基金昨日涨跌/申购状态，返回 {code: {...}} 字典"""
     result = {}
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=min(20, _PROVIDER_MAX_CONCURRENCY)) as ex:
         futures = {ex.submit(_fetch_live_one, code): code for code in _ALL_CODES}
         for f in futures:
             try:
                 code, data = f.result(timeout=10)
-                result[code] = {k: v for k, v in data.items() if v is not None}
+                cleaned = {k: v for k, v in data.items() if v is not None and k != "code"}
+                if cleaned:
+                    result[code] = cleaned
             except Exception:
                 pass
     return result
@@ -2215,124 +3359,291 @@ def get_live_data(response: Response):
     缓存策略：服务端内存+文件缓存12h，cron 每日 09:30 预热
     """
     cached = _mem_get("live_data", "live_data")
-    if cached is not None:
+    cached_meta = (_cache_get("live_data:meta") or {}) if cached is not None else {}
+    if cached is not None and cached_meta.get("status") == "fresh":
         _cache_header(response, 43200)
-        return {"data": cached, "source": "cache"}
+        return {
+            "data": cached,
+            "source": "cache",
+            "status": cached_meta.get("status", "partial"),
+            "as_of": cached_meta.get("as_of") or _latest_field_date(list(cached.values()), ("nav_date", "subscription_as_of")),
+            "fresh_count": cached_meta.get("fresh_count"),
+            "total_count": cached_meta.get("total_count", len(_ALL_CODES)),
+            "schema_version": "2.0",
+        }
+    if cached is not None and _recovery_gate_active("live_data"):
+        _cache_header(response, 43200)
+        return {
+            "data": cached,
+            "source": "cache",
+            "status": cached_meta.get("status", "partial"),
+            "as_of": cached_meta.get("as_of") or _latest_field_date(list(cached.values()), ("nav_date", "subscription_as_of")),
+            "fresh_count": cached_meta.get("fresh_count", 0),
+            "total_count": cached_meta.get("total_count", len(_ALL_CODES)),
+            "schema_version": "2.0",
+        }
 
-    data = _build_live_data()
-    if data:
-        _cache_set("live_data", data, CACHE_TTL["live_data"])
-    else:
-        data = _cache_get("live_data") or {}
+    refresh_lock = _try_recovery_refresh("live_data")
+    if refresh_lock is None:
+        if cached is not None:
+            _cache_header(response, 43200)
+            return {
+                "data": cached,
+                "source": "cache",
+                "status": cached_meta.get("status", "partial"),
+                "as_of": cached_meta.get("as_of") or _latest_field_date(list(cached.values()), ("nav_date", "subscription_as_of")),
+                "fresh_count": cached_meta.get("fresh_count", 0),
+                "total_count": cached_meta.get("total_count", len(_ALL_CODES)),
+                "schema_version": "2.0",
+            }
+        lkg_data = _lkg_get("live_data") or {}
+        lkg_meta = _lkg_get("live_data:meta") or {}
+        _cache_header(response, 43200)
+        return {
+            "data": lkg_data,
+            "source": "lkg" if lkg_data else "refresh_in_progress",
+            "status": "stale" if lkg_data else "unavailable",
+            "as_of": lkg_meta.get("as_of") or _latest_field_date(list(lkg_data.values()), ("nav_date", "subscription_as_of")),
+            "fresh_count": 0,
+            "total_count": lkg_meta.get("total_count", len(_ALL_CODES)),
+            "schema_version": "2.0",
+        }
+
+    try:
+        fresh_data = _build_live_data()
+        if fresh_data:
+            previous = {**(_lkg_get("live_data") or {}), **(cached or {})}
+            data = {**previous, **fresh_data}
+            is_complete = len(fresh_data) == len(set(_ALL_CODES))
+            meta = {
+                "status": "fresh" if is_complete else "partial",
+                "fresh_count": len(fresh_data),
+                "total_count": len(set(_ALL_CODES)),
+                "as_of": _latest_field_date(list(fresh_data.values()), ("nav_date", "subscription_as_of")),
+                "cycle_date": datetime.now(_CHINA_TZ).date().isoformat(),
+                "fresh_codes": sorted(fresh_data),
+            }
+            if is_complete:
+                _publish_cache("live_data", data, CACHE_TTL["live_data"])
+                _lkg_set("live_data:meta", meta)
+                source = "live"
+                meta_ttl = CACHE_TTL["live_data"]
+            else:
+                _cache_recovery_snapshot("live_data", data)
+                source = "partial"
+                meta_ttl = RECOVERY_CACHE_TTL
+            _cache_set("live_data:meta", meta, meta_ttl)
+        else:
+            lkg_data = _lkg_get("live_data") or {}
+            data = lkg_data or cached or {}
+            meta = _lkg_get("live_data:meta") or cached_meta
+            source = "lkg" if lkg_data else ("cache" if data else "empty")
+            if data:
+                _cache_recovery_snapshot("live_data", data)
+                _cache_set("live_data:meta", {**meta, "status": "stale"}, RECOVERY_CACHE_TTL)
+    finally:
+        if refresh_lock is not None:
+            refresh_lock.release()
 
     _cache_header(response, 43200)
-    return {"data": data, "source": "live" if data else "empty"}
+    return {
+        "data": data,
+        "source": source,
+        "status": "stale" if source in ("lkg", "cache") and not fresh_data else meta.get("status", "empty"),
+        "as_of": meta.get("as_of") or _latest_field_date(list(data.values()), ("nav_date", "subscription_as_of")),
+        "fresh_count": meta.get("fresh_count", 0),
+        "total_count": meta.get("total_count", len(_ALL_CODES)),
+        "schema_version": "2.0",
+    }
 
 
 @app.get("/api/market-sentiment")
 def get_market_sentiment(response: Response):
-    """市场情绪：VIX 恐慌指数 + CNN 恐慌贪婪指数 + S&P500 PE分位 + 纳斯达克100 PE分位（15min缓存）"""
-    cache_key = "market_sentiment"
-    cached = _mem_get(cache_key, "news")
-    if cached is not None:
-        _cache_header(response, 900)
-        return {"data": cached, "source": "cache"}
+    """每日市场快照：每项均携带自身来源与截止日期。"""
+    # v1 may contain a Yahoo QQQ PE stamped with the fetch date.  Never merge
+    # that incompatible basis into the official, dated Invesco series.
+    cache_key = "market_sentiment_v2"
+    cached = _mem_get(cache_key, "market_sentiment")
+    if cached is not None and cached.get("data_status") == "fresh":
+        _cache_header(response, 3600)
+        return {
+            "data": cached,
+            "source": "cache",
+            "status": cached.get("data_status", "fresh"),
+            "as_of": cached.get("as_of"),
+        }
+    if cached is not None and _recovery_gate_active(cache_key):
+        _cache_header(response, 3600)
+        return {
+            "data": cached,
+            "source": "cache",
+            "status": cached.get("data_status", "partial"),
+            "as_of": cached.get("as_of"),
+        }
 
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        f_vix    = ex.submit(fetch_vix)
-        f_fg     = ex.submit(fetch_fear_greed)
-        f_pe     = ex.submit(fetch_sp500_pe)
-        f_nq_pe  = ex.submit(fetch_nasdaq100_pe)
-        f_ndx    = ex.submit(fetch_index_price, "^NDX")
-        f_spx    = ex.submit(fetch_index_price, "^GSPC")
-        try:
-            vix = f_vix.result(timeout=15)
-        except Exception:
-            vix = {}
-        try:
-            fg = f_fg.result(timeout=15)
-        except Exception:
-            fg = {}
-        try:
-            pe = f_pe.result(timeout=15)
-        except Exception:
-            pe = {}
-        try:
-            nq_pe = f_nq_pe.result(timeout=15)
-        except Exception:
-            nq_pe = {}
-        try:
-            ndx_price = f_ndx.result(timeout=15)
-        except Exception:
-            ndx_price = {}
-        try:
-            spx_price = f_spx.result(timeout=15)
-        except Exception:
-            spx_price = {}
+    refresh_lock = _try_recovery_refresh(cache_key)
+    if refresh_lock is None:
+        if cached is not None:
+            _cache_header(response, 3600)
+            return {
+                "data": cached,
+                "source": "cache",
+                "status": cached.get("data_status", "partial"),
+                "as_of": cached.get("as_of"),
+            }
+        lkg = _lkg_get(cache_key) or {}
+        _cache_header(response, 3600)
+        return {
+            "data": lkg,
+            "source": "lkg" if lkg else "refresh_in_progress",
+            "status": "stale" if lkg else "unavailable",
+            "as_of": lkg.get("as_of"),
+        }
 
-    data = {"vix": vix, "fear_greed": fg, "pe": pe, "nasdaq_pe": nq_pe, "ndx_price": ndx_price, "spx_price": spx_price}
-    if any(v for v in data.values()):
-        _cache_set(cache_key, data, 15 * 60)
-    _cache_header(response, 900)
-    return {"data": data, "source": "live" if any(data.values()) else "empty"}
+    try:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futures = {
+                "vix": ex.submit(fetch_vix),
+                "fear_greed": ex.submit(fetch_fear_greed),
+                "pe": ex.submit(fetch_sp500_pe),
+                "nasdaq_pe": ex.submit(fetch_nasdaq100_pe),
+                "ndx_price": ex.submit(fetch_index_price, "^NDX"),
+                "spx_price": ex.submit(fetch_index_price, "^GSPC"),
+            }
+            fields = {}
+            for name, future in futures.items():
+                try:
+                    fields[name] = future.result(timeout=15) or {}
+                except Exception:
+                    fields[name] = {}
+
+        available = sum(1 for value in fields.values() if value)
+
+        def _field_is_fresh(value: dict) -> bool:
+            """A dated reference is displayable, but is not a fresh result."""
+            if not isinstance(value, dict) or not value:
+                return False
+            status = value.get("data_status") or value.get("status")
+            return status not in {"reference", "stale", "partial", "unavailable", "empty"}
+
+        fresh_fields = sum(1 for value in fields.values() if _field_is_fresh(value))
+        lkg = _lkg_get(cache_key) or {}
+        cached_previous = cached if isinstance(cached, dict) else {}
+        previous = {
+            name: cached_previous.get(name) or lkg.get(name) or {}
+            for name in fields
+        }
+        if available:
+            retained_fields = [name for name, value in fields.items() if not value and previous.get(name)]
+            fields = {
+                name: value or previous.get(name) or {}
+                for name, value in fields.items()
+            }
+            as_of_values = [
+                value.get("as_of") or value.get("date")
+                for value in fields.values() if isinstance(value, dict)
+            ]
+            data = {
+                **fields,
+                "as_of": max(filter(None, as_of_values), default=None),
+                "data_status": "fresh" if fresh_fields == len(fields) else "partial",
+                "available_fields": available,
+                "fresh_fields": fresh_fields,
+                "total_fields": len(fields),
+                "retained_fields": retained_fields,
+            }
+            if fresh_fields == len(fields):
+                _publish_cache(cache_key, data, CACHE_TTL["market_sentiment"])
+                source = "live"
+            else:
+                _cache_recovery_snapshot(cache_key, data)
+                source = "partial"
+        else:
+            retained_fields = [name for name, value in previous.items() if value]
+            if retained_fields:
+                as_of_values = [
+                    value.get("as_of") or value.get("date")
+                    for value in previous.values() if isinstance(value, dict)
+                ]
+                data = {
+                    **previous,
+                    "as_of": max(filter(None, as_of_values), default=None),
+                    "data_status": "stale",
+                    "available_fields": 0,
+                    "fresh_fields": 0,
+                    "total_fields": len(fields),
+                    "retained_fields": retained_fields,
+                }
+                _cache_recovery_snapshot(cache_key, data)
+                source = "lkg" if any(lkg.get(name) for name in fields) else "cache"
+            else:
+                data = {}
+                source = "empty"
+        _cache_header(response, 3600)
+        return {
+            "data": data,
+            "source": source,
+            "status": data.get("data_status", "empty"),
+            "as_of": data.get("as_of"),
+        }
+    finally:
+        if refresh_lock is not None:
+            refresh_lock.release()
 
 
 @app.get("/api/pe-history")
 def get_pe_history(response: Response):
-    """标普500 + 纳指100 历史月度 PE（1990–今，6小时缓存）"""
-    cache_key = "pe_history_v2"
+    """标普500 + 纳指100 历史 PE 参考序列（观测/估算逐点标识）。"""
+    cache_key = "pe_history_v3"
     cached = _mem_get(cache_key, "fx_history")
     if cached is not None:
+        cached_meta = cached.get("meta") or {}
+        has_estimates = any((cached_meta.get(name) or {}).get("contains_estimates") for name in ("sp500", "nasdaq100"))
         _cache_header(response, 21600)
-        return {"data": cached, "source": "cache"}
-    # 先并行拿当前 PE 和标普历史；纳指历史需要依赖当前 PE 才能校准近期月度
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        f_sp_cur = ex.submit(fetch_sp500_pe)
-        f_nq_cur = ex.submit(fetch_nasdaq100_pe)
-        f_sp     = ex.submit(fetch_sp500_pe_history, 1990)
+        return {"data": cached, "source": "cache", "status": "partial" if has_estimates else "fresh"}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_sp = ex.submit(fetch_sp500_pe_history, 1990)
+        f_nq = ex.submit(fetch_nasdaq100_pe_history)
         try:
-            sp_cur  = f_sp_cur.result(timeout=15)
+            sp500 = f_sp.result(timeout=25)
         except Exception:
-            sp_cur  = {}
+            sp500 = []
         try:
-            nq_cur  = f_nq_cur.result(timeout=15)
+            nasdaq = f_nq.result(timeout=25)
         except Exception:
-            nq_cur  = {}
-        try:
-            sp500   = f_sp.result(timeout=25)
-        except Exception:
-            sp500   = []
-    # 把当前纳指 PE 传入，用于校准近期月度数据
-    try:
-        nasdaq = fetch_nasdaq100_pe_history(current_pe=nq_cur.get("pe"))
-    except Exception:
-        nasdaq = []
-    # Extend series to current month using live PE values
-    from datetime import date as _date
-    today_ym = _date.today().strftime("%Y-%m")
-    def _extend(series, cur_pe_val):
-        if not series:
-            return series
-        # Fall back to last known PE if live fetch failed
-        pe_val = cur_pe_val if cur_pe_val else series[-1]["pe"]
-        last = series[-1]["date"]
-        yr, mo = map(int, last.split("-"))
-        mo += 1
-        if mo > 12:
-            mo = 1; yr += 1
-        while f"{yr}-{mo:02d}" <= today_ym:
-            series.append({"date": f"{yr}-{mo:02d}", "pe": round(float(pe_val), 2)})
-            mo += 1
-            if mo > 12:
-                mo = 1; yr += 1
-        return series
-    sp500  = _extend(sp500,  sp_cur.get("pe"))
-    nasdaq = _extend(nasdaq, nq_cur.get("pe"))
-    data = {"sp500": sp500, "nasdaq100": nasdaq}
+            nasdaq = []
+
+    def _series_meta(rows: list) -> dict:
+        qualities = {row.get("quality", "unknown") for row in rows}
+        return {
+            "as_of": rows[-1].get("date") if rows else None,
+            "points": len(rows),
+            "quality": next(iter(qualities)) if len(qualities) == 1 else "mixed",
+            "contains_estimates": "estimated" in qualities,
+        }
+
+    data = {
+        "sp500": sp500,
+        "nasdaq100": nasdaq,
+        "meta": {
+            "sp500": _series_meta(sp500),
+            "nasdaq100": _series_meta(nasdaq),
+            "usage": "reference_only_not_for_percentile",
+        },
+    }
     if sp500 or nasdaq:
-        _cache_set(cache_key, data, 6 * 3600)
+        _publish_cache(cache_key, data, 6 * 3600)
+        contains_estimates = data["meta"]["sp500"]["contains_estimates"] or data["meta"]["nasdaq100"]["contains_estimates"]
+        source = "reference" if contains_estimates else "live"
+    else:
+        data = _lkg_get(cache_key) or data
+        source = "lkg" if data.get("sp500") or data.get("nasdaq100") else "empty"
     _cache_header(response, 21600)
-    return {"data": data, "source": "live"}
+    return {
+        "data": data,
+        "source": source,
+        "status": "stale" if source == "lkg" else "partial" if source == "reference" else "fresh" if source != "empty" else "empty",
+    }
 
 
 def _call_deepseek(prompt: str) -> str:
@@ -2361,12 +3672,16 @@ def _call_deepseek(prompt: str) -> str:
 
 @app.get("/api/market-ai-insight")
 def get_market_ai_insight(response: Response):
-    """DeepSeek AI 市场深度解读（缓存2小时）"""
-    cache_key = "market_ai_insight"
+    """每日一次、基于已验证指数快照的 AI 摘要。"""
+    cache_key = "market_ai_insight_v2"
     cached = _mem_get(cache_key, "news")
     if cached is not None:
-        _cache_header(response, 7200)
-        return {"data": cached, "source": "cache"}
+        _cache_header(response, 86400)
+        return {"data": cached, "source": "cache", "status": "fresh"}
+
+    # 没有持久缓存时不允许每个页面访问都触发付费模型调用。
+    if not _get_redis():
+        return {"data": None, "source": "disabled", "status": "unavailable", "reason": "persistent_cache_required"}
 
     # 获取最新指数数据
     with ThreadPoolExecutor(max_workers=2) as ex:
@@ -2385,35 +3700,41 @@ def get_market_ai_insight(response: Response):
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # ── Step 1：让 AI 先提炼客观数据洞察 ──────────────────────────────────────
-    step1_prompt = f"""根据以下美股市场数据，用1-2句话提炼出4个最值得关注的积极事实，重点关注：
-长期牛市趋势的延续性、连涨天数体现的强势动能、双指数携手走强的健康格局、科技股领涨的结构性机会。
-只输出4条简短的正向事实陈述，每条一行，不需要标题或编号。
+    prompt = f"""请仅依据下面给出的数字，生成2条中性、可核验的中文市场摘要。
+不得补充未提供的历史事实，不得预测收益，不得给出买卖建议；数据不足就明确说不足。
+每条40-70字，level只能是 bullish、neutral 或 bearish。
+严格输出JSON数组，不要输出其他文字：
+[{{"tag":"3-5字标题","icon":"一个emoji","text":"摘要","level":"neutral"}}]
 
-数据（{today}）：
-纳指100：{ndx.get('price')}点 今日{fmt(ndx.get('change_pct'),'%')} 连涨{ndx.get('streak',0)}天 近15日{fmt(ndx.get('returns',{}).get('d15'),'%')} 近1月{fmt(ndx.get('returns',{}).get('mo1'),'%')} 近半年{fmt(ndx.get('returns',{}).get('mo6'),'%')} 近1年{fmt(ndx.get('returns',{}).get('yr1'),'%')} 年内高{ndx.get('yr_high')} 低{ndx.get('yr_low')}
-标普500：{spx.get('price')}点 今日{fmt(spx.get('change_pct'),'%')} 连涨{spx.get('streak',0)}天 近15日{fmt(spx.get('returns',{}).get('d15'),'%')} 近1月{fmt(spx.get('returns',{}).get('mo1'),'%')} 近半年{fmt(spx.get('returns',{}).get('mo6'),'%')} 近1年{fmt(spx.get('returns',{}).get('yr1'),'%')} 年内高{spx.get('yr_high')} 低{spx.get('yr_low')}"""
+数据日期：{today}
+纳指100：{ndx.get('price')}点，日涨跌{fmt(ndx.get('change_pct'),'%')}，连续方向天数{ndx.get('streak',0)}，近15日{fmt(ndx.get('returns',{}).get('d15'),'%')}，近1月{fmt(ndx.get('returns',{}).get('mo1'),'%')}，近半年{fmt(ndx.get('returns',{}).get('mo6'),'%')}，近1年{fmt(ndx.get('returns',{}).get('yr1'),'%')}。
+标普500：{spx.get('price')}点，日涨跌{fmt(spx.get('change_pct'),'%')}，连续方向天数{spx.get('streak',0)}，近15日{fmt(spx.get('returns',{}).get('d15'),'%')}，近1月{fmt(spx.get('returns',{}).get('mo1'),'%')}，近半年{fmt(spx.get('returns',{}).get('mo6'),'%')}，近1年{fmt(spx.get('returns',{}).get('yr1'),'%')}。"""
 
-    raw_facts = _call_deepseek(step1_prompt)
-    if not raw_facts:
-        return {"data": None, "source": "empty"}
-
-    # ── Step 2：把客观事实转化成长期乐观投资者的口吻 ──────────────────────────────
-    step2_prompt = f"""下面是今天（{today}）美股市场的4个关键事实：
-
-{raw_facts}
-
-现在你是一个有15年经验、长期持有纳指/标普的乐观价值投资者，把这4条事实转化成你自己的真实想法，像在跟好朋友分享投资心得。
-要求：
-- 用第一人称"我"，语气积极正面，比如"我越来越坚定..."、"这让我想起..."、"历史告诉我..."、"我的策略很简单..."
-- 聚焦长期视角：纳指/标普过去几十年从未让长期持有者失望，每次回调都是加仓机会
-- 每条50-80字，结合具体历史数据或典型行情（如2009、2020疫情后复苏）来支撑乐观观点
-- 4条分别对应4个不同角度（趋势/动能/结构/策略），level全部使用"bullish"
-- 严格输出JSON数组格式：
-[{{"tag":"3-5字标题","icon":"一个emoji","text":"你的观点","level":"bullish"}}]
-- 只输出JSON，不要任何其他文字"""
-
-    ai_text = _call_deepseek(step2_prompt)
+    # 防止多个冷启动请求同时触发付费调用。锁在模型最长 30s 超时之外留余量。
+    redis = _get_redis()
+    lock_key = "lock:market_ai_insight_v2"
+    lock_token = secrets.token_hex(12)
+    try:
+        lock_acquired = bool(redis.set(lock_key, lock_token, nx=True, ex=60)) if redis else False
+    except Exception as exc:
+        logger.warning(f"[deepseek:lock] {exc}")
+        lock_acquired = False
+    if not lock_acquired:
+        retained = _lkg_get(cache_key)
+        _cache_header(response, 60)
+        return {
+            "data": retained,
+            "source": "lkg" if retained else "generation_in_progress",
+            "status": "stale" if retained else "unavailable",
+        }
+    try:
+        ai_text = _call_deepseek(prompt)
+    finally:
+        try:
+            # 60 秒锁长于模型超时，因此不会误删下一位持有者的锁。
+            redis.delete(lock_key)
+        except Exception:
+            pass
 
     # 解析 JSON
     insights = []
@@ -2433,9 +3754,13 @@ def get_market_ai_insight(response: Response):
     }
 
     if insights:
-        _cache_set(cache_key, result, 24 * 3600)  # 缓存24小时，每日更新一次
+        _publish_cache(cache_key, result, 24 * 3600)
+        source = "live"
+    else:
+        result = _lkg_get(cache_key)
+        source = "lkg" if result else "empty"
     _cache_header(response, 86400)
-    return {"data": result, "source": "live" if insights else "empty"}
+    return {"data": result, "source": source, "status": "stale" if source == "lkg" else "fresh" if source == "live" else "empty"}
 
 
 # ─── 微信小程序：登录 & 用户收藏 ──────────────────────────────────────────────
@@ -2536,7 +3861,7 @@ from pathlib import Path as _Path
 from contextlib import contextmanager as _ctx
 
 # 所有主动 QDII 基金代码（与前端 QDII_FUNDS 同步）
-QDII_CODES = [f["code"] for f in STATIC_FUNDS["us_active"]]
+QDII_CODES = list(_LEGACY_QDII_CODES)
 
 # C 类 → A 类持仓重定向（同一投资组合，避免缓存时序差异导致 A/C 持仓不一致）
 _C_TO_A_HOLDINGS_MAP: dict[str, str] = {
@@ -3706,5 +5031,3 @@ def api_qdii_valuations(response: Response):
     }
     response.headers["Cache-Control"] = "no-store"
     return payload
-
-

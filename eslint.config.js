@@ -5,7 +5,17 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // QDII valuation and the WeChat mini-program are intentionally outside the
+  // current refactor. Imported vendor/demo bundles are not application source.
+  globalIgnores([
+    'dist',
+    'miniprogram/**',
+    'src/QDIIPage.jsx',
+    'external/**',
+    'spcx-ipo-recap-deck/**',
+    'biyapay-first4/**',
+    'tmp/**',
+  ]),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
