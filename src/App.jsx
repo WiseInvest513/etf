@@ -1120,9 +1120,8 @@ function SectionHeader({title,subtitle,count,color=C.accent,timestamp,sortable})
   );
 }
 
-function DataStatusBanner({dataset,label="数据",onRetry}){
+function DataStatusBanner({dataset,label="数据"}){
   if(!dataset||dataset.status===DATASET_STATE.FRESH||dataset.status===DATASET_STATE.LOADING) return null;
-  const hasData=Array.isArray(dataset.data)?dataset.data.length>0:Boolean(dataset.data);
   const tone=dataset.status===DATASET_STATE.ERROR?{bg:C.redBg,color:C.red,border:`${C.red}30`}
     :dataset.status===DATASET_STATE.EMPTY?{bg:C.borderLight,color:C.textMuted,border:C.border}
     :{bg:C.orangeBg,color:C.orange,border:`${C.orange}35`};
@@ -1132,7 +1131,6 @@ function DataStatusBanner({dataset,label="数据",onRetry}){
     :`${label}仅部分字段更新成功`;
   return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 13px",margin:"0 0 16px",borderRadius:10,background:tone.bg,color:tone.color,border:`1px solid ${tone.border}`,fontSize:12}}>
     <span>{text}{dataset.asOf?` · 数据截至 ${dataset.asOf}`:""}{dataset.source?` · ${dataset.source}`:""}</span>
-    {onRetry&&<button onClick={onRetry} style={{border:`1px solid ${tone.color}55`,background:"transparent",color:tone.color,borderRadius:7,padding:"4px 9px",cursor:"pointer",fontSize:11,flexShrink:0}}>{hasData?"重新获取":"重试"}</button>}
   </div>;
 }
 
@@ -4713,7 +4711,6 @@ function MainApp() {
   const [showAuth,setShowAuth]=useState(false);
   const [authRequired,setAuthRequired]=useState(false);
   const [showUserCenter,setShowUserCenter]=useState(false);
-  const [reloadToken,setReloadToken]=useState(0);
   const [datasets,setDatasets]=useState({
     nasdaq:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
     sp500:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
@@ -4888,7 +4885,7 @@ function MainApp() {
 
     runStartupQueue();
     return()=>{cancelled=true;};
-  },[reloadToken,loadSentiment]);
+  },[loadSentiment]);
 
   const handleSort = k => {
     if(sortKey===k) setSortDir(d=>d==="asc"?"desc":"asc");
@@ -5289,9 +5286,9 @@ function MainApp() {
         {activeTab==="overview"&&(
           <>
             {[["nasdaq","纳指被动"],["sp500","标普被动"],["active","主动基金"],["etfs","场内ETF"]].map(([key,label])=>(
-              <DataStatusBanner key={key} dataset={datasets[key]} label={label} onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+              <DataStatusBanner key={key} dataset={datasets[key]} label={label}/>
             ))}
-            <DataStatusBanner dataset={sentimentDataset} label="市场概览与情绪" onRetry={startupReady?()=>loadSentiment():null}/>
+            <DataStatusBanner dataset={sentimentDataset} label="市场概览与情绪"/>
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[
@@ -5319,7 +5316,7 @@ function MainApp() {
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>纳指 vs 标普 · 月度收益</div>
                   <div style={{fontSize:12,color:C.textDim,marginBottom:6}}>最近12个完整自然月 · 美元价格收益{datasets.monthly.asOf?` · 截至 ${datasets.monthly.asOf}`:""}</div>
                   {monthlyMtd?.status!=="unavailable"&&monthlyMtd&&<div style={{fontSize:11,color:C.orange,marginBottom:12}}>本月 MTD（未完结）：纳指 {formatPercent(monthlyMtd.nasdaq,{digits:2})} · 标普 {formatPercent(monthlyMtd.sp500,{digits:2})}</div>}
-                  <DataStatusBanner dataset={datasets.monthly} label="月度收益" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+                  <DataStatusBanner dataset={datasets.monthly} label="月度收益"/>
                   {monthlyReturns.length===0?(
                     <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontSize:13}}>暂无可用月度收益</div>
                   ):(<ResponsiveContainer width="100%" height={220}>
@@ -5469,7 +5466,7 @@ function MainApp() {
         {activeTab==="nasdaq"&&(
           <Reveal>
             <SectionHeader title="场外纳斯达克100（被动型）" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(nasdaqM).length} color={C.accent} timestamp={datasets.nasdaq.asOf} sortable/>
-            <DataStatusBanner dataset={datasets.nasdaq} label="纳指被动基金" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+            <DataStatusBanner dataset={datasets.nasdaq} label="纳指被动基金"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
@@ -5483,7 +5480,7 @@ function MainApp() {
         {activeTab==="sp500"&&(
           <Reveal>
             <SectionHeader title="场外标普500基金对比" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(sp500M).length} color={C.cyan} timestamp={datasets.sp500.asOf} sortable/>
-            <DataStatusBanner dataset={datasets.sp500} label="标普被动基金" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+            <DataStatusBanner dataset={datasets.sp500} label="标普被动基金"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
@@ -5497,7 +5494,7 @@ function MainApp() {
         {activeTab==="active"&&(
           <Reveal>
             <SectionHeader title="场外美股（主动型）基金对比" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(activeM).length} color={C.purple} timestamp={datasets.active.asOf} sortable/>
-            <DataStatusBanner dataset={datasets.active} label="主动基金" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+            <DataStatusBanner dataset={datasets.active} label="主动基金"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
@@ -5516,7 +5513,7 @@ function MainApp() {
         {activeTab==="etf"&&(
           <Reveal>
             <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价率相对最新已公布净值" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
-            <DataStatusBanner dataset={datasets.etfs} label="场内ETF" onRetry={startupReady?()=>setReloadToken(v=>v+1):null}/>
+            <DataStatusBanner dataset={datasets.etfs} label="场内ETF"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
             </div>

@@ -735,6 +735,7 @@ class EtfCacheContractTests(unittest.TestCase):
         rows = [{"code": "513100", "premium": 1.2, "data_status": "partial"}]
         with (
             patch.object(api, "_mem_get", return_value=rows),
+            patch.object(api, "_recovery_gate_active", return_value=True),
             patch.object(api, "_build_etfs") as build,
             patch.object(api, "_publish_cache") as publish,
             patch.object(api, "_cache_set") as cache_set,
@@ -749,6 +750,7 @@ class EtfCacheContractTests(unittest.TestCase):
 
     def test_true_cold_public_etf_get_returns_reference_without_building(self):
         with (
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 10, 30, tzinfo=timezone(timedelta(hours=8)))),
             patch.object(api, "_mem_get", return_value=None),
             patch.object(api, "_file_load", return_value=None),
             patch.object(api, "STATIC_ETFS", [{"code": "513100"}]),
@@ -758,6 +760,34 @@ class EtfCacheContractTests(unittest.TestCase):
 
         build.assert_not_called()
         self.assertEqual(payload["source"], "reference")
+
+    def test_after_close_cold_get_runs_one_guarded_recovery(self):
+        rows = [{
+            "code": "513100",
+            "market_price": 1.75,
+            "premium": 2.94,
+            "quote_as_of": "2026-08-20T15:00:00+08:00",
+            "premium_quote_as_of": "2026-08-20T15:00:00+08:00",
+            "premium_status": "fresh",
+            "data_status": "fresh",
+        }]
+        with (
+            patch.object(api, "_mem_get", return_value=None),
+            patch.object(api, "_file_load", return_value=None),
+            patch.object(api, "STATIC_ETFS", [{"code": "513100"}]),
+            patch.object(api, "_recovery_gate_active", return_value=False),
+            patch.object(api, "_acquire_job_lock", return_value="run-token"),
+            patch.object(api, "_release_job_lock") as release,
+            patch.object(api, "_build_etfs", return_value=(rows, "live")) as build,
+            patch.object(api, "_store_snapshot", return_value=True) as store,
+        ):
+            payload = api.get_etfs(Response())
+
+        build.assert_called_once_with()
+        store.assert_called_once_with("etfs", rows, "live", api.CACHE_TTL["etfs"])
+        release.assert_called_once_with("etfs:close", "run-token")
+        self.assertEqual(payload["source"], "live")
+        self.assertEqual(payload["status"], "fresh")
 
     def test_etf_lkg_is_rehydrated_with_field_level_stale_statuses(self):
         previous = [{
@@ -776,6 +806,7 @@ class EtfCacheContractTests(unittest.TestCase):
             patch.object(api, "_mem_get", return_value=None),
             patch.object(api, "_build_etfs", return_value=([], "none")),
             patch.object(api, "_file_load", return_value=previous),
+            patch.object(api, "_recovery_gate_active", return_value=True),
             patch.object(api, "_cache_set") as cache_set,
             patch.object(api, "_publish_cache") as publish,
         ):

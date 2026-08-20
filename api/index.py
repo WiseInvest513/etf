@@ -2434,7 +2434,7 @@ def get_funds(category: str, response: Response):
 
 @app.get("/api/etfs")
 def get_etfs(response: Response):
-    """Read the latest official close snapshot; never build from a public GET."""
+    """Serve the official close snapshot, with one guarded after-close recovery."""
     cache_key = "etfs"
     cached = _mem_get(cache_key, "etfs")
     if cached:
@@ -2452,6 +2452,38 @@ def get_etfs(response: Response):
             results = _reference_etfs()
             source = "reference"
             status = "stale"
+
+    # Cold deployment or a failed cron may leave no current close snapshot.
+    # Permit exactly one cross-instance recovery after the A-share close;
+    # followers keep receiving the stale/reference snapshot, and failures back
+    # off for five minutes.  A normal page refresh therefore never fans out to
+    # providers and can never publish an intraday quote.
+    now = _china_now()
+    after_close = now.weekday() < 5 and (now.hour, now.minute) >= (15, 5)
+    if status != "fresh" and after_close and not _recovery_gate_active(cache_key):
+        lock_key = "etfs:close"
+        token = _acquire_job_lock(lock_key)
+        if token is not None:
+            try:
+                candidate, candidate_source = _build_etfs()
+                if candidate_source == "live" and _store_snapshot(
+                    cache_key, candidate, candidate_source, CACHE_TTL["etfs"]
+                ):
+                    results = candidate
+                    source = "live"
+                    status = "fresh"
+                elif candidate_source == "partial":
+                    results = candidate
+                    source = "partial"
+                    status = "partial"
+                    _cache_recovery_snapshot(cache_key, candidate)
+                else:
+                    _cache_recovery_snapshot(cache_key, results)
+            except Exception as exc:
+                logger.error(f"[etfs:recovery] {exc}")
+                _cache_recovery_snapshot(cache_key, results)
+            finally:
+                _release_job_lock(lock_key, token)
 
     _cache_header(response, 300)
     return {
