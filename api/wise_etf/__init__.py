@@ -17,6 +17,16 @@ from .normalizers import (
     rolling_nav_return,
     safe_sort,
 )
+from .qdii import (
+    canonicalize_symbol,
+    combine_percent_returns,
+    compute_fund_valuation,
+    currency_for_symbol,
+    fx_pair_for_currency,
+    normalize_yahoo_quote,
+    position_return_cny,
+    quote_observation_is_recent,
+)
 
 __all__ = [
     "NavPoint",
@@ -33,4 +43,12 @@ __all__ = [
     "parse_number",
     "rolling_nav_return",
     "safe_sort",
+    "canonicalize_symbol",
+    "combine_percent_returns",
+    "compute_fund_valuation",
+    "currency_for_symbol",
+    "fx_pair_for_currency",
+    "normalize_yahoo_quote",
+    "position_return_cny",
+    "quote_observation_is_recent",
 ]

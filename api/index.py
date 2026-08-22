@@ -41,10 +41,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from upstash_redis import Redis
 
 from api.wise_etf import (
+    canonicalize_symbol,
     calculate_etf_premium,
+    compute_fund_valuation,
+    currency_for_symbol,
+    fx_pair_for_currency,
     normalize_purchase,
+    normalize_yahoo_quote,
     normalize_yahoo_monthly_returns,
     parse_number,
+    quote_observation_is_recent,
     rolling_nav_return,
     safe_sort,
 )
@@ -512,7 +518,7 @@ def _yf_invalidate_crumb(expected_crumb: Optional[str] = None):
         _YF_CRUMB.update({"crumb": None, "cookies": None, "ts": 0.0})
         _cache_delete("yf_crumb")
 
-def _yf_get_crumb() -> tuple:
+def _yf_get_crumb(deadline: Optional[float] = None) -> tuple:
     """
     返回 (crumb, cookies)。
     内存缓存 12h；过期后从 Redis 取；再取不到才重新走认证流程。
@@ -523,7 +529,13 @@ def _yf_get_crumb() -> tuple:
 
     # A cold page starts several Yahoo consumers concurrently.  Serialize the
     # cookie/crumb handshake and re-check state after acquiring the lock.
-    with _YF_CRUMB_LOCK:
+    if deadline is None:
+        acquired = _YF_CRUMB_LOCK.acquire()
+    else:
+        acquired = _YF_CRUMB_LOCK.acquire(timeout=max(0.0, deadline - time.monotonic()))
+    if not acquired:
+        return None, {}
+    try:
         now = time.time()
         if _YF_CRUMB["crumb"] and now - _YF_CRUMB["ts"] < 12 * 3600:
             return _YF_CRUMB["crumb"], _YF_CRUMB["cookies"] or {}
@@ -538,10 +550,21 @@ def _yf_get_crumb() -> tuple:
             # fc.yahoo.com returns the A3 cookie even though the page itself is
             # 404.  finance.yahoo.com can return a cookie-less regional page.
             sess = _req.Session()
-            sess.get("https://fc.yahoo.com", headers=YF_HEADERS, timeout=(5, 15))
+            remaining = deadline - time.monotonic() if deadline is not None else 12.0
+            if remaining <= 1.0:
+                return None, {}
+            sess.get(
+                "https://fc.yahoo.com",
+                headers=YF_HEADERS,
+                timeout=(min(3.0, max(1.0, remaining / 3)), min(6.0, max(1.0, remaining / 2))),
+            )
+            remaining = deadline - time.monotonic() if deadline is not None else 10.0
+            if remaining <= 1.0:
+                return None, {}
             resp = sess.get(
                 "https://query1.finance.yahoo.com/v1/test/getcrumb",
-                headers=YF_HEADERS, timeout=(4, 10),
+                headers=YF_HEADERS,
+                timeout=(min(3.0, max(1.0, remaining / 3)), min(6.0, max(1.0, remaining))),
             )
             crumb = resp.text.strip() if resp.ok else ""
             if crumb and not crumb.startswith(("{", "<")):
@@ -553,6 +576,8 @@ def _yf_get_crumb() -> tuple:
         except Exception as e:
             logger.warning(f"[yf_crumb] failed: {e}")
         return None, {}
+    finally:
+        _YF_CRUMB_LOCK.release()
 
 
 def _yf_chart(symbol: str, interval: str = "1d", range_: str = "5d") -> Optional[dict]:
@@ -598,7 +623,7 @@ _NASDAQ_UA_POOL = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
 ]
 
-def _nasdaq_fetch(symbol: str) -> dict:
+def _nasdaq_fetch(symbol: str, deadline: Optional[float] = None) -> dict:
     """
     Nasdaq.com API：返回 {pct}，primaryData.percentageChange 直接字段（相对昨收的涨跌幅%）。
     盘前/盘后/盘中均有效，不需要手算。失败时自动重试一次。
@@ -606,8 +631,13 @@ def _nasdaq_fetch(symbol: str) -> dict:
     url = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
     for attempt in range(2):
         try:
+            remaining = deadline - time.monotonic() if deadline is not None else 12.0
+            if remaining <= 1.0:
+                break
             if attempt > 0:
-                time.sleep(_random.uniform(0.5, 1.2))
+                delay = min(_random.uniform(0.5, 1.2), max(0.0, remaining - 1.0))
+                if delay:
+                    time.sleep(delay)
             headers = {
                 "User-Agent": _random.choice(_NASDAQ_UA_POOL),
                 "Accept": "application/json, text/plain, */*",
@@ -616,7 +646,15 @@ def _nasdaq_fetch(symbol: str) -> dict:
                 "Referer": "https://www.nasdaq.com/",
                 "Origin": "https://www.nasdaq.com",
             }
-            resp = _get(url, headers=headers, timeout=(5, 12))
+            remaining = deadline - time.monotonic() if deadline is not None else 12.0
+            if remaining <= 1.0:
+                break
+            resp = _get(
+                url,
+                headers=headers,
+                _queue_timeout=min(2.0, max(0.1, remaining / 4)),
+                timeout=(min(3.0, max(1.0, remaining / 3)), min(8.0, max(1.0, remaining))),
+            )
             if not (resp and resp.ok):
                 continue
             primary = (resp.json().get("data") or {}).get("primaryData") or {}
@@ -652,7 +690,8 @@ def _get(url, **kwargs) -> Optional[requests.Response]:
     # Builders never create more workers than this semaphore, but independent
     # routes can briefly overlap during a cold page load.  Queue briefly rather
     # than dropping an otherwise valid provider request after only two seconds.
-    if not _PROVIDER_SEMAPHORE.acquire(timeout=8):
+    queue_timeout = kwargs.pop("_queue_timeout", 8)
+    if not _PROVIDER_SEMAPHORE.acquire(timeout=queue_timeout):
         logger.warning(f"GET skipped (provider concurrency limit) {url[:60]}")
         return None
     try:
@@ -1123,7 +1162,7 @@ def fetch_etfs_sina_batch(codes: List[str]) -> Dict[str, dict]:
     return result
 
 
-def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
+def _sina_stock_batch(yahoo_symbols: List[str], deadline: Optional[float] = None) -> Dict[str, dict]:
     """
     新浪财经批量行情 — A股 + 港股（一次请求）。
     输入 Yahoo Finance 格式的 symbol（如 600519.SS / 000001.SZ / 0700.HK）。
@@ -1160,8 +1199,13 @@ def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
 
     symbols_str = ",".join(sina_to_yahoo.keys())
     try:
+        remaining = deadline - time.monotonic() if deadline is not None else 8.0
+        if remaining <= 1.0:
+            return {}
         resp = _get(f"https://hq.sinajs.cn/list={symbols_str}",
-                    headers=_SINA_HEADERS, timeout=(3, 8))
+                    headers=_SINA_HEADERS,
+                    _queue_timeout=min(2.0, max(0.1, remaining / 4)),
+                    timeout=(min(3.0, max(1.0, remaining / 3)), min(8.0, max(1.0, remaining))))
         if not (resp and resp.ok):
             return {}
         text = resp.content.decode("gbk", errors="ignore")
@@ -1194,7 +1238,7 @@ def _sina_stock_batch(yahoo_symbols: List[str]) -> Dict[str, dict]:
     return result
 
 
-def _twse_batch(tw_symbols: List[str]) -> Dict[str, float]:
+def _twse_batch(tw_symbols: List[str], deadline: Optional[float] = None) -> Dict[str, float]:
     """
     台湾证交所 (TWSE) 批量行情，返回 {symbol.TW: change_pct}。
     ex_ch 支持管道符批量，如 tse_2330.tw|tse_2454.tw。
@@ -1204,10 +1248,14 @@ def _twse_batch(tw_symbols: List[str]) -> Dict[str, float]:
     codes = [s[:-3] for s in tw_symbols if s.endswith(".TW")]
     ex_ch = "|".join(f"tse_{c}.tw" for c in codes)
     try:
+        remaining = deadline - time.monotonic() if deadline is not None else 8.0
+        if remaining <= 1.0:
+            return {}
         r = _get(
             "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
             params={"ex_ch": ex_ch, "json": "1", "delay": "0"},
-            timeout=(3, 8),
+            _queue_timeout=min(2.0, max(0.1, remaining / 4)),
+            timeout=(min(3.0, max(1.0, remaining / 3)), min(8.0, max(1.0, remaining))),
         )
         if not (r and r.ok):
             return {}
@@ -4135,6 +4183,28 @@ from contextlib import contextmanager as _ctx
 # 所有主动 QDII 基金代码（与前端 QDII_FUNDS 同步）
 QDII_CODES = list(_LEGACY_QDII_CODES)
 
+# v3 从唯一产品目录生成，不再维护第三份 QDII 产品列表。A/C 份额共用
+# master_code 对应的组合，31 只产品当前只有 23 套独立持仓。
+QDII_V3_PRODUCTS = [dict(row) for row in STATIC_FUNDS.get("us_active", [])]
+QDII_V3_CODES = [row["code"] for row in QDII_V3_PRODUCTS]
+# 501312 primarily owns overseas ETFs/other funds.  Stock-holdings based
+# estimation is structurally invalid for this FOF, so retain it in the public
+# product list with an explicit unsupported status but do not make it block the
+# 30 directly estimable products.
+QDII_V3_UNSUPPORTED_MASTER_CODES = {"501312": "fund_of_funds"}
+QDII_V3_ALL_MASTER_CODES = sorted({row.get("master_code") or row["code"] for row in QDII_V3_PRODUCTS})
+QDII_V3_MASTER_CODES = [
+    code for code in QDII_V3_ALL_MASTER_CODES
+    if code not in QDII_V3_UNSUPPORTED_MASTER_CODES
+]
+QDII_V3_HOLDINGS_KEY = "qdii:v3:holdings"
+QDII_V3_QUOTES_KEY = "qdii:v3:quotes"
+QDII_V3_VALUATIONS_KEY = "qdii:v3:valuations"
+QDII_V3_PARTIAL_VALUATIONS_KEY = "qdii:v3:valuations:partial"
+QDII_V3_HOLDINGS_TTL = 48 * 3600
+QDII_V3_QUOTES_TTL = 15 * 60
+QDII_V3_VALUATIONS_TTL = 15 * 60
+
 # C 类 → A 类持仓重定向（同一投资组合，避免缓存时序差异导致 A/C 持仓不一致）
 _C_TO_A_HOLDINGS_MAP: dict[str, str] = {
     "022184": "100055",  # 富国全球科技互联网C → A
@@ -4385,6 +4455,17 @@ def _current_session() -> str:
     if h >= 21.5 or h < 4.0: return "us_open"
     return "post_market"  # HKT 04:00-08:00
 
+
+def _valuation_ttl() -> int:
+    """Short legacy-helper TTL kept deterministic during the v3 migration."""
+    session = _current_session()
+    if session in ("pre_market", "us_open"):
+        return 5 * 60
+    if session == "post_market":
+        return 15 * 60
+    return 30 * 60
+
+
 _VALUATION_TTL  = 20 * 3600   # 持仓数据写 DB 时用
 
 
@@ -4407,31 +4488,11 @@ _EM_US_IDS = {"105", "106", "107", "74"}
 
 def _map_em_id_to_yahoo(market_id: str, code: str) -> str:
     """根据东方财富数字市场 ID 转换为 Yahoo Finance symbol"""
-    if market_id in _EM_US_IDS:
-        return code.upper()
-    if market_id in _EM_ID_TO_YF:
-        suffix = _EM_ID_TO_YF[market_id]
-        if suffix == "HK":
-            try: return f"{int(code)}.HK"
-            except ValueError: return f"{code}.HK"
-        return f"{code}.{suffix}"
-    # 未知 ID：按代码位数+首位启发式推断
-    return _normalize_symbol(code)
+    return canonicalize_symbol(code, market_id)
 
 def _normalize_symbol(raw: str) -> str:
     """无市场 ID 时的兜底：纯数字按首位+位数推断交易所"""
-    raw = raw.strip()
-    if not raw:
-        return raw
-    if raw.isdigit():
-        n, head = len(raw), raw[0]
-        if n == 6:
-            if head == "6": return f"{raw}.SS"   # 上交所 600xxx/603xxx/688xxx
-            if head == "3": return f"{raw}.SZ"   # 创业板 300xxx/301xxx
-            return f"{raw}.KS"                   # 其余6位优先当韩股
-        if n == 4: return f"{raw}.TW"            # 台股
-        return f"{int(raw)}.HK"                  # 港股
-    return raw
+    return canonicalize_symbol(raw)
 
 
 def _parse_em_holdings_table(html: str) -> list:
@@ -4453,6 +4514,14 @@ def _parse_em_holdings_table(html: str) -> list:
     if not target:
         return []
 
+    headers = [
+        _strip_tags(cell)
+        for cell in re.findall(r'<th[^>]*>(.*?)</th>', target, re.DOTALL)
+    ]
+    weight_index = next(
+        (index for index, label in enumerate(headers) if "占净值" in label),
+        None,
+    )
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', target, re.DOTALL)
     holdings = []
     seen_symbols: set = set()
@@ -4467,18 +4536,28 @@ def _parse_em_holdings_table(html: str) -> list:
             continue
         # 从代码列 HTML 中提取 unify/r/{id}.{code} 精准映射交易所
         symbol = sym_raw  # 默认用文本内容
+        market_id = None
         if len(raw_cells) > 1:
             mu = re.search(r'unify/r/(\d+)\.([^\'\" <>\s]+)', raw_cells[1])
             if mu:
-                symbol = _map_em_id_to_yahoo(mu.group(1), mu.group(2).strip())
+                market_id = mu.group(1)
+                symbol = _map_em_id_to_yahoo(market_id, mu.group(2).strip())
             else:
                 symbol = _normalize_symbol(sym_raw)
         # 去重
         if symbol in seen_symbols:
             continue
-        # 动态找权重列：找第一个 0 < val <= 30 的列（避免误识别价格/持股数）
+        # 表头是唯一可靠的列契约。仅在历史页面没有 th 时，才退化为
+        # 查找显式百分号，绝不能把低于 30 元的股价误当持仓权重。
         weight = None
-        for i in range(3, min(len(cells), 10)):
+        candidate_indexes = []
+        if weight_index is not None and weight_index < len(cells):
+            candidate_indexes.append(weight_index)
+        candidate_indexes.extend(
+            i for i in range(3, min(len(cells), 10))
+            if i not in candidate_indexes and "%" in cells[i]
+        )
+        for i in candidate_indexes:
             try:
                 w = float(cells[i].replace('%', '').strip())
                 if 0 < w <= 30:
@@ -4492,6 +4571,8 @@ def _parse_em_holdings_table(html: str) -> list:
         holdings.append({
             "name":   name_raw,
             "symbol": symbol,
+            "raw_symbol": sym_raw,
+            "market_id": market_id,
             "weight": weight,
             "change": None,
         })
@@ -4681,6 +4762,18 @@ def _do_fetch_qdii_holdings(code: str) -> list:
     if latest_q and not q_is_valid:
         logger.warning(f"[qdii_holdings] {code}: quarterly date={q_date!r} 不是季末，忽略")
         latest_q = []
+
+    # 最新季报本身就是当前可验证组合。旧实现无条件再抓 2025 年年报，
+    # 冷启动时把持仓 HTTP 数量翻倍，最后又只保留前十，既慢也会引入旧成分。
+    if latest_q and q_is_valid:
+        best_holdings = latest_q[:10]
+        _cache_set(cache_key, best_holdings, _HOLDINGS_TTL)
+        _cache_set(
+            meta_key,
+            {"report_date": q_date, "source": "quarterly"},
+            _HOLDINGS_TTL,
+        )
+        return best_holdings
 
     # Step 2: 2025年12月年报（补充用）
     complete_h: list = []
@@ -4947,7 +5040,11 @@ _QDII_NON_US_SUFFIX = (".HK", ".SS", ".SZ")          # 仅 Sina 支持的市场
 _QDII_YF_INTL_SUFFIX = (".TW", ".KS", ".T", ".L", ".PA", ".DE")  # Yahoo 支持的非美市场
 
 
-def _fetch_chg_from_nasdaq(symbols: List[str], timeout: int = 15) -> Dict[str, float]:
+def _fetch_chg_from_nasdaq(
+    symbols: List[str],
+    timeout: int = 15,
+    deadline: Optional[float] = None,
+) -> Dict[str, float]:
     """并发调用 Nasdaq API，返回 {symbol: pct}，只含有效值。
     并发数限制为 6，避免触发 Nasdaq 限速。
     """
@@ -4957,12 +5054,18 @@ def _fetch_chg_from_nasdaq(symbols: List[str], timeout: int = 15) -> Dict[str, f
     # 分批，每批 4 个，批次间加 0.5s 延迟，避免高并发被封
     batch_size = 4
     for i in range(0, len(symbols), batch_size):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         if i > 0:
-            time.sleep(_random.uniform(0.4, 0.9))
+            remaining = deadline - time.monotonic() if deadline is not None else 1.0
+            delay = min(_random.uniform(0.4, 0.9), max(0.0, remaining - 1.0))
+            if delay:
+                time.sleep(delay)
         batch = symbols[i:i + batch_size]
         with ThreadPoolExecutor(max_workers=batch_size) as ex:
-            futs = {ex.submit(_nasdaq_fetch, sym): sym for sym in batch}
-            done, not_done = wait(list(futs), timeout=timeout)
+            futs = {ex.submit(_nasdaq_fetch, sym, deadline): sym for sym in batch}
+            remaining = deadline - time.monotonic() if deadline is not None else timeout
+            done, not_done = wait(list(futs), timeout=max(0.0, min(timeout, remaining)))
             for fut in not_done:
                 fut.cancel()
             for fut in done:
@@ -5048,6 +5151,201 @@ def _fetch_chg_from_yf_simple(symbols: List[str], timeout: int = 15,
     return results
 
 
+def _yf_batch_quote_rows(
+    symbols: List[str],
+    chunk_size: int = 40,
+    deadline: Optional[float] = None,
+) -> Dict[str, dict]:
+    """Fetch Yahoo quote rows in bounded batches instead of one HTTP per symbol.
+
+    The current QDII universe is about 90 instruments, so this normally uses
+    three requests.  A failed chunk is retried within the shared deadline;
+    individual public requests never call this function.
+    """
+    requested = sorted({str(symbol).strip() for symbol in symbols if str(symbol).strip()})
+    if not requested:
+        return {}
+    result: Dict[str, dict] = {}
+    for offset in range(0, len(requested), max(1, chunk_size)):
+        if deadline is not None and time.monotonic() >= deadline:
+            logger.warning("[qdii:v3:yahoo_batch] global deadline reached")
+            break
+        chunk = requested[offset:offset + max(1, chunk_size)]
+        for attempt in range(3):
+            remaining = deadline - time.monotonic() if deadline is not None else 12.0
+            if remaining <= 1.0:
+                break
+            crumb, cookies = _yf_get_crumb(deadline=deadline)
+            remaining = deadline - time.monotonic() if deadline is not None else 12.0
+            if remaining <= 1.0:
+                break
+            params = {"symbols": ",".join(chunk)}
+            if crumb:
+                params["crumb"] = crumb
+            resp = _get(
+                "https://query1.finance.yahoo.com/v7/finance/quote",
+                params=params,
+                headers=YF_HEADERS,
+                cookies=cookies or {},
+                _queue_timeout=min(2.0, max(0.1, remaining / 4)),
+                timeout=(min(4.0, max(1.0, remaining / 2)), min(8.0, max(1.0, remaining))),
+            )
+            if resp is not None and resp.status_code in (401, 429) and attempt < 2:
+                _yf_invalidate_crumb(crumb)
+                continue
+            if not (resp and resp.ok):
+                continue
+            try:
+                rows = (resp.json().get("quoteResponse") or {}).get("result") or []
+                fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                for raw in rows:
+                    normalized = normalize_yahoo_quote(raw, fetched_at=fetched_at)
+                    if normalized:
+                        result[normalized["symbol"]] = normalized
+                break
+            except Exception as exc:
+                logger.warning(f"[qdii:v3:yahoo_batch] parse chunk={offset // chunk_size}: {exc}")
+    logger.info(f"[qdii:v3:yahoo_batch] got {len(result)}/{len(requested)}")
+    return result
+
+
+def _qdii_v3_holdings_payload() -> dict:
+    return _cache_get(QDII_V3_HOLDINGS_KEY) or _lkg_get(QDII_V3_HOLDINGS_KEY) or {}
+
+
+def _qdii_session_from_quotes(quotes: Dict[str, dict]) -> str:
+    """Derive the US session from provider state so DST is not hard-coded."""
+    states = [
+        quote.get("market_state")
+        for symbol, quote in quotes.items()
+        if "=" not in symbol and not any(symbol.endswith(suffix) for suffix in (
+            ".HK", ".SS", ".SZ", ".TW", ".TWO", ".KS", ".KQ", ".T",
+            ".L", ".PA", ".DE",
+        ))
+    ]
+    if "REGULAR" in states:
+        return "us_open"
+    if any(state in {"PRE", "PREPRE"} for state in states):
+        return "pre_market"
+    if any(state in {"POST", "POSTPOST"} for state in states):
+        return "post_market"
+    china_now = datetime.now(_CHINA_TZ)
+    if china_now.weekday() < 5 and 8 <= china_now.hour < 16:
+        return "a_share"
+    return "weekend"
+
+
+def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dict, run_id: str) -> dict:
+    portfolios = holdings_payload.get("portfolios") or {}
+    # Provider fetch time is not the market observation date.  Downgrade stale
+    # or undated rows before calculating coverage so an old close cannot become
+    # a newly published permanent snapshot.
+    validated_quotes = {
+        symbol: (
+            row
+            if row.get("data_status") == "fresh" and quote_observation_is_recent(row)
+            else {**row, "data_status": "stale"}
+        )
+        for symbol, row in quotes.items()
+    }
+    security_quotes = {symbol: row for symbol, row in validated_quotes.items() if "=" not in symbol}
+    fx_quotes = {symbol: row for symbol, row in validated_quotes.items() if symbol.endswith("=X")}
+    session = _qdii_session_from_quotes(security_quotes)
+
+    fund_rows = _cache_get("funds_us_active") or _lkg_get("funds_us_active") or []
+    live_funds = {str(row.get("code")): row for row in fund_rows if isinstance(row, dict)}
+    products = {row["code"]: row for row in QDII_V3_PRODUCTS}
+    funds = []
+    available = 0
+    estimable_count = 0
+    for code in QDII_V3_CODES:
+        product = products[code]
+        master = product.get("master_code") or code
+        unsupported_reason = QDII_V3_UNSUPPORTED_MASTER_CODES.get(master)
+        if not unsupported_reason:
+            estimable_count += 1
+        portfolio = portfolios.get(master) or {}
+        holdings = portfolio.get("holdings") or []
+        close_estimate = compute_fund_valuation(
+            holdings, security_quotes, fx_quotes, return_field="regular_return_pct",
+        )
+        live_estimate = compute_fund_valuation(
+            holdings, security_quotes, fx_quotes, return_field="live_return_pct",
+        )
+        if not unsupported_reason and close_estimate.get("estimated_return_pct") is not None:
+            available += 1
+        fund_data = live_funds.get(code) or {}
+        funds.append({
+            "code": code,
+            "name": product.get("name") or code,
+            "master_code": master,
+            "scale": product.get("scale"),
+            "annual_return_2025": product.get("annual_return_2025"),
+            "ytd_return": product.get("annual_return_2025"),  # legacy UI alias
+            "daily_limit": fund_data.get("daily_limit", "待确认"),
+            "buy_status": fund_data.get("buy_status", "unknown"),
+            "subscription_status": fund_data.get("subscription_status", "unknown"),
+            "nav": fund_data.get("nav"),
+            "nav_date": fund_data.get("nav_date"),
+            "close_valuation": close_estimate.get("estimated_return_pct"),
+            "live_valuation": live_estimate.get("estimated_return_pct") if session != "weekend" else None,
+            "equity_contribution_pct": close_estimate.get("equity_contribution_pct"),
+            "fx_contribution_pct": close_estimate.get("fx_contribution_pct"),
+            "coverage": (close_estimate.get("coverage") or {}).get("priced_weight", 0),
+            "live_coverage": (live_estimate.get("coverage") or {}).get("priced_weight", 0),
+            "coverage_detail": close_estimate.get("coverage"),
+            "live_coverage_detail": live_estimate.get("coverage"),
+            "quality_grade": close_estimate.get("quality_grade"),
+            "live_quality_grade": live_estimate.get("quality_grade"),
+            "estimation_status": (
+                f"unsupported_{unsupported_reason}" if unsupported_reason
+                else ("available" if close_estimate.get("estimated_return_pct") is not None else "unavailable")
+            ),
+            "holdings": live_estimate.get("holdings") if session != "weekend" else close_estimate.get("holdings"),
+            "holdings_date": portfolio.get("report_date"),
+            "holdings_source": portfolio.get("source"),
+            "data_source": "qdii_v3_batch_snapshot",
+        })
+
+    required_symbols = {
+        canonicalize_symbol(holding.get("symbol"), holding.get("market_id"))
+        for portfolio in portfolios.values()
+        for holding in (portfolio.get("holdings") or [])
+        if holding.get("symbol")
+    }
+    quote_coverage = len(required_symbols & set(security_quotes)) / len(required_symbols) if required_symbols else 0.0
+    fresh_symbols = {
+        symbol for symbol, quote in security_quotes.items()
+        if quote.get("data_status") == "fresh"
+    }
+    fresh_quote_coverage = len(required_symbols & fresh_symbols) / len(required_symbols) if required_symbols else 0.0
+    fund_coverage = available / estimable_count if estimable_count else 0.0
+    # A dataset-level ``fresh`` badge means every catalog product has a usable
+    # estimate.  Per-position quote coverage may be slightly below 100%, but a
+    # missing fund must remain visible as dataset ``partial`` and must not
+    # replace the permanent LKG.
+    status = "fresh" if fresh_quote_coverage >= 0.95 and fund_coverage >= 1.0 else "partial"
+    usd_fx = fx_quotes.get("USDCNY=X") or {}
+    return {
+        "schema_version": "3",
+        "run_id": run_id,
+        "status": status,
+        "session": session,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "holdings_as_of": holdings_payload.get("updated_at"),
+        "quote_coverage": round(quote_coverage, 4),
+        "fresh_quote_coverage": round(fresh_quote_coverage, 4),
+        "fund_coverage": round(fund_coverage, 4),
+        "estimable_fund_count": estimable_count,
+        "unsupported_fund_count": len(QDII_V3_CODES) - estimable_count,
+        "quote_count": len(security_quotes),
+        "required_quote_count": len(required_symbols),
+        "fx_change": usd_fx.get("regular_return_pct"),
+        "fx_price": usd_fx.get("regular_price"),
+        "funds": funds,
+    }
+
+
 def _build_stock_cache(all_symbols: List[str]) -> Dict[str, dict]:
     """
     从 Redis 批量读取 qdii:close / qdii:post / qdii:live，构建 stock_cache。
@@ -5126,22 +5424,31 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
 
 @app.get("/api/qdii/holdings/{code}")
 def api_qdii_holdings(code: str, response: Response, force: bool = False):
-    """返回单只基金季报前十大持仓（含持仓权重和报告期）"""
-    response.headers["Cache-Control"] = "public, max-age=3600"
-    master_code = _C_TO_A_HOLDINGS_MAP.get(code, code)
-    if force:
-        _cache_delete(f"qdii_h_{master_code}")
-        _cache_delete(f"qdii_hmeta_{master_code}")
-        logger.info(f"[qdii_holdings] force cleared cache for {master_code}")
-    holdings = fetch_qdii_holdings(code)
-    meta = _cache_get(f"qdii_hmeta_{master_code}") or {}
+    """Read the last verified portfolio snapshot; never fetch upstream here."""
+    if code not in QDII_V3_CODES:
+        raise HTTPException(status_code=404, detail="unknown QDII fund code")
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+    product = next(row for row in QDII_V3_PRODUCTS if row["code"] == code)
+    master_code = product.get("master_code") or code
+    payload = _qdii_v3_holdings_payload()
+    portfolio = (payload.get("portfolios") or {}).get(master_code) or {}
+    holdings = portfolio.get("holdings") or []
     if not holdings:
-        return {"code": code, "holdings": [], "error": "fetch_failed"}
+        return {
+            "code": code,
+            "master_code": master_code,
+            "holdings": [],
+            "status": "unavailable",
+            "error": "no_verified_snapshot",
+        }
     return {
-        "code":        code,
-        "holdings":    holdings,
-        "report_date": meta.get("report_date", ""),
-        "source":      meta.get("source", ""),
+        "code": code,
+        "master_code": master_code,
+        "holdings": holdings,
+        "report_date": portfolio.get("report_date", ""),
+        "source": portfolio.get("source", ""),
+        "status": "fresh" if payload.get("status") == "fresh" else "stale",
+        "snapshot_updated_at": payload.get("updated_at"),
     }
 
 
@@ -5155,7 +5462,43 @@ def api_qdii_holdings(code: str, response: Response, force: bool = False):
 # weekend     │ qdii:close（周五收盘）     │ 不显示
 @app.get("/api/qdii/valuations")
 def api_qdii_valuations(response: Response):
-    """批量返回所有主动 QDII 基金的估值结果。不缓存计算结果，每次直接从 Redis 读股价计算。"""
+    """Return the last background-generated QDII snapshot without upstream I/O."""
+    # Public traffic is read-only.  The protected qdii/quotes cron is the only
+    # writer and the only code path allowed to contact quote providers.
+    snapshot = _cache_get(QDII_V3_VALUATIONS_KEY)
+    if snapshot:
+        response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=300"
+        return snapshot
+    snapshot = _lkg_get(QDII_V3_VALUATIONS_KEY)
+    if snapshot:
+        response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=3600"
+        return {**snapshot, "status": "stale"}
+    # First deployment may not have an LKG yet.  A diagnostic partial snapshot
+    # is still more useful than an empty page, but it never takes precedence
+    # over a previously complete snapshot.
+    snapshot = _cache_get(QDII_V3_PARTIAL_VALUATIONS_KEY)
+    if snapshot:
+        response.headers["Cache-Control"] = "public, max-age=30"
+        return {**snapshot, "status": "partial"}
+    response.headers["Cache-Control"] = "public, max-age=30"
+    return {
+        "schema_version": "3",
+        "status": "unavailable",
+        "session": _current_session(),
+        "updated_at": None,
+        "funds": [],
+        "error": "QDII snapshot has not been generated yet",
+    }
+
+
+@app.get("/api/v2/qdii/valuations")
+def api_qdii_valuations_v2(response: Response):
+    """Versioned alias for clients migrating away from the legacy contract."""
+    return api_qdii_valuations(response)
+
+
+def _legacy_api_qdii_valuations_disabled(response: Response):
+    """Old request-time estimator retained temporarily for migration reference."""
     from datetime import timezone, timedelta
     session = _current_session()
 
@@ -5303,3 +5646,223 @@ def api_qdii_valuations(response: Response):
     }
     response.headers["Cache-Control"] = "no-store"
     return payload
+
+
+def _qdii_verified_latest_portfolio(master_code: str) -> Optional[dict]:
+    """Fetch and validate only the latest disclosed quarter for one portfolio."""
+    holdings, report_date = _fetch_em_holdings_for_period(master_code, "", "")
+    quarter_ends = ("-03-31", "-06-30", "-09-30", "-12-31")
+    if not holdings or not report_date.endswith(quarter_ends):
+        return None
+    top = sorted(holdings, key=lambda row: row.get("weight", 0), reverse=True)[:10]
+    total_weight = sum(parse_number(row.get("weight")) or 0 for row in top)
+    if not top or not 1 <= total_weight <= 100:
+        return None
+    return {
+        "master_code": master_code,
+        "report_date": report_date,
+        "source": "eastmoney_quarterly",
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "holdings": top,
+    }
+
+
+@app.get("/api/cron/qdii/holdings/{batch}")
+def cron_qdii_holdings(batch: int, authorization: Optional[str] = Header(default=None)):
+    """Refresh one bounded portfolio batch; public QDII routes never call providers."""
+    _require_job_secret(authorization)
+    batch_count = 4
+    if batch < 0 or batch >= batch_count:
+        raise HTTPException(status_code=400, detail=f"batch must be 0..{batch_count - 1}")
+    # All batches merge into the same snapshot.  A single cross-instance lock
+    # prevents two delayed/duplicated Vercel invocations from losing each
+    # other's portfolio updates.
+    job_key = "qdii-holdings"
+    token = _acquire_job_lock(job_key, ttl_seconds=28)
+    if token is None:
+        raise HTTPException(status_code=409, detail="QDII holdings batch is already running or Redis is unavailable")
+    started = time.monotonic()
+    try:
+        selected = QDII_V3_MASTER_CODES[batch::batch_count]
+        previous = _qdii_v3_holdings_payload()
+        portfolios = dict(previous.get("portfolios") or {})
+        updated = {}
+        failures = []
+        with ThreadPoolExecutor(max_workers=max(1, len(selected))) as executor:
+            futures = {
+                executor.submit(_qdii_verified_latest_portfolio, code): code
+                for code in selected
+            }
+            for future, code in futures.items():
+                try:
+                    portfolio = future.result(timeout=20)
+                except Exception as exc:
+                    logger.warning(f"[qdii:v3:holdings] {code}: {exc}")
+                    portfolio = None
+                if portfolio:
+                    current = portfolios.get(code) or {}
+                    if not current.get("report_date") or portfolio["report_date"] >= current.get("report_date", ""):
+                        portfolios[code] = portfolio
+                        updated[code] = portfolio["report_date"]
+                else:
+                    failures.append(code)
+
+        status = "fresh" if len(portfolios) == len(QDII_V3_MASTER_CODES) else "partial"
+        payload = {
+            "schema_version": "3",
+            "status": status,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "portfolio_count": len(portfolios),
+            "expected_portfolio_count": len(QDII_V3_MASTER_CODES),
+            "portfolios": portfolios,
+        }
+        published = _publish_cache(QDII_V3_HOLDINGS_KEY, payload, QDII_V3_HOLDINGS_TTL)
+        if not published:
+            raise HTTPException(status_code=503, detail="QDII holdings snapshot was not published")
+        return {
+            "ok": True,
+            "run_id": token,
+            "batch": batch,
+            "selected": selected,
+            "updated": updated,
+            "failures": failures,
+            "snapshot_status": status,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+        }
+    finally:
+        _release_job_lock(job_key, token)
+
+
+def _qdii_partial_fallback_quote(symbol: str, pct: float, source: str) -> dict:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return {
+        "symbol": symbol,
+        "currency": currency_for_symbol(symbol),
+        "market_state": "UNKNOWN",
+        "regular_return_pct": round(float(pct), 6),
+        "live_return_pct": round(float(pct), 6),
+        "regular_as_of": None,
+        "live_as_of": None,
+        "source": source,
+        "fetched_at": now,
+        "data_status": "partial",
+    }
+
+
+def _qdii_fill_missing_quotes(
+    symbols: set,
+    quotes: Dict[str, dict],
+    deadline: Optional[float] = None,
+) -> Dict[str, dict]:
+    """Use market-specific providers only for missing symbols, never full fan-out."""
+    missing = sorted(symbols - set(quotes))
+    if not missing:
+        return quotes
+    hk_cn = [s for s in missing if s.endswith((".HK", ".SS", ".SZ"))]
+    tw = [s for s in missing if s.endswith((".TW", ".TWO"))]
+    us = [
+        s for s in missing
+        if not any(s.endswith(suffix) for suffix in (
+            ".HK", ".SS", ".SZ", ".TW", ".TWO", ".KS", ".KQ", ".T",
+            ".L", ".PA", ".DE",
+        ))
+    ]
+    def has_budget(seconds: float = 9.0) -> bool:
+        return deadline is None or time.monotonic() + seconds < deadline
+
+    if hk_cn and has_budget():
+        for symbol, row in _sina_stock_batch(hk_cn, deadline=deadline).items():
+            pct = parse_number(row.get("regular_pct"))
+            if pct is not None:
+                quotes[symbol] = _qdii_partial_fallback_quote(symbol, pct, "sina_batch_fallback")
+    if tw and has_budget():
+        for symbol, pct in _twse_batch(tw, deadline=deadline).items():
+            quotes[symbol] = _qdii_partial_fallback_quote(symbol, pct, "twse_batch_fallback")
+    if 0 < len(us) <= 6 and has_budget():
+        for symbol, pct in _fetch_chg_from_nasdaq(us, timeout=8, deadline=deadline).items():
+            quotes[symbol] = _qdii_partial_fallback_quote(symbol, pct, "nasdaq_fallback")
+    return quotes
+
+
+@app.get("/api/cron/qdii/quotes")
+def cron_qdii_quotes(authorization: Optional[str] = Header(default=None)):
+    """Build and atomically publish a complete read-only QDII valuation snapshot."""
+    _require_job_secret(authorization)
+    token = _acquire_job_lock("qdii-quotes", ttl_seconds=28)
+    if token is None:
+        raise HTTPException(status_code=409, detail="QDII quote refresh is already running or Redis is unavailable")
+    started = time.monotonic()
+    deadline = started + 24.0
+    try:
+        holdings_payload = _qdii_v3_holdings_payload()
+        portfolios = holdings_payload.get("portfolios") or {}
+        if not portfolios:
+            raise HTTPException(status_code=503, detail="No verified QDII holdings snapshot")
+        symbols = {
+            canonicalize_symbol(holding.get("symbol"), holding.get("market_id"))
+            for portfolio in portfolios.values()
+            for holding in (portfolio.get("holdings") or [])
+            if holding.get("symbol")
+        }
+        symbols.discard("")
+        currencies = {currency_for_symbol(symbol) for symbol in symbols}
+        fx_pairs = {pair for pair in (fx_pair_for_currency(currency) for currency in currencies) if pair}
+        requested = sorted(symbols | fx_pairs)
+        quotes = _yf_batch_quote_rows(requested, deadline=deadline)
+        security_quotes = {symbol: row for symbol, row in quotes.items() if not symbol.endswith("=X")}
+        security_quotes = _qdii_fill_missing_quotes(symbols, security_quotes, deadline=deadline)
+        quotes = {**security_quotes, **{symbol: row for symbol, row in quotes.items() if symbol.endswith("=X")}}
+
+        quotes_payload = {
+            "schema_version": "3",
+            "run_id": token,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "requested_count": len(requested),
+            "quote_count": len(quotes),
+            "quotes": quotes,
+        }
+        quotes_ok = _cache_set(QDII_V3_QUOTES_KEY, quotes_payload, QDII_V3_QUOTES_TTL)
+        snapshot = _qdii_v3_snapshot_from_quotes(quotes, holdings_payload, token)
+        if snapshot["status"] == "fresh":
+            valuation_ok = _publish_cache(
+                QDII_V3_VALUATIONS_KEY, snapshot, QDII_V3_VALUATIONS_TTL,
+            )
+            _lkg_set(QDII_V3_QUOTES_KEY, quotes_payload)
+            _cache_delete(QDII_V3_PARTIAL_VALUATIONS_KEY)
+        else:
+            # Never replace a complete public hot/LKG snapshot with a degraded
+            # run.  Keep the latter only as a short-lived first-deploy fallback
+            # and operational diagnostic.
+            valuation_ok = _cache_set(
+                QDII_V3_PARTIAL_VALUATIONS_KEY, snapshot, QDII_V3_VALUATIONS_TTL,
+            )
+        if not quotes_ok or not valuation_ok:
+            raise HTTPException(status_code=503, detail="QDII Redis publish failed")
+        result = {
+            "ok": snapshot["status"] == "fresh",
+            "run_id": token,
+            "status": snapshot["status"],
+            "session": snapshot["session"],
+            "quote_count": snapshot["quote_count"],
+            "required_quote_count": snapshot["required_quote_count"],
+            "fresh_quote_coverage": snapshot["fresh_quote_coverage"],
+            "fund_coverage": snapshot["fund_coverage"],
+            "duration_ms": round((time.monotonic() - started) * 1000),
+        }
+        if snapshot["status"] != "fresh":
+            raise HTTPException(status_code=503, detail={**result, "error": "partial QDII snapshot"})
+        return result
+    finally:
+        _release_job_lock("qdii-quotes", token)
+
+
+@app.get("/api/cron/qdii/quotes-asia")
+def cron_qdii_quotes_asia(authorization: Optional[str] = Header(default=None)):
+    """Scheduling alias: lower-frequency China/Asia daytime refresh."""
+    return cron_qdii_quotes(authorization)
+
+
+@app.get("/api/cron/qdii/quotes-late")
+def cron_qdii_quotes_late(authorization: Optional[str] = Header(default=None)):
+    """Scheduling alias: preserve the final US post-market hour in winter."""
+    return cron_qdii_quotes(authorization)

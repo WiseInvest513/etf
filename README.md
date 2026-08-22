@@ -59,6 +59,24 @@ cron/admin 接口默认关闭匿名访问。可参考 [`.env.example`](./.env.ex
 | 工作日 15:30 | `/api/cron/etfs` | ETF 收盘行情、最新公布净值、滚动一年、跟踪误差与溢价率 |
 | 工作日次日 07:30 | `/api/cron/prem` | 补齐历史溢价快照 |
 
+### QDII 估值 v3（默认影子运行）
+
+QDII 估值不再由用户访问页面时临时抓取。受保护的后台任务先更新季度持仓，
+再用 Yahoo 批量行情（缺失时才调用对应市场备用源）生成 Redis 快照；公开接口
+只读最后一次已验证快照。行情或汇率不完整时只发布短期 `partial`，不会覆盖
+永久 Last-Known-Good。
+
+| 北京时间 | 任务 | 内容 |
+|---------|------|------|
+| 每日 08:10–08:25 | `/api/cron/qdii/holdings/{batch}` | 4 个持仓批次，A/C 份额共用组合 |
+| 工作日 09:00–15:45 | `/api/cron/qdii/quotes-asia` | 亚洲交易时段，每 15 分钟 |
+| 工作日 16:00–次日 08:55 | `/api/cron/qdii/quotes`（含 late 别名） | 美股盘前/盘中/盘后，每 5 分钟 |
+
+公开读取接口是 `GET /api/v2/qdii/valuations`。生产前端默认显示“逐步上线中”
+的内部测试访问门，未解锁时完全不轮询；完成最终验收后设置
+`VITE_QDII_ENABLED=true` 可移除访问门。周末可验证周五收盘快照、缓存和
+公式，真实盘前/盘中切换需在下一个交易日验收。
+
 规模、费率和已经完结的 2025 自然年度收益来自低频产品目录，不随每日
 cron 重复抓取。需要刷新时先只读检查，质量门通过后再原子写入：
 
@@ -99,3 +117,4 @@ python3 scripts/refresh_catalog_metadata.py --write
 | `GET /api/market-sentiment` | VIX、CNN 情绪、PE 与指数快照 |
 | `GET /api/overview` | 总览统计数据 |
 | `GET /api/news` | 今日简报 |
+| `GET /api/v2/qdii/valuations` | QDII v3 已验证估值快照（公开只读） |

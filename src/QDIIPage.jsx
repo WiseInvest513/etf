@@ -1,6 +1,13 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { Tooltip, PieChart, Pie, Cell } from "recharts";
+
+// Production stays behind an internal-test gate until the explicit public
+// release flag is enabled.  The gate also prevents all QDII API polling before
+// access is granted.  This is a product-preview gate, not a security boundary.
+const QDII_PUBLIC_RELEASE = import.meta.env.VITE_QDII_ENABLED === "true";
+const QDII_PREVIEW_PASSWORD = "513513";
+const QDII_PREVIEW_SESSION_KEY = "wise_qdii_preview_access";
 
 function useIsMobile() {
   const [m, setM] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
@@ -143,20 +150,6 @@ const HOLDINGS_PLACEHOLDER = {
   ],
 };
 
-// ─── 净值走势占位 ─────────────────────────────────────────────────────────────
-function genNavHistory() {
-  const data = [];
-  let nav = 1.0;
-  for (let i = 180; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    if (d.getDay() === 0 || d.getDay() === 6) continue;
-    nav *= (1 + (Math.random() - 0.46) * 0.015);
-    data.push({ date: `${d.getMonth()+1}/${d.getDate()}`, nav: parseFloat(nav.toFixed(4)) });
-  }
-  return data;
-}
-
 // ─── 指数迷你卡片（Hero 右侧）────────────────────────────────────────────────
 function MiniIndexCard({ label, value, subValue }) {
   const isPos = value !== null && value >= 0;
@@ -219,8 +212,8 @@ const DONUT_COLORS = [
 // ─── 基金行 ───────────────────────────────────────────────────────────────────
 function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onToggleWatch }) {
   const ytd = fund.ytd_return;
-  const val = fund.valuation;
   const isOpen = fund.buy_status === "open";
+  const unsupportedEstimation = String(fund.estimation_status || "").startsWith("unsupported_");
   const status = getSessionStatus(session);
 
   return (
@@ -312,7 +305,9 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
               {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
             </span>
           ) : (
-            <span style={{ color:cc.textDim, fontSize:13 }}>—</span>
+            <span style={{ color:cc.textDim, fontSize: unsupportedEstimation ? 11 : 13 }}>
+              {unsupportedEstimation ? "FOF 暂不支持" : "—"}
+            </span>
           )}
         </td>
       )}
@@ -335,7 +330,9 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
               {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
             </span>
           ) : (
-            <span style={{ color:cc.textDim, fontSize:13 }}>—</span>
+            <span style={{ color:cc.textDim, fontSize: unsupportedEstimation ? 10 : 13 }}>
+              {unsupportedEstimation ? "FOF暂不支持" : "—"}
+            </span>
           )}
         </td>
       )}
@@ -361,9 +358,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
   const holdings = (fund.holdings && fund.holdings.length > 0)
     ? fund.holdings
     : (HOLDINGS_PLACEHOLDER[fund.code] || []);
-  const navHistory = useMemo(() => genNavHistory(), [fund.code]);
   const ytd = fund.ytd_return;
-  const val = fund.valuation;
   const status = getSessionStatus(session || "weekend");
   const isMobile = useIsMobile();
 
@@ -576,7 +571,6 @@ function DetailPanel({ fund, onClose, cc, session }) {
                       if (session === "weekend")
                         return { close: h.close_change, live: null };
                       return { close: h.close_change, live: h.change };
-                      return { close: h.change, live: null };
                     };
                     const fmtChg = (v, cc) => v != null
                       ? <span style={{ color: v >= 0 ? cc.red : cc.green, fontWeight:700, fontSize: isMobile ? 12 : 13 }}>
@@ -860,6 +854,14 @@ function drawQDIIExportCanvas(rows, session, logoImg=null){
 // ─── 主页面 ───────────────────────────────────────────────────────────────────
 export default function QDIIPage() {
   const isMobile = useIsMobile();
+  const [accessGranted, setAccessGranted] = useState(() => {
+    if (QDII_PUBLIC_RELEASE) return true;
+    try { return sessionStorage.getItem(QDII_PREVIEW_SESSION_KEY) === "1"; }
+    catch { return false; }
+  });
+  const [accessPassword, setAccessPassword] = useState("");
+  const [accessError, setAccessError] = useState("");
+  const canAccessQDII = QDII_PUBLIC_RELEASE || accessGranted;
   const [selected, setSelected]       = useState(null);
   const [search, setSearch]           = useState("");
   const [sortKey, setSortKey]         = useState(null);
@@ -871,7 +873,9 @@ export default function QDIIPage() {
     try {
       const saved = localStorage.getItem("qdii_val_cache");
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch {
+      // Invalid or unavailable local cache is equivalent to a cold start.
+    }
     return {};
   });   // { code -> {valuation, holdings, coverage, nav} }
   const [usActive, setUsActive]       = useState({});   // { code -> {scale, ytd_return, daily_limit, buy_status} }
@@ -883,10 +887,16 @@ export default function QDIIPage() {
     { label:"美元/人民币", value: null },
   ]);
   const [loading, setLoading]         = useState(() => {
+    if (!QDII_PUBLIC_RELEASE) return false;
     // 有 localStorage 缓存时不显示初始 loading，避免遮盖旧数据
     try { return !localStorage.getItem("qdii_val_cache"); } catch { return true; }
   });
   const [updatedAt, setUpdatedAt]     = useState(null);
+  const [snapshotStatus, setSnapshotStatus] = useState(() => {
+    if (!QDII_PUBLIC_RELEASE) return "offline";
+    try { return localStorage.getItem("qdii_val_cache") ? "stale" : "unavailable"; }
+    catch { return "unavailable"; }
+  });
   const [session, setSession]         = useState(() => getMarketSession());
   const [countdown, setCountdown]     = useState(null);
   const [dark, setDark] = useState(() => {
@@ -897,17 +907,33 @@ export default function QDIIPage() {
   const [watchlist, setWatchlist] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem("qdii_watchlist") || "[]")); } catch { return new Set(); }
   });
-  const [statusFilter, setStatusFilter] = useState("all"); // "all" | "open" | "suspended"
+  const statusFilter = "all"; // Reserved for a future explicit status filter.
   const [showDonate, setShowDonate] = useState(false);
   const [exportImg, setExportImg] = useState(null);   // { url, filename } | null
   const [exporting, setExporting] = useState(false);
+
+  function submitPreviewAccess(event) {
+    event.preventDefault();
+    if (accessPassword.trim() !== QDII_PREVIEW_PASSWORD) {
+      setAccessError("访问密码不正确，请重新输入");
+      return;
+    }
+    try { sessionStorage.setItem(QDII_PREVIEW_SESSION_KEY, "1"); } catch {
+      // Session persistence is optional; current-page access still works.
+    }
+    setAccessError("");
+    setSnapshotStatus("unavailable");
+    setAccessGranted(true);
+  }
 
   function toggleWatch(code, e) {
     e.stopPropagation();
     setWatchlist(prev => {
       const next = new Set(prev);
       next.has(code) ? next.delete(code) : next.add(code);
-      try { localStorage.setItem("qdii_watchlist", JSON.stringify([...next])); } catch {}
+      try { localStorage.setItem("qdii_watchlist", JSON.stringify([...next])); } catch {
+        // Watchlist persistence is optional; keep the in-memory selection.
+      }
       return next;
     });
   }
@@ -916,7 +942,9 @@ export default function QDIIPage() {
   function toggleDark() {
     setDark(d => {
       const next = !d;
-      try { localStorage.setItem("qdii_dark", next ? "1" : "0"); } catch {}
+      try { localStorage.setItem("qdii_dark", next ? "1" : "0"); } catch {
+        // Theme persistence is optional.
+      }
       return next;
     });
   }
@@ -945,16 +973,27 @@ export default function QDIIPage() {
   }
 
   // 拉估值数据（可被自动刷新复用）
-  function fetchValuations(showLoading = false) {
+  const fetchValuations = useCallback((showLoading = false) => {
+    if (!canAccessQDII) return Promise.resolve();
     if (showLoading) setLoading(true);
-    return fetch("/api/qdii/valuations", { cache: "no-store" })
-      .then(r => r.json())
+    return fetch("/api/v2/qdii/valuations", { cache: "no-store" })
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.detail || `QDII HTTP ${r.status}`);
+        return data;
+      })
       .then(data => {
+        if (!Array.isArray(data.funds) || data.funds.length === 0) {
+          throw new Error(data.error || "QDII snapshot unavailable");
+        }
         const map = {};
         (data.funds || []).forEach(f => { map[f.code] = f; });
         setValuations(map);
-        try { localStorage.setItem("qdii_val_cache", JSON.stringify(map)); } catch {}
+        try { localStorage.setItem("qdii_val_cache", JSON.stringify(map)); } catch {
+          // A valid server snapshot remains usable even if local storage is full.
+        }
         setUpdatedAt(data.updated_at || null);
+        setSnapshotStatus(data.status || "partial");
         setSession(data.session || getMarketSession());
         const fx = data.fx_change ?? null;
         const fp = data.fx_price  ?? null;
@@ -963,17 +1002,22 @@ export default function QDIIPage() {
           d.label === "美元/人民币" ? { ...d, value: fx } : d
         ));
       })
-      .catch(e => console.warn("[qdii] valuations fetch failed", e))
+      .catch(e => {
+        setSnapshotStatus(current => current === "unavailable" ? "unavailable" : "stale");
+        console.warn("[qdii] valuations fetch failed", e);
+      })
       .finally(() => { if (showLoading) setLoading(false); });
-  }
+  }, [canAccessQDII]);
 
   // 初始拉取
   useEffect(() => {
+    if (!canAccessQDII) return undefined;
     fetchValuations(true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canAccessQDII, fetchValuations]);
 
   // 每秒刷新倒计时 + 预热 + 整点 UI 刷新
   useEffect(() => {
+    if (!canAccessQDII) return undefined;
     const timer = setInterval(() => {
       const s = getMarketSession();
       setSession(s);
@@ -981,20 +1025,17 @@ export default function QDIIPage() {
       setCountdown(secs);
       if (s === "weekend" || s === "a_share") return;
       const interval = sessionInterval(s);
-      // T-90s：静默预热（只清顶层+股价缓存，持仓保留）→ 后台重算，约 3-5s 完成
-      if (secs === 90) {
-        fetch("/api/qdii/valuations?light=true", { cache: "no-store" }).catch(() => {});
-      }
-      // T=0（新格开始）：UI 正式刷新，此时数据已在 Redis 中
+      // T=0（新格开始）：只读取后台已经发布的 Redis 快照，不触发上游采集。
       if (secs === interval) {
         fetchValuations(false);
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canAccessQDII, fetchValuations]);
 
   // 拉美股主动数据（scale/ytd_return/daily_limit/buy_status）
   useEffect(() => {
+    if (!canAccessQDII) return undefined;
     fetch("/api/funds/us_active")
       .then(r => r.json())
       .then(data => {
@@ -1002,11 +1043,12 @@ export default function QDIIPage() {
         (data.data || []).forEach(f => { map[f.code] = f; });
         setUsActive(map);
       })
-      .catch(() => {});
-  }, []);
+      .catch(error => console.warn("[qdii] fund metadata fetch failed", error));
+  }, [canAccessQDII]);
 
   // 拉指数数据（market-sentiment）
   useEffect(() => {
+    if (!canAccessQDII) return undefined;
     fetch("/api/market-sentiment")
       .then(r => r.json())
       .then(data => {
@@ -1020,23 +1062,34 @@ export default function QDIIPage() {
           return item;
         }));
       })
-      .catch(() => {});
-  }, []);
+      .catch(error => console.warn("[qdii] market summary fetch failed", error));
+  }, [canAccessQDII]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    // 将 API 估值数据 + 美股主动数据合并进静态基金列表
-    let list = QDII_FUNDS.map(f => {
+    // Static rows are display-only fallbacks.  The API/catalog union is the
+    // authoritative product set, so newly added funds do not disappear merely
+    // because this legacy fallback array has not been edited yet.
+    const productMap = new Map(QDII_FUNDS.map(f => [f.code, f]));
+    Object.values(usActive).forEach(f => {
+      if (f?.code) productMap.set(f.code, { ...(productMap.get(f.code) || {}), ...f });
+    });
+    Object.values(valuations).forEach(f => {
+      if (f?.code) productMap.set(f.code, { ...(productMap.get(f.code) || {}), ...f });
+    });
+
+    // 将 API 估值数据 + 美股主动数据合并进产品目录
+    let list = [...productMap.values()].map(f => {
       const api = valuations[f.code] || {};
       const ua  = usActive[f.code]  || {};
       return {
         ...f,
         // 美股主动 live 数据优先 > QDII valuation API > 静态兜底
         scale:       ua.scale       ?? api.scale       ?? (f.scale      > 0 ? f.scale      : null),
-        ytd_return:  ua.ytd_return  ?? api.ytd_return  ?? (f.ytd_return > 0 ? f.ytd_return : null),
+        ytd_return:  ua.annual_return_2025 ?? ua.ytd_return ?? api.annual_return_2025 ?? api.ytd_return ?? (f.ytd_return > 0 ? f.ytd_return : null),
         daily_limit: ua.daily_limit ?? f.daily_limit,
         buy_status:  ua.buy_status  ?? f.buy_status,
-        valuation:     api.valuation     ?? null,
+        valuation:     (session !== "weekend" ? api.live_valuation : null) ?? api.close_valuation ?? null,
         // [SESSION DISPLAY SPEC] 前端字段映射 — 与后端 api/index.py 中的权威注释保持一致。
         // 后端统一返回 close_valuation / live_valuation，前端直接使用
         close_valuation: api.close_valuation ?? null,
@@ -1072,16 +1125,16 @@ export default function QDIIPage() {
       });
     }
     return list;
-  }, [search, sortKey, sortDir, valuations, usActive, statusFilter]);
+  }, [search, sortKey, sortDir, valuations, usActive, session]);
 
   return (
     <div style={{ minHeight:"100vh", background:CC.bg, paddingBottom:60, transition:"background 0.2s" }}>
 
 
-      {/* ── 功能下线蒙层 ───────────────────────────────────────────────────────── */}
-      <div style={{
+      {/* ── 内部测试访问门 ──────────────────────────────────────────────────────── */}
+      {!canAccessQDII && <div style={{
         position:"fixed", top:0, left:0, right:0, bottom:0,
-        zIndex:1000,
+        zIndex:9999,
         background:"rgba(15,20,40,0.88)", backdropFilter:"blur(8px)",
         display:"flex", alignItems:"center", justifyContent:"center",
         padding:"0 16px",
@@ -1091,16 +1144,51 @@ export default function QDIIPage() {
           maxWidth:360, width:"100%", textAlign:"center",
           boxShadow:"0 20px 60px rgba(0,0,0,0.4)",
         }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>🔧</div>
+          <div style={{ fontSize:36, marginBottom:12 }}>🚧</div>
           <div style={{ fontSize:18, fontWeight:800, color:"#111", marginBottom:10 }}>
-            功能暂时下线
+            QDII 估值正在逐步上线
           </div>
-          <div style={{ fontSize:14, color:"#555", lineHeight:1.7 }}>
-            因为一些原因，QDII 基金估值功能已暂时下线。<br/>
-            有任何问题请返回首页加群交流，感谢理解！
+          <div style={{ fontSize:14, color:"#555", lineHeight:1.7, marginBottom:20 }}>
+            当前处于内部测试阶段，数据与功能仍在持续验证。<br/>
+            如已获得测试资格，请输入访问密码。
+          </div>
+          <form onSubmit={submitPreviewAccess}>
+            <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
+              value={accessPassword}
+              onChange={event => {
+                setAccessPassword(event.target.value);
+                if (accessError) setAccessError("");
+              }}
+              placeholder="请输入访问密码"
+              aria-label="QDII 访问密码"
+              style={{
+                boxSizing:"border-box", width:"100%", height:44, borderRadius:10,
+                border:`1.5px solid ${accessError ? "#dc2626" : "#d1d5db"}`,
+                padding:"0 14px", fontSize:15, outline:"none", textAlign:"center",
+                letterSpacing:3, marginBottom: accessError ? 6 : 12,
+              }}
+            />
+            {accessError && (
+              <div role="alert" style={{ color:"#dc2626", fontSize:12, marginBottom:10 }}>
+                {accessError}
+              </div>
+            )}
+            <button type="submit" style={{
+              width:"100%", height:44, border:0, borderRadius:10,
+              background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff",
+              fontSize:14, fontWeight:700, cursor:"pointer",
+            }}>
+              进入内部测试
+            </button>
+          </form>
+          <div style={{ fontSize:11, color:"#999", marginTop:14 }}>
+            测试数据仅供功能验证，不构成投资建议
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ── Hero ─────────────────────────────────────────────────────────────── */}
       <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden", zIndex:1001 }}>
@@ -1183,8 +1271,8 @@ export default function QDIIPage() {
                   <div style={{ fontSize:10, color:"rgba(255,255,255,0.55)", fontWeight:700, letterSpacing:"0.05em", marginBottom:1 }}>数据更新策略</div>
                   {[
                     { dot:"#9ca3af", label:"休市 / 周末",      time:"数据冻结" },
-                    { dot:"#fdba74", label:"盘前 16:00–21:30", time:"15分钟刷新" },
-                    { dot:"#93c5fd", label:"盘中 21:30–04:00", time:"10分钟刷新" },
+                    { dot:"#fdba74", label:"盘前 16:00–21:30", time:"5分钟刷新" },
+                    { dot:"#93c5fd", label:"盘中 21:30–04:00", time:"5分钟刷新" },
                     { dot:"#c4b5fd", label:"盘后 04:00–08:00", time:"15分钟刷新" },
                   ].map(r => (
                     <div key={r.label} style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -1242,13 +1330,18 @@ export default function QDIIPage() {
           <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", width: isMobile ? "100%" : "auto", gap:8 }}>
             <div>
               <div style={{ fontSize:18, fontWeight:800, color:CC.text, marginBottom:2 }}>
-                {QDII_FUNDS.length} 只主动型 QDII 场外基金
+                {Object.keys(valuations).length || Object.keys(usActive).length || QDII_FUNDS.length} 只主动型 QDII 场外基金
               </div>
               <div style={{ fontSize:12, color:CC.textDim, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                 <span>点击任意行查看持仓明细</span>
                 {updatedAt && (
                   <span style={{ color:CC.textDim }}>
                     · 更新于 {new Date(updatedAt).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                  </span>
+                )}
+                {snapshotStatus !== "fresh" && snapshotStatus !== "offline" && (
+                  <span style={{ color: snapshotStatus === "stale" ? "#b45309" : "#c2410c", fontWeight:600 }}>
+                    · {snapshotStatus === "stale" ? "使用上次有效快照" : "部分数据待补齐"}
                   </span>
                 )}
                 {countdown != null && session !== "weekend" && session !== "a_share" && (
