@@ -3079,12 +3079,44 @@ def cron_live(authorization: Optional[str] = Header(default=None)):
 # ─── 用户认证 ──────────────────────────────────────────────────────────────────
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "")
+_JWT_SECRET_CACHE: Optional[str] = None
+_JWT_SECRET_REDIS_KEY = "wise:auth:jwt_secret:v1"
 
 
 def _require_jwt_secret() -> str:
-    if not _JWT_SECRET:
-        raise HTTPException(status_code=503, detail="JWT_SECRET is not configured")
-    return _JWT_SECRET
+    """Return an explicit env secret or a Redis-persisted random fallback.
+
+    The fallback is generated with SET NX, so concurrent serverless cold starts
+    converge on one stable secret without placing credentials in source code.
+    """
+    global _JWT_SECRET_CACHE
+    if _JWT_SECRET:
+        return _JWT_SECRET
+    if _JWT_SECRET_CACHE:
+        return _JWT_SECRET_CACHE
+
+    r = _get_redis()
+    if not r:
+        raise HTTPException(status_code=503, detail="认证服务暂时不可用")
+    try:
+        stored = r.get(_JWT_SECRET_REDIS_KEY)
+        if isinstance(stored, bytes):
+            stored = stored.decode("utf-8")
+        if not stored:
+            candidate = secrets.token_urlsafe(48)
+            created = r.set(_JWT_SECRET_REDIS_KEY, candidate, nx=True)
+            stored = candidate if created else r.get(_JWT_SECRET_REDIS_KEY)
+            if isinstance(stored, bytes):
+                stored = stored.decode("utf-8")
+        if not isinstance(stored, str) or len(stored) < 32:
+            raise RuntimeError("invalid JWT signing secret")
+        _JWT_SECRET_CACHE = stored
+        return stored
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"[auth] signing secret unavailable: {type(exc).__name__}")
+        raise HTTPException(status_code=503, detail="认证服务暂时不可用")
 
 def _hash_password(password: str) -> str:
     """PBKDF2-SHA256 加密密码，返回 salt:hash"""
@@ -3113,13 +3145,15 @@ def _make_token(email: str) -> str:
 
 def _verify_token(token: str) -> Optional[str]:
     """验证 token，返回 email 或 None"""
-    if not _JWT_SECRET:
+    try:
+        secret = _require_jwt_secret()
+    except HTTPException:
         return None
     try:
         decoded = base64.urlsafe_b64decode(token.encode() + b"==").decode()
         email, exp_str, version_text, sig = decoded.split("|", 3)
         payload = f"{email}|{exp_str}|{version_text}"
-        expected = hmac.new(_JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             return None
         if datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ") < datetime.utcnow():

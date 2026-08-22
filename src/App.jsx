@@ -4242,7 +4242,7 @@ function AuthModal({ onClose, onLogin, authRequired }) {
         localStorage.setItem("wise_email", data.email);
         onLogin({ token: data.token, email: data.email });
       } else {
-        setError(data.msg || "操作失败");
+        setError(data.msg || (typeof data.detail === "string" ? data.detail : "操作失败"));
       }
     } catch { setError("网络错误，请稍后重试"); }
     setLoading(false);

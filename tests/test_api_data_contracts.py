@@ -329,6 +329,50 @@ class JobSecretTests(unittest.TestCase):
             api._require_job_secret("Bearer expected-secret")
 
 
+class AuthSigningSecretTests(unittest.TestCase):
+    def setUp(self):
+        self.original_env_secret = api._JWT_SECRET
+        self.original_cache = api._JWT_SECRET_CACHE
+        api._JWT_SECRET = ""
+        api._JWT_SECRET_CACHE = None
+
+    def tearDown(self):
+        api._JWT_SECRET = self.original_env_secret
+        api._JWT_SECRET_CACHE = self.original_cache
+
+    def test_redis_persisted_secret_is_used_when_env_is_missing(self):
+        redis = Mock()
+        redis.get.return_value = "s" * 48
+        with patch.object(api, "_get_redis", return_value=redis):
+            first = api._require_jwt_secret()
+            second = api._require_jwt_secret()
+
+        self.assertEqual(first, "s" * 48)
+        self.assertEqual(second, first)
+        redis.get.assert_called_once_with(api._JWT_SECRET_REDIS_KEY)
+        redis.set.assert_not_called()
+
+    def test_missing_secret_is_generated_once_with_set_nx(self):
+        redis = Mock()
+        redis.get.return_value = None
+        redis.set.return_value = True
+        with patch.object(api, "_get_redis", return_value=redis):
+            secret = api._require_jwt_secret()
+
+        self.assertGreaterEqual(len(secret), 32)
+        redis.set.assert_called_once_with(api._JWT_SECRET_REDIS_KEY, secret, nx=True)
+
+    def test_concurrent_winner_is_read_when_set_nx_loses(self):
+        redis = Mock()
+        winner = "w" * 48
+        redis.get.side_effect = [None, winner]
+        redis.set.return_value = False
+        with patch.object(api, "_get_redis", return_value=redis):
+            secret = api._require_jwt_secret()
+
+        self.assertEqual(secret, winner)
+
+
 class FundCacheContractTests(unittest.TestCase):
     @staticmethod
     def _full_fund_snapshot(code="160213"):
