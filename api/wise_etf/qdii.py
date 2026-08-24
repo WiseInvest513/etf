@@ -167,14 +167,17 @@ def normalize_yahoo_quote(row: Mapping[str, Any], fetched_at: Optional[str] = No
 
     market_state = str(row.get("marketState") or "UNKNOWN").upper()
     extended_return = None
+    extended_price = None
     extended_time = None
     extended_session = None
     if market_state in {"PRE", "PREPRE"}:
         extended_return = _finite_number(row.get("preMarketChangePercent"))
+        extended_price = _finite_number(row.get("preMarketPrice"))
         extended_time = row.get("preMarketTime")
         extended_session = "pre"
     elif market_state in {"POST", "POSTPOST", "CLOSED"}:
         extended_return = _finite_number(row.get("postMarketChangePercent"))
+        extended_price = _finite_number(row.get("postMarketPrice"))
         extended_time = row.get("postMarketTime")
         extended_session = "post" if extended_return is not None else None
 
@@ -183,6 +186,7 @@ def normalize_yahoo_quote(row: Mapping[str, Any], fetched_at: Optional[str] = No
     # compounded to preserve a previous-close-to-now return.
     if market_state == "REGULAR":
         live_return = regular_return
+        live_price = price
         live_time = regular_time
         live_session = "regular"
     elif extended_return is not None and _timestamp_iso(extended_time):
@@ -191,10 +195,12 @@ def normalize_yahoo_quote(row: Mapping[str, Any], fetched_at: Optional[str] = No
             if extended_session == "pre"
             else combine_percent_returns(regular_return, extended_return)
         )
+        live_price = extended_price if extended_price is not None and extended_price > 0 else price
         live_time = extended_time
         live_session = extended_session
     else:
         live_return = regular_return
+        live_price = price
         live_time = regular_time
         live_session = "close"
 
@@ -210,8 +216,10 @@ def normalize_yahoo_quote(row: Mapping[str, Any], fetched_at: Optional[str] = No
         "regular_return_pct": round(regular_return, 6),
         "regular_as_of": _timestamp_iso(regular_time),
         "regular_market_date": _market_date(regular_time, timezone_name),
+        "extended_price": round(extended_price, 8) if extended_price is not None and extended_price > 0 else None,
         "extended_return_pct": round(extended_return, 6) if extended_return is not None else None,
         "extended_as_of": _timestamp_iso(extended_time),
+        "live_price": round(live_price, 8) if live_price is not None and live_price > 0 else None,
         "live_return_pct": round(live_return, 6) if live_return is not None else None,
         "live_as_of": _timestamp_iso(live_time),
         "live_session": live_session,
@@ -280,6 +288,9 @@ def compute_fund_valuation(
         disclosed_weight += weight
         quote = quotes.get(symbol) or {}
         asset_return = _finite_number(quote.get(return_field))
+        price_field = "live_price" if return_field == "live_return_pct" else "regular_price"
+        price_as_of_field = "live_as_of" if return_field == "live_return_pct" else "regular_as_of"
+        asset_price = _finite_number(quote.get(price_field))
         currency = currency_for_symbol(symbol, quote.get("currency"))
         fx_pair = fx_pair_for_currency(currency)
         fx_return = 0.0 if fx_pair is None else _finite_number((fx_quotes.get(fx_pair) or {}).get(return_field))
@@ -305,6 +316,8 @@ def compute_fund_valuation(
             **dict(holding),
             "symbol": symbol,
             "currency": currency,
+            "asset_price": round(asset_price, 8) if asset_price is not None and asset_price > 0 else None,
+            "price_as_of": quote.get(price_as_of_field),
             "asset_return_pct": round(asset_return, 4) if asset_return is not None else None,
             "fx_return_pct": round(fx_return, 4) if fx_return is not None else None,
             "cny_return_pct": round(cny_return, 4) if cny_return is not None else None,

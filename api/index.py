@@ -5324,6 +5324,11 @@ def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dic
                 # fake "close" column.
                 "close_change": close_holding.get("asset_return_pct") if show_close else None,
                 "change": live_holding.get("asset_return_pct") if show_live else None,
+                "close_price": close_holding.get("asset_price") if show_close else None,
+                "live_price": live_holding.get("asset_price") if show_live else None,
+                "price": holding.get("asset_price"),
+                "price_currency": holding.get("currency"),
+                "price_as_of": holding.get("price_as_of"),
                 "change_basis": "previous_close",
             })
         fund_data = live_funds.get(code) or {}

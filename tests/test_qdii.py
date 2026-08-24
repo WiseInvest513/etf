@@ -34,11 +34,14 @@ class QDIIQuoteTests(unittest.TestCase):
             "regularMarketPreviousClose": 100,
             "regularMarketChangePercent": 10,
             "regularMarketTime": 1_787_342_400,
+            "postMarketPrice": 121,
             "postMarketChangePercent": 10,
             "postMarketTime": 1_787_356_799,
         }, fetched_at="2026-08-22T00:00:00+00:00")
         self.assertIsNotNone(quote)
         self.assertAlmostEqual(quote["live_return_pct"], 21.0)
+        self.assertEqual(quote["regular_price"], 110)
+        self.assertEqual(quote["live_price"], 121)
         self.assertEqual(quote["live_session"], "post")
         self.assertEqual(quote["regular_market_date"], "2026-08-21")
 
@@ -86,6 +89,28 @@ class QDIIValuationTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["disclosed_weight"], 35)
         self.assertEqual(result["coverage"]["priced_weight"], 30)
         self.assertEqual(result["quality_grade"], "partial")
+
+    def test_live_valuation_keeps_the_matching_market_price(self):
+        result = compute_fund_valuation(
+            [{"symbol": "NVDA", "weight": 10}],
+            {
+                "NVDA": {
+                    "currency": "USD",
+                    "regular_price": 110,
+                    "live_price": 112.5,
+                    "regular_return_pct": 10,
+                    "live_return_pct": 12.5,
+                    "regular_as_of": "2026-08-24T20:00:00+00:00",
+                    "live_as_of": "2026-08-24T21:00:00+00:00",
+                    "data_status": "fresh",
+                }
+            },
+            {"USDCNY=X": {"live_return_pct": 0, "data_status": "fresh"}},
+            return_field="live_return_pct",
+        )
+        holding = result["holdings"][0]
+        self.assertEqual(holding["asset_price"], 112.5)
+        self.assertEqual(holding["price_as_of"], "2026-08-24T21:00:00+00:00")
 
     def test_missing_fx_does_not_silently_become_zero(self):
         result = compute_fund_valuation(

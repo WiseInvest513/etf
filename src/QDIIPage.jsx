@@ -580,8 +580,12 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     const tdP = isMobile ? "8px 6px" : "13px 14px";
                     const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
                       padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
-                    const showClose = showsCloseValuation(session) && displayed.some(h => h.close_change != null);
-                    const showLive = showsLiveValuation(session) && displayed.some(h => h.change != null);
+                    // The market columns belong to the session contract, not to
+                    // the first successful quote.  Keep them visible while a
+                    // partial/legacy snapshot is being replaced so the table
+                    // never collapses back to just name and weight.
+                    const showClose = showsCloseValuation(session);
+                    const showLive = showsLiveValuation(session);
                     const closeLabel = session === "a_share" ? "上一收盘涨跌" : session === "weekend" ? "最近收盘涨跌" : "收盘涨跌";
                     const liveLabel  = { pre_market:"盘前涨跌", us_open:"盘中涨跌", post_market:"盘后涨跌" }[session] ?? "当前涨跌";
                     // 估值以每日净值的标准基准计算：所有涨跌均相对前一交易日收盘。
@@ -589,18 +593,43 @@ function DetailPanel({ fund, onClose, cc, session }) {
                       return {
                         close: showClose ? h.close_change : null,
                         live: showLive ? h.change : null,
+                        closePrice: showClose ? h.close_price : null,
+                        livePrice: showLive ? (h.live_price ?? h.price) : null,
                       };
                     };
-                    const fmtChg = (v, cc) => v != null
-                      ? <span style={{ color: v >= 0 ? cc.red : cc.green, fontWeight:700, fontSize: isMobile ? 12 : 13 }}>
-                          {v >= 0 ? "+" : ""}{v.toFixed(2)}%
-                        </span>
-                      : <span style={{ color:cc.textDim, fontSize: isMobile ? 11 : 12 }}>—</span>;
+                    const fmtPrice = (value, currency) => {
+                      if (value == null || !Number.isFinite(Number(value))) return null;
+                      const numeric = Number(value);
+                      const digits = numeric >= 100 ? 2 : numeric >= 1 ? 2 : 4;
+                      return `${currency || ""} ${numeric.toLocaleString("zh-CN", {
+                        minimumFractionDigits: digits,
+                        maximumFractionDigits: digits,
+                      })}`.trim();
+                    };
+                    const fmtMarket = (change, price, currency, cc) => {
+                      const priceText = fmtPrice(price, currency);
+                      return (
+                        <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
+                          {change != null ? (
+                            <span style={{ color: change >= 0 ? cc.red : cc.green, fontWeight:700, fontSize: isMobile ? 12 : 13 }}>
+                              {change >= 0 ? "+" : ""}{change.toFixed(2)}%
+                            </span>
+                          ) : (
+                            <span style={{ color:cc.textDim, fontSize: isMobile ? 11 : 12 }}>—</span>
+                          )}
+                          {priceText && (
+                            <span style={{ color:cc.textDim, fontSize: isMobile ? 9 : 10, fontFamily:"monospace", whiteSpace:"nowrap" }}>
+                              {priceText}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    };
                     const hFs = isMobile ? 12 : 13;
                     const subFs = isMobile ? 9 : 10;
                     // 所有 th 统一：字号相同、垂直居中、留底部空间给绝对定位的副标题
                     const baseTh = { ...thStyle, fontSize: hFs, verticalAlign:"middle", position:"relative", paddingBottom: isMobile ? 18 : 20 };
-                    const chgTh  = { ...baseTh, textAlign:"right", width: isMobile ? 68 : 88, paddingLeft:0 };
+                    const chgTh  = { ...baseTh, textAlign:"right", width: isMobile ? 78 : 100, paddingLeft:0 };
                     const subStyle = { position:"absolute", bottom: isMobile ? 4 : 5, fontSize: subFs, opacity:0.6, fontWeight:400, whiteSpace:"nowrap" };
                     return (<>
                 <thead>
@@ -610,13 +639,13 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     {showClose && (
                       <th style={chgTh}>
                         {closeLabel}
-                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>较前收盘</span>
+                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>较前收盘 · 价格</span>
                       </th>
                     )}
                     {showLive && (
                       <th style={chgTh}>
                         {liveLabel}
-                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>较前收盘</span>
+                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>较前收盘 · 价格</span>
                       </th>
                     )}
                   </tr>
@@ -624,7 +653,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                 <tbody>
                   {displayed.map((h, i) => {
                     const dotColor = i < 10 ? DONUT_COLORS[i] : "#d1d5db";
-                    const { close, live } = getChanges(h);
+                    const { close, live, closePrice, livePrice } = getChanges(h);
                     const chgTd = { ...mkTd(cc), textAlign:"right", padding: isMobile ? "10px 6px" : "13px 10px", paddingLeft:0 };
                     return (
                       <tr key={h.symbol || i} style={{ background: i % 2 ? cc.bg : cc.card }}>
@@ -650,8 +679,8 @@ function DetailPanel({ fund, onClose, cc, session }) {
                             </div>
                           )}
                         </td>
-                        {showClose && <td style={chgTd}>{fmtChg(close, cc)}</td>}
-                        {showLive && <td style={chgTd}>{fmtChg(live, cc)}</td>}
+                        {showClose && <td style={chgTd}>{fmtMarket(close, closePrice, h.price_currency, cc)}</td>}
+                        {showLive && <td style={chgTd}>{fmtMarket(live, livePrice, h.price_currency, cc)}</td>}
                       </tr>
                     );
                   })}
@@ -668,7 +697,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     ? <span style={{ color:"#ef4444", marginLeft:4 }}>⚠️ 季报拉取失败，数据仅供参考</span>
                     : ""}
                 </span>
-                <span>「—」表示非美股或暂无报价，不计入估值</span>
+                <span>涨跌均较前收盘；价格按原始交易币种展示。「—」表示暂无报价</span>
               </div>
             </div>
           ) : (

@@ -32,6 +32,8 @@ class QDIISnapshotTests(unittest.TestCase):
         base = {
             "regular_return_pct": 10.0,
             "live_return_pct": 10.0,
+            "regular_price": 110.0,
+            "live_price": 111.5,
             "currency": "USD",
             "data_status": status,
             "market_state": "CLOSED",
@@ -108,6 +110,8 @@ class QDIISnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(fund["live_valuation"], 2.22)
         self.assertIsNone(fund["holdings"][0]["close_change"])
         self.assertEqual(fund["holdings"][0]["change"], 10.0)
+        self.assertEqual(fund["holdings"][0]["live_price"], 111.5)
+        self.assertEqual(fund["holdings"][0]["price_currency"], "USD")
         self.assertEqual(fund["holdings"][0]["change_basis"], "previous_close")
 
     def test_post_market_exposes_close_and_post_market_reference(self):
@@ -129,6 +133,8 @@ class QDIISnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(fund["live_valuation"], 2.22)
         self.assertEqual(fund["holdings"][0]["close_change"], 10.0)
         self.assertEqual(fund["holdings"][0]["change"], 10.0)
+        self.assertEqual(fund["holdings"][0]["close_price"], 110.0)
+        self.assertEqual(fund["holdings"][0]["live_price"], 111.5)
 
     def test_undated_fallback_quote_cannot_make_snapshot_fresh(self):
         products = [{"code": "A", "name": "Fund A", "master_code": "A"}]
