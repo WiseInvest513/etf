@@ -2,13 +2,6 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Tooltip, PieChart, Pie, Cell } from "recharts";
 
-// Production stays behind an internal-test gate until the explicit public
-// release flag is enabled.  The gate also prevents all QDII API polling before
-// access is granted.  This is a product-preview gate, not a security boundary.
-const QDII_PUBLIC_RELEASE = import.meta.env.VITE_QDII_ENABLED === "true";
-const QDII_PREVIEW_PASSWORD = "513513";
-const QDII_PREVIEW_SESSION_KEY = "wise_qdii_preview_access";
-
 function useIsMobile() {
   const [m, setM] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
   useEffect(() => {
@@ -905,14 +898,6 @@ function drawQDIIExportCanvas(rows, session, logoImg=null){
 // ─── 主页面 ───────────────────────────────────────────────────────────────────
 export default function QDIIPage() {
   const isMobile = useIsMobile();
-  const [accessGranted, setAccessGranted] = useState(() => {
-    if (QDII_PUBLIC_RELEASE) return true;
-    try { return sessionStorage.getItem(QDII_PREVIEW_SESSION_KEY) === "1"; }
-    catch { return false; }
-  });
-  const [accessPassword, setAccessPassword] = useState("");
-  const [accessError, setAccessError] = useState("");
-  const canAccessQDII = QDII_PUBLIC_RELEASE || accessGranted;
   // Store only the code so an open detail drawer always follows the latest
   // snapshot instead of freezing the row object captured at click time.
   const [selectedCode, setSelectedCode] = useState(null);
@@ -940,14 +925,12 @@ export default function QDIIPage() {
     { label:"美元/人民币", value: null },
   ]);
   const [loading, setLoading]         = useState(() => {
-    if (!QDII_PUBLIC_RELEASE) return false;
     // 有 localStorage 缓存时不显示初始 loading，避免遮盖旧数据
     try { return !localStorage.getItem("qdii_val_cache"); } catch { return true; }
   });
   const [updatedAt, setUpdatedAt]     = useState(null);
   const [marketAsOf, setMarketAsOf]   = useState(null);
   const [snapshotStatus, setSnapshotStatus] = useState(() => {
-    if (!QDII_PUBLIC_RELEASE) return "offline";
     try { return localStorage.getItem("qdii_val_cache") ? "stale" : "unavailable"; }
     catch { return "unavailable"; }
   });
@@ -964,20 +947,6 @@ export default function QDIIPage() {
   const [showDonate, setShowDonate] = useState(false);
   const [exportImg, setExportImg] = useState(null);   // { url, filename } | null
   const [exporting, setExporting] = useState(false);
-
-  function submitPreviewAccess(event) {
-    event.preventDefault();
-    if (accessPassword.trim() !== QDII_PREVIEW_PASSWORD) {
-      setAccessError("访问密码不正确，请重新输入");
-      return;
-    }
-    try { sessionStorage.setItem(QDII_PREVIEW_SESSION_KEY, "1"); } catch {
-      // Session persistence is optional; current-page access still works.
-    }
-    setAccessError("");
-    setSnapshotStatus("unavailable");
-    setAccessGranted(true);
-  }
 
   function toggleWatch(code, e) {
     e.stopPropagation();
@@ -1027,7 +996,6 @@ export default function QDIIPage() {
 
   // 拉估值数据（可被自动刷新复用）
   const fetchValuations = useCallback((showLoading = false) => {
-    if (!canAccessQDII) return Promise.resolve();
     if (showLoading) setLoading(true);
     return fetch("/api/v2/qdii/valuations", { cache: "no-store" })
       .then(async r => {
@@ -1061,19 +1029,17 @@ export default function QDIIPage() {
         console.warn("[qdii] valuations fetch failed", e);
       })
       .finally(() => { if (showLoading) setLoading(false); });
-  }, [canAccessQDII]);
+  }, []);
 
   // 初始拉取
   useEffect(() => {
-    if (!canAccessQDII) return undefined;
     fetchValuations(true);
-  }, [canAccessQDII, fetchValuations]);
+  }, [fetchValuations]);
 
   // 后台 cron 每 5/15 分钟采集一次；浏览器只读 Redis/CDN 快照。
   // Vercel 的 cron 启动可能落后整点几十秒，因此不能只在整点读取一次，
   // 否则页面会错过刚发布的快照并继续显示上一轮五分钟。
   useEffect(() => {
-    if (!canAccessQDII) return undefined;
     const syncSnapshot = () => fetchValuations(false);
     const timer = setInterval(syncSnapshot, 60 * 1000);
     const onVisibilityChange = () => {
@@ -1086,11 +1052,10 @@ export default function QDIIPage() {
       window.removeEventListener("focus", syncSnapshot);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [canAccessQDII, fetchValuations]);
+  }, [fetchValuations]);
 
   // 拉美股主动数据（scale/ytd_return/daily_limit/buy_status）
   useEffect(() => {
-    if (!canAccessQDII) return undefined;
     fetch("/api/funds/us_active")
       .then(r => r.json())
       .then(data => {
@@ -1099,11 +1064,10 @@ export default function QDIIPage() {
         setUsActive(map);
       })
       .catch(error => console.warn("[qdii] fund metadata fetch failed", error));
-  }, [canAccessQDII]);
+  }, []);
 
   // 拉指数数据（market-sentiment）
   useEffect(() => {
-    if (!canAccessQDII) return undefined;
     fetch("/api/market-sentiment")
       .then(r => r.json())
       .then(data => {
@@ -1118,7 +1082,7 @@ export default function QDIIPage() {
         }));
       })
       .catch(error => console.warn("[qdii] market summary fetch failed", error));
-  }, [canAccessQDII]);
+  }, []);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1196,65 +1160,6 @@ export default function QDIIPage() {
   return (
     <div style={{ minHeight:"100vh", background:CC.bg, paddingBottom:60, transition:"background 0.2s" }}>
 
-
-      {/* ── 内部测试访问门 ──────────────────────────────────────────────────────── */}
-      {!canAccessQDII && <div style={{
-        position:"fixed", top:0, left:0, right:0, bottom:0,
-        zIndex:9999,
-        background:"rgba(15,20,40,0.88)", backdropFilter:"blur(8px)",
-        display:"flex", alignItems:"center", justifyContent:"center",
-        padding:"0 16px",
-      }}>
-        <div style={{
-          background:"#fff", borderRadius:16, padding:"36px 32px",
-          maxWidth:360, width:"100%", textAlign:"center",
-          boxShadow:"0 20px 60px rgba(0,0,0,0.4)",
-        }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>🚧</div>
-          <div style={{ fontSize:18, fontWeight:800, color:"#111", marginBottom:10 }}>
-            QDII 估值正在逐步上线
-          </div>
-          <div style={{ fontSize:14, color:"#555", lineHeight:1.7, marginBottom:20 }}>
-            当前处于内部测试阶段，数据与功能仍在持续验证。<br/>
-            如已获得测试资格，请输入访问密码。
-          </div>
-          <form onSubmit={submitPreviewAccess}>
-            <input
-              type="password"
-              inputMode="numeric"
-              autoComplete="current-password"
-              value={accessPassword}
-              onChange={event => {
-                setAccessPassword(event.target.value);
-                if (accessError) setAccessError("");
-              }}
-              placeholder="请输入访问密码"
-              aria-label="QDII 访问密码"
-              style={{
-                boxSizing:"border-box", width:"100%", height:44, borderRadius:10,
-                border:`1.5px solid ${accessError ? "#dc2626" : "#d1d5db"}`,
-                padding:"0 14px", fontSize:15, outline:"none", textAlign:"center",
-                letterSpacing:3, marginBottom: accessError ? 6 : 12,
-              }}
-            />
-            {accessError && (
-              <div role="alert" style={{ color:"#dc2626", fontSize:12, marginBottom:10 }}>
-                {accessError}
-              </div>
-            )}
-            <button type="submit" style={{
-              width:"100%", height:44, border:0, borderRadius:10,
-              background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff",
-              fontSize:14, fontWeight:700, cursor:"pointer",
-            }}>
-              进入内部测试
-            </button>
-          </form>
-          <div style={{ fontSize:11, color:"#999", marginTop:14 }}>
-            测试数据仅供功能验证，不构成投资建议
-          </div>
-        </div>
-      </div>}
 
       {/* ── Hero ─────────────────────────────────────────────────────────────── */}
       <div style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)", color:"#fff", position:"relative", overflow:"hidden", zIndex:1001 }}>

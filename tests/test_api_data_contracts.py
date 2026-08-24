@@ -41,6 +41,77 @@ class CacheNamespaceTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
 
 
+class DailyBoardContractTests(unittest.TestCase):
+    def test_board_is_read_only_and_marks_old_dynamic_values_stale(self):
+        old_fund = {
+            "code": "F1",
+            "subscription_status": "limited",
+            "daily_limit": "50元",
+            "subscription_as_of": "2026-08-24",
+            "subscription_status_status": "fresh",
+        }
+        old_etf = {
+            "code": "E1",
+            "premium": 4.2,
+            "premium_status": "fresh",
+            "premium_quote_as_of": "2026-08-22T15:05:00+08:00",
+        }
+
+        def cache_mget(keys):
+            return {
+                key: [old_etf] if key == "etfs" else [old_fund]
+                for key in keys if not key.startswith("lkg:")
+            }
+
+        now = datetime(2026, 8, 25, 12, tzinfo=api._CHINA_TZ)
+        with (
+            patch.object(api, "_cache_mget", side_effect=cache_mget),
+            patch.object(api, "_china_now", return_value=now),
+            patch.object(api, "_expected_cn_close_date", return_value="2026-08-24"),
+            patch.object(api, "_build_funds", side_effect=AssertionError("provider build forbidden")),
+            patch.object(api, "_build_etfs", side_effect=AssertionError("provider build forbidden")),
+        ):
+            payload = api.get_daily_board(Response())
+
+        self.assertEqual(payload["funds"]["status"], "stale")
+        self.assertEqual(payload["funds"]["data"][0]["subscription_snapshot_status"], "stale")
+        self.assertEqual(payload["funds"]["data"][0]["daily_limit"], "50元")
+        self.assertEqual(payload["etfs"]["status"], "stale")
+        self.assertEqual(payload["etfs"]["data"][0]["premium_snapshot_status"], "stale")
+        self.assertEqual(payload["etfs"]["data"][0]["premium"], 4.2)
+
+    def test_board_accepts_only_expected_day_snapshots_as_fresh(self):
+        fund = {
+            "code": "F1",
+            "subscription_status": "open",
+            "subscription_as_of": "2026-08-25",
+            "subscription_status_status": "fresh",
+        }
+        etf = {
+            "code": "E1",
+            "premium": 1.2,
+            "premium_status": "fresh",
+            "premium_quote_as_of": "2026-08-24T15:05:00+08:00",
+        }
+
+        def cache_mget(keys):
+            return {
+                key: [etf] if key == "etfs" else [fund]
+                for key in keys if not key.startswith("lkg:")
+            }
+
+        now = datetime(2026, 8, 25, 12, tzinfo=api._CHINA_TZ)
+        with (
+            patch.object(api, "_cache_mget", side_effect=cache_mget),
+            patch.object(api, "_china_now", return_value=now),
+            patch.object(api, "_expected_cn_close_date", return_value="2026-08-24"),
+        ):
+            payload = api.get_daily_board(Response())
+
+        self.assertEqual(payload["funds"]["status"], "fresh")
+        self.assertEqual(payload["etfs"]["status"], "fresh")
+
+
 class TrackingErrorProviderTests(unittest.TestCase):
     def test_tracking_error_uses_disclosed_date_from_tsdata_page(self):
         html = """

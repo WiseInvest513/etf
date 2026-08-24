@@ -9,7 +9,7 @@ export const NAV_GROUPS = [
   { key: "onchain", label: "链上美股", tab: "onchain", featured: true, badge: "新" },
   { key: "tools", label: "投资工具", children: [
     { id: "lazy", label: "懒人组合", description: "经典资产配置组合", href: "/lazy" },
-    { id: "qdii", label: "QDII 估值", description: "盘中估值内部测试", href: "/qdii" },
+    { id: "qdii", label: "QDII 估值", description: "主动 QDII 盘中估值", href: "/qdii" },
     { id: "export", label: "导出数据", description: "生成数据快照", href: "/export" },
   ]},
 ];
@@ -18,6 +18,8 @@ export const FOOTER_NAV_ITEMS = [
   { id: "nasdaq", label: "纳指被动" }, { id: "sp500", label: "标普 500" },
   { id: "etf", label: "场内 ETF" }, { id: "active", label: "美股主动" },
   { id: "onchain", label: "链上美股" },
+  { id: "today-limits", label: "今日额度", href: "/today/qdii-limits" },
+  { id: "today-premium", label: "今日溢价", href: "/today/etf-premium" },
   { id: "lazy", label: "懒人组合", href: "/lazy" }, { id: "qdii", label: "估值", href: "/qdii" },
   { id: "export", label: "导出数据", href: "/export" },
 ];

@@ -7,6 +7,8 @@ import QDIIPage from "./QDIIPage.jsx";
 import AuthModal from "./auth/AuthModal.jsx";
 import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
 import OnchainStocksPage from "./onchain/OnchainStocksPage.jsx";
+import ProductDetailPage from "./product/ProductDetailPage.jsx";
+import TodayDataPage from "./seo/TodayDataPage.jsx";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
 import { FOOTER_NAV_ITEMS } from "./navigation/navigationConfig.js";
 import {
@@ -689,15 +691,18 @@ function MarketSentimentRow({sentiment, isMobile}) {
   const nqPe = sentiment?.nasdaq_pe;
   const nqPeValue = Number.isFinite(nqPe?.pe) ? nqPe.pe : null;
   const nqPct = Number.isFinite(nqPe?.percentile) ? nqPe.percentile : null;
-  const nqPeColor = nqPct==null ? C.textDim : nqPct>=85 ? C.red : nqPct>=70 ? C.orange : nqPct>=45 ? C.textMuted : C.green;
-  const nqPeLabel = nqPct==null ? '暂无同口径分位' : nqPct>=85 ? '高估' : nqPct>=70 ? '偏高' : nqPct>=45 ? '合理' : '低估';
-  const nqPeSub = nqPeValue!=null ? `QQQ Trailing PE 代理 · ${nqPe.as_of||'日期未知'}` : '当前数据不可用';
+  const nqPeIsReference = nqPe?.data_status === 'reference';
+  const nqPeColor = nqPeValue==null ? C.textDim : nqPct==null ? C.blue : nqPct>=85 ? C.red : nqPct>=70 ? C.orange : nqPct>=45 ? C.textMuted : C.green;
+  const nqPeLabel = nqPeValue==null ? '--' : nqPct==null ? (nqPeIsReference ? '官方季度参考' : '官方组合口径') : nqPct>=85 ? '高估' : nqPct>=70 ? '偏高' : nqPct>=45 ? '合理' : '低估';
+  const nqPeSub = nqPeValue!=null
+    ? `Invesco 官方披露 · ${nqPe.as_of||'日期未知'}${nqPct==null?' · 暂无同口径分位':''}`
+    : '等待官方组合数据';
   return (
     <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:28}}>
       <SentimentCard title="VIX 恐慌指数" value={vixValue??'--'} label={vixLabel} color={vixColor} barPct={vixValue!=null?Math.min(vixValue/60*100,100):null} sub={vixSub} index={0}/>
       <SentimentCard title="CNN 恐慌贪婪指数" value={fgScore!=null?fgScore:'--'} label={fgLabel} color={fgColor} barPct={fgScore!=null?fgScore:null} sub={fgSub} index={1}/>
       <SentimentCard title="标普500 Trailing PE" value={peValue!=null?`${peValue}x`:'--'} label={peLabel} color={peColor} barPct={pePct} sub={peSub} index={2}/>
-      <SentimentCard title="纳指100 PE（QQQ代理）" value={nqPeValue!=null?`${nqPeValue}x`:'--'} label={nqPeLabel} color={nqPeColor} barPct={nqPct} sub={nqPeSub} index={3}/>
+      <SentimentCard title="QQQ 组合 TTM PE" value={nqPeValue!=null?`${nqPeValue}x`:'--'} label={nqPeLabel} color={nqPeColor} barPct={nqPct} sub={nqPeSub} index={3}/>
     </div>
   );
 }
@@ -1138,6 +1143,15 @@ function DataStatusBanner({dataset,label="数据"}){
   return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 13px",margin:"0 0 16px",borderRadius:10,background:tone.bg,color:tone.color,border:`1px solid ${tone.border}`,fontSize:12}}>
     <span>{text}{dataset.asOf?` · 数据截至 ${dataset.asOf}`:""}{dataset.source?` · ${dataset.source}`:""}</span>
   </div>;
+}
+
+function DailyCollectionLink({kind="limits"}){
+  const premium=kind==="premium";
+  const color=premium?C.orange:C.accent;
+  return <a href={premium?"/today/etf-premium":"/today/qdii-limits"} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,margin:"0 0 14px",padding:"12px 14px",border:`1px solid ${color}28`,borderRadius:11,background:`linear-gradient(90deg,${color}0b,#fff)`,color:C.text,textDecoration:"none"}}>
+    <span style={{fontSize:12,lineHeight:1.5}}><b style={{color}}>先看{premium?"今日溢价榜":"今日额度清单"}</b><span style={{color:C.textDim}}> · {premium?"按溢价风险排序，再进入单只 ETF 查看两侧日期":"把开放、限额、暂停和待确认产品集中筛选"}</span></span>
+    <strong style={{color,fontSize:16,flexShrink:0}}>→</strong>
+  </a>;
 }
 
 // ─── ColTip ───────────────────────────────────────────────────────────────────
@@ -2873,12 +2887,14 @@ function _drawOverviewCanvas1({sentiment, peHistory}){
   const fgLbl=fgLblMap[(fg?.rating||'').toLowerCase()]||fg?.rating||'--';
   const peCol=!pe?L.muted:pe.percentile>=85?L.red:pe.percentile>=70?L.orange:pe.percentile>=45?L.dim:L.green;
   const peLbl=!pe?'--':pe.percentile>=85?'高估':pe.percentile>=70?'偏高':pe.percentile>=45?'合理':'低估';
-  const nqPeCol=!nqPe?L.muted:nqPe.percentile>=85?L.red:nqPe.percentile>=70?L.orange:nqPe.percentile>=45?L.dim:L.green;
-  const nqPeLbl=!nqPe?'--':nqPe.percentile>=85?'高估':nqPe.percentile>=70?'偏高':nqPe.percentile>=45?'合理':'低估';
+  const nqPeVal=Number.isFinite(nqPe?.pe)?nqPe.pe:null;
+  const nqPePct=Number.isFinite(nqPe?.percentile)?nqPe.percentile:null;
+  const nqPeCol=nqPeVal==null?L.muted:nqPePct==null?L.blue:nqPePct>=85?L.red:nqPePct>=70?L.orange:nqPePct>=45?L.dim:L.green;
+  const nqPeLbl=nqPeVal==null?'--':nqPePct==null?(nqPe?.data_status==='reference'?'官方季度参考':'官方组合口径'):nqPePct>=85?'高估':nqPePct>=70?'偏高':nqPePct>=45?'合理':'低估';
   drawSentCard(PX,sentY,ic4W,ic4H,'VIX 恐慌指数',vixVal??'--',vixLbl,vixCol,vixVal?Math.min(vixVal/60*100,100):null,vixVal?`今日${vix.change_pct!=null?(vix.change_pct>=0?'+':'')+vix.change_pct+'%':''}`:null);
   drawSentCard(PX+ic4W+GAP,sentY,ic4W,ic4H,'CNN 恐慌贪婪',fgScore??'--',fgLbl,fgCol,fgScore,fg?.previous_close!=null?`昨收 ${fg.previous_close}`:null);
   drawSentCard(PX+(ic4W+GAP)*2,sentY,ic4W,ic4H,'标普500 PE分位',pe?`${pe.pe}x`:'--',peLbl,peCol,pe?.percentile,pe?`历史${pe.percentile}%分位`:null);
-  drawSentCard(PX+(ic4W+GAP)*3,sentY,ic4W,ic4H,'纳指100 PE分位',nqPe?`${nqPe.pe}x`:'--',nqPeLbl,nqPeCol,nqPe?.percentile,nqPe?`历史${nqPe.percentile}%分位`:null);
+  drawSentCard(PX+(ic4W+GAP)*3,sentY,ic4W,ic4H,'QQQ 组合 TTM PE',nqPeVal!=null?`${nqPeVal}x`:'--',nqPeLbl,nqPeCol,nqPePct,nqPeVal!=null?`Invesco · ${nqPe.as_of||'日期未知'}`:null);
 
   // ── Section 2: 综合市场温度 ──
   const tempY=BRAND_H+SENT_H;
@@ -2923,7 +2939,7 @@ function _drawOverviewCanvas1({sentiment, peHistory}){
   const scoreColor2=s=>s===null?L.muted:s>=2?L.red:s>=1?'#ff6b35':s===0?L.muted:L.green;
   const indicators2=[
     {name:"标普500 PE",score:spScore,desc:spScore===null?"--":spScore>=2?"极度高估":spScore>=1?"偏高":"合理/低估",detail:pe?`${pe.percentile}%分位 · ${pe.pe}x`:""},
-    {name:"纳指100 PE",score:nqScore,desc:nqScore===null?"--":nqScore>=2?"极度高估":nqScore>=1?"偏高":"合理/低估",detail:nqPe?.pe!=null?`${nqPe.percentile}%分位 · ${nqPe.pe}x`:""},
+    {name:"QQQ 组合 PE",score:nqScore,desc:nqPeVal==null?"--":nqScore===null?"无同口径分位":nqScore>=2?"极度高估":nqScore>=1?"偏高":"合理/低估",detail:nqPeVal!=null?(nqPePct!=null?`${nqPePct}%分位 · ${nqPeVal}x`:`${nqPeVal}x · ${nqPe.as_of||'日期未知'}`):""},
     {name:"恐慌贪婪",  score:fgScoreV,desc:fgScoreV===null?"--":fgScoreV>=2?"极度贪婪":fgScoreV>=1?"贪婪":fgScoreV<=-1?"恐慌":"中性",detail:fgScore!=null?`${fgScore}分`:""},
     {name:"VIX 波动",  score:vixScoreV,desc:vixScoreV===null?"--":vixScoreV<=-2?"极度恐慌":vixScoreV<=-1?"高度恐慌":vixScoreV>=1?"过度平静":"正常",detail:vixVal?`${vixVal}`:""},
   ];
@@ -4108,6 +4124,10 @@ function ReportPage() {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const path=window.location.pathname;
+  const productMatch=path.match(/^\/(fund|etf)\/(\d{6})\/?$/);
+  if(productMatch) return <ProductDetailPage type={productMatch[1]} code={productMatch[2]}/>;
+  if(path==="/today/qdii-limits") return <TodayDataPage kind="limits"/>;
+  if(path==="/today/etf-premium") return <TodayDataPage kind="premium"/>;
   if(path==="/admin") return <AdminPage/>;
   if(path==="/export") return <ReportPage/>;
   if(path==="/lazy") return <LazyPage/>;
@@ -4460,6 +4480,7 @@ function MainApp() {
     const isFav=favorites.includes(row.code);
     const inCmp=compareList.some(f=>f.code===row.code);
     const cmpFull=compareList.length>=4&&!inCmp;
+    const detailType=row.product_type==="etf"||Object.prototype.hasOwnProperty.call(row,"premium")?"etf":"fund";
     return (
       <div style={{display:"flex",gap:4,justifyContent:"center",alignItems:"center",whiteSpace:"nowrap"}}>
         <button onClick={e=>{e.stopPropagation();toggleFavorite(row.code);}}
@@ -4472,9 +4493,18 @@ function MainApp() {
           style={{background:inCmp?accent+"15":"none",border:`1px solid ${inCmp?accent+"60":C.borderLight}`,borderRadius:5,cursor:cmpFull&&!inCmp?"not-allowed":"pointer",padding:"2px 6px",fontSize:11,lineHeight:1.5,color:inCmp?accent:C.textDim,fontWeight:inCmp?700:400,transition:"all 0.18s",opacity:cmpFull&&!inCmp?0.35:1}}>
           {inCmp?"−对比":"+对比"}
         </button>
+        <a href={`/${detailType}/${row.code}`} onClick={e=>e.stopPropagation()} title="查看产品详情"
+          style={{border:`1px solid ${accent}35`,borderRadius:5,padding:"2px 6px",fontSize:11,lineHeight:1.5,color:accent,textDecoration:"none",fontWeight:600}}>
+          详情
+        </a>
       </div>
     );
   }});
+
+  const productHref = row => {
+    const detailType=row.product_type==="etf"||Object.prototype.hasOwnProperty.call(row,"premium")?"etf":"fund";
+    return `/${detailType}/${row.code}`;
+  };
 
   const renderDayChange = v => {
     if(v==null) return <span style={{color:C.textDim,fontSize:11}}>—</span>;
@@ -4490,8 +4520,8 @@ function MainApp() {
 
   const passiveCols=[
     actionsCol(C.accent),
-    {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.accent,fontWeight:700,fontSize:12}}>{v}</span>},
-    {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12,color:C.text}}>{v}</span>},
+    {key:"code",   label:"代码",    render:(v,row)=><a href={productHref(row)} style={{fontFamily:"monospace",color:C.accent,fontWeight:700,fontSize:12,textDecoration:"none"}}>{v}</a>},
+    {key:"name",   label:"基金名称", render:(v,row)=><a href={productHref(row)} style={{fontSize:12,color:C.text,textDecoration:"none",fontWeight:600}}>{v}</a>},
     {key:"code_c", label:"C类代码", sortable:false, tip:"同基金的C类份额：无申购费，有年化0.2%~0.4%销售服务费。持有≤1年选C类可省申购费，持有＞1年A类总费更低。",align:"center",
      render:v=>v?<span style={{fontFamily:"monospace",fontSize:11,color:C.cyan,background:C.cyan+"18",padding:"2px 7px",borderRadius:4,fontWeight:700,letterSpacing:"0.5px"}}>{v}</span>:<span style={{color:C.textDim,fontSize:11}}>—</span>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），不含申购赎回费，越低越好",align:"right",render:v=>v!=null?<span style={{color:v>1?C.orange:C.textMuted,fontWeight:v>1?600:400}}>{v}%</span>:"—"},
@@ -4505,8 +4535,8 @@ function MainApp() {
   ];
   const activeCols=[
     actionsCol(C.purple),
-    {key:"code",   label:"代码",    render:v=><span style={{fontFamily:"monospace",color:C.purple,fontWeight:700,fontSize:12}}>{v}</span>},
-    {key:"name",   label:"基金名称", render:v=><span style={{fontSize:12}}>{v}</span>},
+    {key:"code",   label:"代码",    render:(v,row)=><a href={productHref(row)} style={{fontFamily:"monospace",color:C.purple,fontWeight:700,fontSize:12,textDecoration:"none"}}>{v}</a>},
+    {key:"name",   label:"基金名称", render:(v,row)=><a href={productHref(row)} style={{fontSize:12,color:C.text,textDecoration:"none",fontWeight:600}}>{v}</a>},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），主动型普遍偏高(~1.55%)",align:"right",render:v=>v!=null?`${v}%`:"—"},
     {key:"scale",  label:"规模(亿)",tip:"最新报告期基金净资产",align:"right",render:(v,row)=><span title={row.scale_as_of?`截至 ${row.scale_as_of}`:""} style={{fontWeight:600}}>{v!=null?v:"—"}</span>},
     {key:"annual_return_2025",label:"2025全年",tip:"累计净值口径的2025自然年度收益",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxAnnual} color={v>0?C.green:C.red}/>:"—"},
@@ -4517,8 +4547,8 @@ function MainApp() {
   ];
   const etfCols=[
     actionsCol(C.cyan),
-    {key:"code",  label:"代码",  render:v=><span style={{fontFamily:"monospace",color:C.cyan,fontWeight:700,fontSize:12}}>{v}</span>},
-    {key:"name",  label:"ETF名称"},
+    {key:"code",  label:"代码",  render:(v,row)=><a href={productHref(row)} style={{fontFamily:"monospace",color:C.cyan,fontWeight:700,fontSize:12,textDecoration:"none"}}>{v}</a>},
+    {key:"name",  label:"ETF名称",render:(v,row)=><a href={productHref(row)} style={{fontSize:12,color:C.text,textDecoration:"none",fontWeight:600}}>{v}</a>},
     {key:"tracking_index",label:"跟踪指数",render:v=><span style={{color:C.textMuted,fontSize:12}}>{v||"—"}</span>},
     {key:"scale", label:"规模(亿)",tip:"最新报告期基金净资产",align:"right",render:(v,row)=><span title={row.scale_as_of?`截至 ${row.scale_as_of}`:""} style={{fontWeight:600}}>{v!=null?v:"—"}</span>},
     {key:"annual_return_2025",label:"2025全年",tip:"累计净值口径的2025自然年度收益",align:"right",render:v=>v!=null?<MiniBar value={v} max={30} color={v>0?C.green:C.red}/>:"—"},
@@ -4911,6 +4941,7 @@ function MainApp() {
           <Reveal>
             <SectionHeader title="场外纳斯达克100（被动型）" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(nasdaqM).length} color={C.accent} timestamp={datasets.nasdaq.asOf} sortable/>
             <DataStatusBanner dataset={datasets.nasdaq} label="纳指被动基金"/>
+            <DailyCollectionLink/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
@@ -4925,6 +4956,7 @@ function MainApp() {
           <Reveal>
             <SectionHeader title="场外标普500基金对比" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(sp500M).length} color={C.cyan} timestamp={datasets.sp500.asOf} sortable/>
             <DataStatusBanner dataset={datasets.sp500} label="标普被动基金"/>
+            <DailyCollectionLink/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
@@ -4939,6 +4971,7 @@ function MainApp() {
           <Reveal>
             <SectionHeader title="场外美股（主动型）基金对比" subtitle="每日更新：滚动近一年、净值涨跌、申购状态与限额" count={filterData(activeM).length} color={C.purple} timestamp={datasets.active.asOf} sortable/>
             <DataStatusBanner dataset={datasets.active} label="主动基金"/>
+            <DailyCollectionLink/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
               <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
@@ -4958,6 +4991,7 @@ function MainApp() {
           <Reveal>
             <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价率相对最新已公布净值" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
             <DataStatusBanner dataset={datasets.etfs} label="场内ETF"/>
+            <DailyCollectionLink kind="premium"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
             </div>

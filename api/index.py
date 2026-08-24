@@ -232,7 +232,7 @@ def _cache_mget(keys: List[str]) -> Dict[str, any]:
     if not r:
         return {}
     try:
-        vals = r.mget(*keys)
+        vals = r.mget(*[_storage_key(key) for key in keys])
         result = {}
         for k, v in zip(keys, vals):
             if v is not None:
@@ -2372,6 +2372,156 @@ def _reference_etfs() -> list:
         "data_status": "reference",
     }
     return [{**item, **dynamic_fields} for item in STATIC_ETFS]
+
+
+def _daily_board_status(rows: list, field: str) -> str:
+    states = [row.get(field) for row in rows if isinstance(row, dict)]
+    if not states or not any(state in {"fresh", "stale"} for state in states):
+        return "unavailable"
+    if all(state == "fresh" for state in states):
+        return "fresh"
+    if any(state == "fresh" for state in states):
+        return "partial"
+    return "stale"
+
+
+def _daily_board_fund_rows(
+    category: str,
+    today: str,
+    cached: Optional[list] = None,
+    snapshot_source: Optional[str] = None,
+) -> tuple[list, str]:
+    """Read one fund category without invoking providers or writing caches."""
+    source = snapshot_source or "catalog"
+    if not cached:
+        cached = STATIC_FUNDS.get(category, [])
+        source = "catalog"
+
+    rows = []
+    for original in cached or []:
+        row = {**original, "daily_board_category": category}
+        as_of = row.get("subscription_as_of")
+        has_status = row.get("subscription_status") in {"open", "limited", "suspended"}
+        is_fresh = (
+            source != "catalog"
+            and row.get("subscription_status_status") == "fresh"
+            and as_of == today
+            and has_status
+        )
+        has_historical = has_status and bool(as_of)
+        row["subscription_snapshot_status"] = (
+            "fresh" if is_fresh else "stale" if has_historical else "unavailable"
+        )
+        if source == "catalog":
+            # The catalog contains migration-era dynamic fields for auditing only.
+            row.update({
+                "daily_limit": None,
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+                "subscription_as_of": None,
+                "subscription_status_status": "unavailable",
+            })
+        elif not is_fresh:
+            row["subscription_status_status"] = "stale" if has_historical else "unavailable"
+        rows.append(row)
+    return rows, source
+
+
+def _daily_board_etf_rows(
+    expected_close_date: str,
+    cached: Optional[list] = None,
+    snapshot_source: Optional[str] = None,
+) -> tuple[list, str]:
+    """Read the official ETF close snapshot without starting a recovery build."""
+    source = snapshot_source or "catalog"
+    if not cached:
+        cached = _reference_etfs()
+        source = "catalog"
+
+    rows = []
+    for original in cached or []:
+        row = dict(original)
+        quote_as_of = row.get("premium_quote_as_of") or row.get("quote_as_of")
+        quote = _as_of_instant(quote_as_of)
+        quote_date = quote.astimezone(_CHINA_TZ).date().isoformat() if quote else None
+        is_fresh = (
+            source != "catalog"
+            and row.get("premium_status") == "fresh"
+            and row.get("premium") is not None
+            and quote_date == expected_close_date
+        )
+        has_historical = row.get("premium") is not None and bool(quote_date)
+        row["premium_snapshot_status"] = (
+            "fresh" if is_fresh else "stale" if has_historical else "unavailable"
+        )
+        if not is_fresh:
+            row["premium_status"] = "stale" if has_historical else "unavailable"
+        rows.append(row)
+    return rows, source
+
+
+@app.get("/api/daily-board")
+def get_daily_board(response: Response):
+    """Public read-only board. It never calls providers or mutates Redis."""
+    today = _china_now().date().isoformat()
+    expected_close = _expected_cn_close_date()
+    snapshot_keys = [
+        "funds_nasdaq_passive",
+        "funds_sp500_passive",
+        "funds_us_active",
+        "etfs",
+    ]
+    hot = _cache_mget(snapshot_keys)
+    missing = [key for key in snapshot_keys if not hot.get(key)]
+    lkg = _cache_mget([f"{LKG_PREFIX}{key}" for key in missing]) if missing else {}
+
+    def snapshot_for(key: str) -> tuple[Optional[list], str]:
+        if hot.get(key):
+            return hot[key], "cache"
+        if lkg.get(f"{LKG_PREFIX}{key}"):
+            return lkg[f"{LKG_PREFIX}{key}"], "lkg"
+        return None, "catalog"
+
+    fund_rows = []
+    fund_sources = {}
+    fund_sections = {}
+    for category in ("nasdaq_passive", "sp500_passive", "us_active"):
+        cached, source = snapshot_for(f"funds_{category}")
+        rows, source = _daily_board_fund_rows(category, today, cached, source)
+        fund_rows.extend(rows)
+        fund_sources[category] = source
+        fund_sections[category] = {
+            "status": _daily_board_status(rows, "subscription_snapshot_status"),
+            "as_of": _latest_field_date(rows, ("subscription_as_of",)),
+            "count": len(rows),
+        }
+
+    cached_etfs, etf_source = snapshot_for("etfs")
+    etf_rows, etf_source = _daily_board_etf_rows(expected_close, cached_etfs, etf_source)
+    _cache_header(response, 60)
+    return {
+        "schema_version": "1.0",
+        "generated_at": _china_now().isoformat(),
+        "expected": {
+            "fund_subscription_date": today,
+            "etf_close_date": expected_close,
+        },
+        "funds": {
+            "data": fund_rows,
+            "count": len(fund_rows),
+            "status": _daily_board_status(fund_rows, "subscription_snapshot_status"),
+            "as_of": _latest_field_date(fund_rows, ("subscription_as_of",)),
+            "source": fund_sources,
+            "categories": fund_sections,
+        },
+        "etfs": {
+            "data": etf_rows,
+            "count": len(etf_rows),
+            "status": _daily_board_status(etf_rows, "premium_snapshot_status"),
+            "as_of": _latest_field_date(etf_rows, ("premium_as_of", "premium_quote_as_of", "quote_as_of")),
+            "source": etf_source,
+        },
+    }
 
 
 @app.get("/api/funds/{category}")

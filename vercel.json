@@ -10,6 +10,22 @@
       "destination": "/api/index"
     },
     {
+      "source": "/fund/:code",
+      "destination": "/fund/:code/index.html"
+    },
+    {
+      "source": "/etf/:code",
+      "destination": "/etf/:code/index.html"
+    },
+    {
+      "source": "/today/qdii-limits",
+      "destination": "/today/qdii-limits/index.html"
+    },
+    {
+      "source": "/today/etf-premium",
+      "destination": "/today/etf-premium/index.html"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

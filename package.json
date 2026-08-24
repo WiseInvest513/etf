@@ -10,7 +10,9 @@
     "dev": "concurrently -k -n \"API,WEB\" -c \"blue.bold,green.bold\" \"python3 -m uvicorn api.index:app --reload --port 8000\" \"vite\"",
     "dev:web": "vite",
     "dev:api": "uvicorn api.index:app --reload --port 8000",
+    "prebuild": "node scripts/generate_sitemap.mjs",
     "build": "vite build",
+    "postbuild": "node scripts/generate_seo_pages.mjs && node scripts/verify_seo_output.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },
