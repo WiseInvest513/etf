@@ -5251,6 +5251,32 @@ def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dic
     security_quotes = {symbol: row for symbol, row in validated_quotes.items() if "=" not in symbol}
     fx_quotes = {symbol: row for symbol, row in validated_quotes.items() if symbol.endswith("=X")}
     session = _qdii_session_from_quotes(security_quotes)
+    show_close = session in {"post_market", "a_share", "weekend"}
+    show_live = session in {"pre_market", "us_open", "post_market"}
+    valuation_kind = {
+        "a_share": "previous_close",
+        "pre_market": "pre_market",
+        "us_open": "intraday",
+        "post_market": "post_market",
+        "weekend": "latest_close",
+    }.get(session, "latest_close")
+    valuation_label = {
+        "a_share": "上一交易日收盘估值",
+        "pre_market": "盘前估值",
+        "us_open": "盘中估值",
+        "post_market": "盘后估值",
+        "weekend": "最近收盘估值",
+    }.get(session, "最近收盘估值")
+
+    observation_field = "live_as_of" if show_live else "regular_as_of"
+    market_as_of = max(
+        (
+            str(row.get(observation_field))
+            for row in validated_quotes.values()
+            if row.get("data_status") == "fresh" and row.get(observation_field)
+        ),
+        default=None,
+    )
 
     fund_rows = _cache_get("funds_us_active") or _lkg_get("funds_us_active") or []
     live_funds = {str(row.get("code")): row for row in fund_rows if isinstance(row, dict)}
@@ -5272,8 +5298,34 @@ def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dic
         live_estimate = compute_fund_valuation(
             holdings, security_quotes, fx_quotes, return_field="live_return_pct",
         )
-        if not unsupported_reason and close_estimate.get("estimated_return_pct") is not None:
+        primary_estimate = live_estimate if show_live else close_estimate
+        if not unsupported_reason and primary_estimate.get("estimated_return_pct") is not None:
             available += 1
+
+        close_holdings = {
+            row.get("symbol"): row for row in (close_estimate.get("holdings") or [])
+            if row.get("symbol")
+        }
+        live_holdings = {
+            row.get("symbol"): row for row in (live_estimate.get("holdings") or [])
+            if row.get("symbol")
+        }
+        primary_holdings = live_estimate.get("holdings") if show_live else close_estimate.get("holdings")
+        display_holdings = []
+        for holding in primary_holdings or []:
+            symbol = holding.get("symbol")
+            close_holding = close_holdings.get(symbol) or {}
+            live_holding = live_holdings.get(symbol) or {}
+            display_holdings.append({
+                **holding,
+                # Compatibility fields consumed by QDIIPage.  They are now
+                # populated only when the corresponding market state is
+                # meaningful instead of duplicating the intraday value into a
+                # fake "close" column.
+                "close_change": close_holding.get("asset_return_pct") if show_close else None,
+                "change": live_holding.get("asset_return_pct") if show_live else None,
+                "change_basis": "previous_close",
+            })
         fund_data = live_funds.get(code) or {}
         funds.append({
             "code": code,
@@ -5287,21 +5339,33 @@ def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dic
             "subscription_status": fund_data.get("subscription_status", "unknown"),
             "nav": fund_data.get("nav"),
             "nav_date": fund_data.get("nav_date"),
-            "close_valuation": close_estimate.get("estimated_return_pct"),
-            "live_valuation": live_estimate.get("estimated_return_pct") if session != "weekend" else None,
-            "equity_contribution_pct": close_estimate.get("equity_contribution_pct"),
-            "fx_contribution_pct": close_estimate.get("fx_contribution_pct"),
-            "coverage": (close_estimate.get("coverage") or {}).get("priced_weight", 0),
-            "live_coverage": (live_estimate.get("coverage") or {}).get("priced_weight", 0),
-            "coverage_detail": close_estimate.get("coverage"),
-            "live_coverage_detail": live_estimate.get("coverage"),
-            "quality_grade": close_estimate.get("quality_grade"),
-            "live_quality_grade": live_estimate.get("quality_grade"),
+            "valuation": primary_estimate.get("estimated_return_pct"),
+            "valuation_kind": valuation_kind,
+            "valuation_label": valuation_label,
+            "valuation_basis": "previous_close",
+            "valuation_as_of": market_as_of,
+            "close_valuation": close_estimate.get("estimated_return_pct") if show_close else None,
+            "live_valuation": live_estimate.get("estimated_return_pct") if show_live else None,
+            "equity_contribution_pct": primary_estimate.get("equity_contribution_pct"),
+            "fx_contribution_pct": primary_estimate.get("fx_contribution_pct"),
+            "close_equity_contribution_pct": close_estimate.get("equity_contribution_pct") if show_close else None,
+            "close_fx_contribution_pct": close_estimate.get("fx_contribution_pct") if show_close else None,
+            "live_equity_contribution_pct": live_estimate.get("equity_contribution_pct") if show_live else None,
+            "live_fx_contribution_pct": live_estimate.get("fx_contribution_pct") if show_live else None,
+            "coverage": (primary_estimate.get("coverage") or {}).get("priced_weight", 0),
+            "close_coverage": (close_estimate.get("coverage") or {}).get("priced_weight", 0) if show_close else None,
+            "live_coverage": (live_estimate.get("coverage") or {}).get("priced_weight", 0) if show_live else None,
+            "coverage_detail": primary_estimate.get("coverage"),
+            "close_coverage_detail": close_estimate.get("coverage") if show_close else None,
+            "live_coverage_detail": live_estimate.get("coverage") if show_live else None,
+            "quality_grade": primary_estimate.get("quality_grade"),
+            "close_quality_grade": close_estimate.get("quality_grade") if show_close else None,
+            "live_quality_grade": live_estimate.get("quality_grade") if show_live else None,
             "estimation_status": (
                 f"unsupported_{unsupported_reason}" if unsupported_reason
-                else ("available" if close_estimate.get("estimated_return_pct") is not None else "unavailable")
+                else ("available" if primary_estimate.get("estimated_return_pct") is not None else "unavailable")
             ),
-            "holdings": live_estimate.get("holdings") if session != "weekend" else close_estimate.get("holdings"),
+            "holdings": display_holdings,
             "holdings_date": portfolio.get("report_date"),
             "holdings_source": portfolio.get("source"),
             "data_source": "qdii_v3_batch_snapshot",
@@ -5332,6 +5396,10 @@ def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dic
         "status": status,
         "session": session,
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "market_as_of": market_as_of,
+        "valuation_kind": valuation_kind,
+        "valuation_label": valuation_label,
+        "valuation_basis": "previous_close",
         "holdings_as_of": holdings_payload.get("updated_at"),
         "quote_coverage": round(quote_coverage, 4),
         "fresh_quote_coverage": round(fresh_quote_coverage, 4),
@@ -5452,14 +5520,15 @@ def api_qdii_holdings(code: str, response: Response, force: bool = False):
     }
 
 
-# SESSION DISPLAY SPEC（最后更新：2026-06-17）
-# Redis 键：qdii:close / qdii:post / qdii:live（cron/snap + cron/live 写入）
-# 时段        │ close_valuation（收盘）    │ live_valuation（实时）
-# pre_market  │ qdii:close（昨日收盘）     │ qdii:live（盘前，每5min）
-# us_open     │ qdii:close（昨日收盘）     │ qdii:live（盘中，每5min）
-# post_market │ qdii:close（今日收盘）     │ qdii:live（夜盘，每5min）
-# a_share     │ qdii:close（昨日收盘）     │ qdii:post（昨日夜盘，snap写入）
-# weekend     │ qdii:close（周五收盘）     │ 不显示
+# SESSION DISPLAY SPEC（最后更新：2026-08-25）
+# v3 只有一个主估值 ``valuation``，统一表示相对前一交易日收盘的预计基金涨跌。
+# compatibility 字段仅在对应时段有业务含义时返回，前端不得把二者长期并排展示：
+# 时段        │ valuation                │ close_valuation │ live_valuation
+# pre_market  │ 盘前估值（较前收盘）     │ 不返回          │ 返回
+# us_open     │ 盘中估值（较前收盘）     │ 不返回          │ 返回
+# post_market │ 盘后估值（较前收盘）     │ 正式收盘        │ 返回
+# a_share     │ 上一交易日收盘估值        │ 返回            │ 不返回
+# weekend     │ 最近交易日收盘估值        │ 返回            │ 不返回
 @app.get("/api/qdii/valuations")
 def api_qdii_valuations(response: Response):
     """Return the last background-generated QDII snapshot without upstream I/O."""

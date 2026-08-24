@@ -26,7 +26,9 @@ class QDIIHoldingParserTests(unittest.TestCase):
 
 class QDIISnapshotTests(unittest.TestCase):
     def _quotes(self, status="fresh"):
-        market_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        now = datetime.now(ZoneInfo("America/New_York"))
+        market_date = now.date().isoformat()
+        as_of = now.isoformat(timespec="seconds")
         base = {
             "regular_return_pct": 10.0,
             "live_return_pct": 10.0,
@@ -34,6 +36,8 @@ class QDIISnapshotTests(unittest.TestCase):
             "data_status": status,
             "market_state": "CLOSED",
             "regular_market_date": market_date,
+            "regular_as_of": as_of,
+            "live_as_of": as_of,
             "exchange_timezone": "America/New_York",
         }
         fx = {
@@ -43,6 +47,8 @@ class QDIISnapshotTests(unittest.TestCase):
             "market_state": "REGULAR",
             "regular_price": 7.0,
             "regular_market_date": market_date,
+            "regular_as_of": as_of,
+            "live_as_of": as_of,
             "exchange_timezone": "America/New_York",
         }
         return {"NVDA": base, "USDCNY=X": fx}
@@ -66,12 +72,63 @@ class QDIISnapshotTests(unittest.TestCase):
         with patch.object(api, "QDII_V3_PRODUCTS", products), \
              patch.object(api, "QDII_V3_CODES", ["A", "C"]), \
              patch.object(api, "_cache_get", return_value=[]), \
-             patch.object(api, "_lkg_get", return_value=[]):
+             patch.object(api, "_lkg_get", return_value=[]), \
+             patch.object(api, "_qdii_session_from_quotes", return_value="a_share"):
             snapshot = api._qdii_v3_snapshot_from_quotes(self._quotes(), holdings, "run-1")
         self.assertEqual(snapshot["status"], "fresh")
         self.assertEqual(len(snapshot["funds"]), 2)
         self.assertAlmostEqual(snapshot["funds"][0]["close_valuation"], 2.22)
+        self.assertIsNone(snapshot["funds"][0]["live_valuation"])
+        self.assertEqual(snapshot["funds"][0]["valuation_label"], "上一交易日收盘估值")
         self.assertEqual(snapshot["funds"][1]["holdings_date"], "2026-06-30")
+
+    def test_us_open_exposes_only_intraday_valuation_and_previous_close_changes(self):
+        products = [{"code": "A", "name": "Fund A", "master_code": "A"}]
+        holdings = {
+            "portfolios": {
+                "A": {
+                    "report_date": "2026-06-30",
+                    "source": "test",
+                    "holdings": [{"symbol": "NVDA", "name": "Nvidia", "weight": 20}],
+                }
+            }
+        }
+        with patch.object(api, "QDII_V3_PRODUCTS", products), \
+             patch.object(api, "QDII_V3_CODES", ["A"]), \
+             patch.object(api, "_cache_get", return_value=[]), \
+             patch.object(api, "_lkg_get", return_value=[]), \
+             patch.object(api, "_qdii_session_from_quotes", return_value="us_open"):
+            snapshot = api._qdii_v3_snapshot_from_quotes(self._quotes(), holdings, "run-open")
+
+        fund = snapshot["funds"][0]
+        self.assertEqual(snapshot["valuation_kind"], "intraday")
+        self.assertIsNotNone(snapshot["market_as_of"])
+        self.assertAlmostEqual(fund["valuation"], 2.22)
+        self.assertIsNone(fund["close_valuation"])
+        self.assertAlmostEqual(fund["live_valuation"], 2.22)
+        self.assertIsNone(fund["holdings"][0]["close_change"])
+        self.assertEqual(fund["holdings"][0]["change"], 10.0)
+        self.assertEqual(fund["holdings"][0]["change_basis"], "previous_close")
+
+    def test_post_market_exposes_close_and_post_market_reference(self):
+        products = [{"code": "A", "name": "Fund A", "master_code": "A"}]
+        holdings = {
+            "portfolios": {
+                "A": {"holdings": [{"symbol": "NVDA", "weight": 20}]}
+            }
+        }
+        with patch.object(api, "QDII_V3_PRODUCTS", products), \
+             patch.object(api, "QDII_V3_CODES", ["A"]), \
+             patch.object(api, "_cache_get", return_value=[]), \
+             patch.object(api, "_lkg_get", return_value=[]), \
+             patch.object(api, "_qdii_session_from_quotes", return_value="post_market"):
+            snapshot = api._qdii_v3_snapshot_from_quotes(self._quotes(), holdings, "run-post")
+
+        fund = snapshot["funds"][0]
+        self.assertAlmostEqual(fund["close_valuation"], 2.22)
+        self.assertAlmostEqual(fund["live_valuation"], 2.22)
+        self.assertEqual(fund["holdings"][0]["close_change"], 10.0)
+        self.assertEqual(fund["holdings"][0]["change"], 10.0)
 
     def test_undated_fallback_quote_cannot_make_snapshot_fresh(self):
         products = [{"code": "A", "name": "Fund A", "master_code": "A"}]

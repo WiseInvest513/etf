@@ -19,58 +19,72 @@ function useIsMobile() {
   return m;
 }
 
-// 基于固定时钟格计算距离下一次刷新的秒数
-// 盘前 16:00 起、盘中 21:30 起、盘后 04:00 起，每 15 分钟一个格
-function clockCountdown(session) {
-  if (session === "a_share" || session === "weekend") return null;
-  const now = new Date();
-  const hkt = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
-  const totalSec = hkt.getHours() * 3600 + hkt.getMinutes() * 60 + hkt.getSeconds();
-  const DAY = 24 * 3600;
-  // 盘中 / 盘前 5 分钟一格，其他时段 15 分钟
-  const INTERVAL = (session === "us_open" || session === "pre_market") ? 5 * 60 : 15 * 60;
-  const anchor = { pre_market: 16 * 3600, us_open: 21 * 3600 + 30 * 60, post_market: 4 * 3600 }[session] ?? 0;
-  const elapsed = (totalSec - anchor + DAY) % DAY;
-  return INTERVAL - (elapsed % INTERVAL); // 距离下一个格的秒数
-}
-
-function sessionInterval(session) {
-  return (session === "us_open" || session === "pre_market") ? 5 * 60 : 15 * 60;
-}
-
-// 判断当前市场时段（与后端 _current_session() 保持一致，基于 HKT）
+// 仅用于接口尚未返回前的 UI 兜底。正常情况下以后端 Yahoo marketState
+// 为准，避免把美股夏令时/冬令时硬编码进前端。
 function getMarketSession() {
   const now = new Date();
-  // 转为 HKT（UTC+8）
-  const hkt = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
-  const day = hkt.getDay(); // 0=Sun, 1=Mon … 5=Fri, 6=Sat
-  const h   = hkt.getHours() + hkt.getMinutes() / 60;
+  const readClock = (timeZone) => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone, weekday:"short", hour:"2-digit", minute:"2-digit", hourCycle:"h23",
+    }).formatToParts(now);
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return { weekday:values.weekday, hour:Number(values.hour), minute:Number(values.minute) };
+  };
+  const china = readClock("Asia/Shanghai");
+  const newYork = readClock("America/New_York");
+  const weekdays = new Set(["Mon", "Tue", "Wed", "Thu", "Fri"]);
+  const chinaHour = china.hour + china.minute / 60;
+  const nyHour = newYork.hour + newYork.minute / 60;
 
-  // 周六：前半段美股周五仍在交易，后半段盘后，08:00+ 才是真正休市
-  if (day === 6) {
-    if (h < 4)  return "us_open";      // Fri 12:00-16:00 ET
-    if (h < 8)  return "post_market";  // Fri 16:00-20:00 ET
-    return "weekend";
-  }
-  // 周日：全天休市
-  if (day === 0) return "weekend";
-  // 周一 00:00-08:00：美股周日未交易，仍是休市
-  if (day === 1 && h < 8) return "weekend";
-
-  // 正常工作日逻辑（周一 08:00 至周五 24:00）
-  if (h >= 8   && h < 16)  return "a_share";    // HKT 08:00-16:00
-  if (h >= 16  && h < 21.5) return "pre_market"; // HKT 16:00-21:30
-  if (h >= 21.5 || h < 4)   return "us_open";    // HKT 21:30-04:00
-  return "post_market";                           // HKT 04:00-08:00
+  if (weekdays.has(china.weekday) && chinaHour >= 8 && chinaHour < 16) return "a_share";
+  if (!weekdays.has(newYork.weekday)) return "weekend";
+  if (nyHour >= 4 && nyHour < 9.5) return "pre_market";
+  if (nyHour >= 9.5 && nyHour < 16) return "us_open";
+  if (nyHour >= 16 && nyHour < 20) return "post_market";
+  return "weekend";
 }
 
 const SESSION_INFO = {
-  a_share:     { label:"A股时段",  valLabel:"收盘估值", desc:"昨日收盘涨跌幅加权，数据已固定",      color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
+  a_share:     { label:"A股时段",  valLabel:"上一交易日收盘估值", desc:"上一交易日收盘涨跌幅加权，数据已固定", color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
   pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，5分钟刷新",        color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
-  us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"实时股价加权估值，5分钟刷新",          color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
+  us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"相对前收盘的实时涨跌加权，5分钟刷新",    color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
   post_market: { label:"美股盘后", valLabel:"盘后估值", desc:"盘后涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(124,58,237,0.85)",  dot:"#c4b5fd" },
-  weekend:     { label:"周末休市", valLabel:"收盘估值", desc:"周五收盘数据，周一美股开盘前保持不变", color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
+  weekend:     { label:"周末休市", valLabel:"最近收盘估值", desc:"最近交易日收盘数据，开盘前保持不变", color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
 };
+
+function showsCloseValuation(session) {
+  return session === "post_market" || session === "a_share" || session === "weekend";
+}
+
+function showsLiveValuation(session) {
+  return session === "pre_market" || session === "us_open" || session === "post_market";
+}
+
+function valuationColumns(session) {
+  const columns = [];
+  if (showsCloseValuation(session)) {
+    columns.push({
+      key:"close_valuation",
+      label: session === "a_share" ? "上一交易日收盘估值" : session === "weekend" ? "最近收盘估值" : "收盘估值",
+      align:"center",
+    });
+  }
+  if (showsLiveValuation(session)) {
+    columns.push({
+      key:"live_valuation",
+      label: session === "pre_market" ? "盘前估值" : session === "us_open" ? "盘中估值" : "盘后估值",
+      align:"center",
+    });
+  }
+  return columns;
+}
+
+function reportPeriodLabel(dateText) {
+  const match = /^(\d{4})-(\d{2})-\d{2}$/.exec(String(dateText || ""));
+  if (!match) return null;
+  const quarter = Math.ceil(Number(match[2]) / 3);
+  return `${match[1]} Q${quarter}`;
+}
 
 // ─── 颜色 ─────────────────────────────────────────────────────────────────────
 const C = {
@@ -215,6 +229,8 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
   const isOpen = fund.buy_status === "open";
   const unsupportedEstimation = String(fund.estimation_status || "").startsWith("unsupported_");
   const status = getSessionStatus(session);
+  const closeShown = showsCloseValuation(session);
+  const liveShown = showsLiveValuation(session);
 
   return (
     <tr
@@ -297,8 +313,8 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
           <span style={{ color:cc.textDim, fontSize:12 }}>—</span>
         )}
       </td>}
-      {/* 桌面端：收盘估值 | 实时估值 双列 */}
-      {!isMobile && (
+      {/* 只有完成一个正式交易日后，才展示收盘估值。 */}
+      {!isMobile && closeShown && (
         <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
           {fund.close_valuation != null ? (
             <span style={{ color: fund.close_valuation >= 0 ? cc.red : cc.green, fontSize:15 }}>
@@ -311,7 +327,7 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
           )}
         </td>
       )}
-      {!isMobile && session !== "weekend" && (
+      {!isMobile && liveShown && (
         <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
           {fund.live_valuation != null ? (
             <span style={{ color: fund.live_valuation >= 0 ? cc.red : cc.green, fontSize:15 }}>
@@ -322,8 +338,8 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
           )}
         </td>
       )}
-      {/* 移动端：收盘估值列 */}
-      {isMobile && (
+      {/* 移动端估值列遵循与桌面端相同的时段语义。 */}
+      {isMobile && closeShown && (
         <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
           {fund.close_valuation != null ? (
             <span style={{ color: fund.close_valuation >= 0 ? cc.red : cc.green, fontSize:15, fontWeight:700 }}>
@@ -336,8 +352,7 @@ function FundRow({ fund, onClick, isEven, isMobile, cc, session, watched, onTogg
           )}
         </td>
       )}
-      {/* 移动端：实时估值列 */}
-      {isMobile && session !== "weekend" && (
+      {isMobile && liveShown && (
         <td style={{ ...mkTd(cc), textAlign:"center", fontWeight:700 }}>
           {fund.live_valuation != null ? (
             <span style={{ color: fund.live_valuation >= 0 ? cc.red : cc.green, fontSize:15, fontWeight:700 }}>
@@ -361,10 +376,13 @@ function DetailPanel({ fund, onClose, cc, session }) {
   const ytd = fund.ytd_return;
   const status = getSessionStatus(session || "weekend");
   const isMobile = useIsMobile();
+  const closeShown = showsCloseValuation(session);
+  const liveShown = showsLiveValuation(session);
+  const periodLabel = reportPeriodLabel(fund.holdings_date);
 
   return (
     <div
-      style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.45)", backdropFilter:"blur(6px)", display:"flex", justifyContent:"flex-end" }}
+      style={{ position:"fixed", inset:0, zIndex:5000, background:"rgba(0,0,0,0.45)", backdropFilter:"blur(6px)", display:"flex", justifyContent:"flex-end" }}
       onClick={e => e.target === e.currentTarget && onClose()}
     >
       <div style={{
@@ -390,36 +408,40 @@ function DetailPanel({ fund, onClose, cc, session }) {
             }}>×</button>
           </div>
 
-          {/* 收盘估值 + 实时估值 双卡片 */}
+          {/* 每个时段只展示有意义的估值；盘后才同时展示收盘与盘后。 */}
           {(fund.close_valuation != null || fund.live_valuation != null) && (
             <div style={{ marginTop:16, display:"flex", gap:10 }}>
-              {/* 左卡：收盘估值（冻结） */}
-              <div style={{
-                flex:1, padding:"12px 14px", borderRadius:12,
-                background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.25)",
-                minWidth:0,
-              }}>
-                <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>收盘估值</div>
-                {fund.close_valuation != null ? (
-                  <div style={{ fontSize:isMobile ? 24 : 28, fontWeight:900, letterSpacing:-1,
-                    color: fund.close_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
-                    {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
+              {closeShown && (
+                <div style={{
+                  flex:1, padding:"12px 14px", borderRadius:12,
+                  background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.25)",
+                  minWidth:0,
+                }}>
+                  <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>
+                    {session === "a_share" ? "上一交易日收盘估值" : session === "weekend" ? "最近收盘估值" : "收盘估值"}
                   </div>
-                ) : (
-                  <div style={{ fontSize:20, color:"rgba(255,255,255,0.4)" }}>—</div>
-                )}
-                <div style={{ fontSize:10, opacity:0.5, marginTop:4 }}>
-                  {fund.coverage != null ? `${fund.coverage.toFixed(0)}% 覆盖` : "收盘价加权"}
+                  {fund.close_valuation != null ? (
+                    <div style={{ fontSize:isMobile ? 24 : 28, fontWeight:900, letterSpacing:-1,
+                      color: fund.close_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
+                      {fund.close_valuation >= 0 ? "+" : ""}{fund.close_valuation.toFixed(2)}%
+                    </div>
+                  ) : (
+                    <div style={{ fontSize:20, color:"rgba(255,255,255,0.4)" }}>—</div>
+                  )}
+                  <div style={{ fontSize:10, opacity:0.5, marginTop:4 }}>
+                    {fund.close_coverage != null ? `${fund.close_coverage.toFixed(0)}% 持仓覆盖` : "收盘价加权"}
+                  </div>
                 </div>
-              </div>
-              {/* 右卡：实时估值（仅非 weekend 时段） */}
-              {session !== "weekend" && (
+              )}
+              {liveShown && (
                 <div style={{
                   flex:1, padding:"12px 14px", borderRadius:12,
                   background:"rgba(255,255,255,0.18)", border:"2px solid rgba(255,255,255,0.45)",
                   minWidth:0,
                 }}>
-                  <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>实时估值</div>
+                  <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>
+                    {session === "pre_market" ? "盘前估值" : session === "us_open" ? "盘中估值" : "盘后估值"}
+                  </div>
                   {fund.live_valuation != null ? (
                     <div style={{ fontSize:isMobile ? 24 : 28, fontWeight:900, letterSpacing:-1,
                       color: fund.live_valuation >= 0 ? "#ff6b6b" : "#6ee7b7" }}>
@@ -429,13 +451,8 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     <div style={{ fontSize:20, color:"rgba(255,255,255,0.4)" }}>计算中…</div>
                   )}
                   <div style={{ fontSize:10, opacity:0.5, marginTop:4 }}>
-                    {fund.data_source === "gszzl"           ? "fundgz 全仓估值" :
-                     fund.data_source === "gszzl_fallback"  ? "gszzl 兜底" :
-                     fund.data_source === "us_open_calc"    ? "实时股价加权" :
-                     fund.data_source === "pre_market_calc" ? "盘前涨跌加权" :
-                     fund.data_source === "post_market_calc"? "盘后涨跌加权" :
-                     fund.data_source === "a_share_post_calc"? "夜盘涨跌加权" :
-                     SESSION_INFO[session]?.desc?.split("，")[0] ?? "持仓加权"}
+                    {fund.live_coverage != null ? `${fund.live_coverage.toFixed(0)}% 持仓覆盖` :
+                      SESSION_INFO[session]?.desc?.split("，")[0] ?? "持仓加权"}
                   </div>
                 </div>
               )}
@@ -454,6 +471,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
               { label:"每日限额", value: fund.daily_limit },
               { label:"申购状态", value: fund.buy_status === "open" ? "✅ 开放申购" : "⛔ 暂停申购" },
               { label:"当前状态", value: status.label, color: status.color },
+              ...(periodLabel ? [{ label:"持仓报告期", value:`${periodLabel}（当前最新披露）` }] : []),
               ...(fund.nav_date ? [{ label:"净值日期", value: fund.nav_published ? `${fund.nav_date} ✓已公布` : fund.nav_date, color: fund.nav_published ? "#059669" : undefined }] : []),
             ].map(item => (
               <div key={item.label} style={{ padding:"10px 14px", borderRadius:10, background:cc.bg, border:`1px solid ${cc.border}` }}>
@@ -483,12 +501,12 @@ function DetailPanel({ fund, onClose, cc, session }) {
                   估值涨跌幅 ≈ <strong>Σ（持仓占比 × 股票涨跌幅）</strong> + <strong>汇率变动</strong>
                 </div>
                 <div style={{ fontSize:12, color:"#3b82f6", marginTop:6, lineHeight:1.7 }}>
-                  基于季报前十重仓股加权计算。
-                  {fund.data_source === "pre_market_calc"  ? "使用盘前涨跌幅（Yahoo+Nasdaq）。" :
-                   fund.data_source === "us_open_calc"     ? "使用实时股价（Yahoo）。" :
-                   fund.data_source === "post_market_calc" ? "使用盘后涨跌幅（Yahoo+Nasdaq）。" :
-                   fund.data_source === "a_share_post_calc"? "使用昨日盘后涨跌幅（冻结）。" :
-                   "使用收盘价缓存。"}
+                  基于最新已披露季报前十大持仓计算，股票涨跌统一以<strong>前一交易日收盘价</strong>为基准。
+                  {session === "pre_market"  ? "当前使用盘前行情。" :
+                   session === "us_open"     ? "当前使用美股盘中行情。" :
+                   session === "post_market" ? "当前同时保留正式收盘与盘后参考。" :
+                   session === "a_share"     ? "当前使用上一交易日正式收盘行情。" :
+                   "当前使用最近交易日正式收盘行情。"}
                   {" "}前十覆盖率越高，估值越接近真实净值变动。非美股（港股/欧股）暂无法获取实时价格，会影响覆盖率。
                 </div>
               </>
@@ -562,15 +580,16 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     const tdP = isMobile ? "8px 6px" : "13px 14px";
                     const thStyle = { ...mkTh(cc), position:"static", color:"rgba(255,255,255,0.8)", background:"transparent",
                       padding: isMobile ? "8px 6px" : "13px 14px", fontSize: isMobile ? 11 : 15 };
-                    // 有实时数据（h.change）且非 weekend 时显示双列
-                    const showDual = session !== "weekend" && displayed.some(h => h.change != null);
-                    const closeLabel = "收盘";
-                    const liveLabel  = { a_share:"夜盘", pre_market:"盘前", us_open:"盘中", post_market:"盘后" }[session] ?? "实时";
-                    // 后端统一：h.close_change = 收盘，h.change = 实时/夜盘
+                    const showClose = showsCloseValuation(session) && displayed.some(h => h.close_change != null);
+                    const showLive = showsLiveValuation(session) && displayed.some(h => h.change != null);
+                    const closeLabel = session === "a_share" ? "上一收盘涨跌" : session === "weekend" ? "最近收盘涨跌" : "收盘涨跌";
+                    const liveLabel  = { pre_market:"盘前涨跌", us_open:"盘中涨跌", post_market:"盘后涨跌" }[session] ?? "当前涨跌";
+                    // 估值以每日净值的标准基准计算：所有涨跌均相对前一交易日收盘。
                     const getChanges = (h) => {
-                      if (session === "weekend")
-                        return { close: h.close_change, live: null };
-                      return { close: h.close_change, live: h.change };
+                      return {
+                        close: showClose ? h.close_change : null,
+                        live: showLive ? h.change : null,
+                      };
                     };
                     const fmtChg = (v, cc) => v != null
                       ? <span style={{ color: v >= 0 ? cc.red : cc.green, fontWeight:700, fontSize: isMobile ? 12 : 13 }}>
@@ -588,14 +607,16 @@ function DetailPanel({ fund, onClose, cc, session }) {
                   <tr style={{ background:"linear-gradient(135deg,#1a56db,#7c3aed)" }}>
                     <th style={{ ...baseTh, textAlign:"left" }}>名称</th>
                     <th style={{ ...baseTh, textAlign:"center" }}>占比</th>
-                    <th style={chgTh}>
-                      {closeLabel}
-                      <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>{fund.close_hkt_label ?? ""}</span>
-                    </th>
-                    {showDual && (
+                    {showClose && (
+                      <th style={chgTh}>
+                        {closeLabel}
+                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>较前收盘</span>
+                      </th>
+                    )}
+                    {showLive && (
                       <th style={chgTh}>
                         {liveLabel}
-                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>最新</span>
+                        <span style={{ ...subStyle, right: isMobile ? 6 : 10 }}>较前收盘</span>
                       </th>
                     )}
                   </tr>
@@ -629,8 +650,8 @@ function DetailPanel({ fund, onClose, cc, session }) {
                             </div>
                           )}
                         </td>
-                        <td style={chgTd}>{fmtChg(close, cc)}</td>
-                        {showDual && <td style={chgTd}>{fmtChg(live, cc)}</td>}
+                        {showClose && <td style={chgTd}>{fmtChg(close, cc)}</td>}
+                        {showLive && <td style={chgTd}>{fmtChg(live, cc)}</td>}
                       </tr>
                     );
                   })}
@@ -642,6 +663,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                 <span>
                   数据来源：基金季报
                   {fund.holdings_date ? `（截至 ${fund.holdings_date}）` : ""}
+                  {periodLabel ? ` · ${periodLabel} 为当前最新已披露报告期` : ""}
                   {fund.holdings_source && fund.holdings_source !== "quarterly" && fund.holdings_source !== "quarterly+annual"
                     ? <span style={{ color:"#ef4444", marginLeft:4 }}>⚠️ 季报拉取失败，数据仅供参考</span>
                     : ""}
@@ -862,7 +884,9 @@ export default function QDIIPage() {
   const [accessPassword, setAccessPassword] = useState("");
   const [accessError, setAccessError] = useState("");
   const canAccessQDII = QDII_PUBLIC_RELEASE || accessGranted;
-  const [selected, setSelected]       = useState(null);
+  // Store only the code so an open detail drawer always follows the latest
+  // snapshot instead of freezing the row object captured at click time.
+  const [selectedCode, setSelectedCode] = useState(null);
   const [search, setSearch]           = useState("");
   const [sortKey, setSortKey]         = useState(null);
   const [sortDir, setSortDir]         = useState("desc");
@@ -892,13 +916,13 @@ export default function QDIIPage() {
     try { return !localStorage.getItem("qdii_val_cache"); } catch { return true; }
   });
   const [updatedAt, setUpdatedAt]     = useState(null);
+  const [marketAsOf, setMarketAsOf]   = useState(null);
   const [snapshotStatus, setSnapshotStatus] = useState(() => {
     if (!QDII_PUBLIC_RELEASE) return "offline";
     try { return localStorage.getItem("qdii_val_cache") ? "stale" : "unavailable"; }
     catch { return "unavailable"; }
   });
   const [session, setSession]         = useState(() => getMarketSession());
-  const [countdown, setCountdown]     = useState(null);
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem("qdii_dark") === "1"; } catch { return false; }
   });
@@ -993,6 +1017,7 @@ export default function QDIIPage() {
           // A valid server snapshot remains usable even if local storage is full.
         }
         setUpdatedAt(data.updated_at || null);
+        setMarketAsOf(data.market_as_of || null);
         setSnapshotStatus(data.status || "partial");
         setSession(data.session || getMarketSession());
         const fx = data.fx_change ?? null;
@@ -1015,22 +1040,23 @@ export default function QDIIPage() {
     fetchValuations(true);
   }, [canAccessQDII, fetchValuations]);
 
-  // 每秒刷新倒计时 + 预热 + 整点 UI 刷新
+  // 后台 cron 每 5/15 分钟采集一次；浏览器只读 Redis/CDN 快照。
+  // Vercel 的 cron 启动可能落后整点几十秒，因此不能只在整点读取一次，
+  // 否则页面会错过刚发布的快照并继续显示上一轮五分钟。
   useEffect(() => {
     if (!canAccessQDII) return undefined;
-    const timer = setInterval(() => {
-      const s = getMarketSession();
-      setSession(s);
-      const secs = clockCountdown(s);
-      setCountdown(secs);
-      if (s === "weekend" || s === "a_share") return;
-      const interval = sessionInterval(s);
-      // T=0（新格开始）：只读取后台已经发布的 Redis 快照，不触发上游采集。
-      if (secs === interval) {
-        fetchValuations(false);
-      }
-    }, 1000);
-    return () => clearInterval(timer);
+    const syncSnapshot = () => fetchValuations(false);
+    const timer = setInterval(syncSnapshot, 60 * 1000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") syncSnapshot();
+    };
+    window.addEventListener("focus", syncSnapshot);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", syncSnapshot);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [canAccessQDII, fetchValuations]);
 
   // 拉美股主动数据（scale/ytd_return/daily_limit/buy_status）
@@ -1089,12 +1115,17 @@ export default function QDIIPage() {
         ytd_return:  ua.annual_return_2025 ?? ua.ytd_return ?? api.annual_return_2025 ?? api.ytd_return ?? (f.ytd_return > 0 ? f.ytd_return : null),
         daily_limit: ua.daily_limit ?? f.daily_limit,
         buy_status:  ua.buy_status  ?? f.buy_status,
-        valuation:     (session !== "weekend" ? api.live_valuation : null) ?? api.close_valuation ?? null,
-        // [SESSION DISPLAY SPEC] 前端字段映射 — 与后端 api/index.py 中的权威注释保持一致。
-        // 后端统一返回 close_valuation / live_valuation，前端直接使用
+        valuation:       api.valuation ?? (showsLiveValuation(session) ? api.live_valuation : api.close_valuation) ?? null,
+        valuation_kind:  api.valuation_kind  ?? null,
+        valuation_label: api.valuation_label ?? SESSION_INFO[session]?.valLabel ?? "当前估值",
+        valuation_basis: api.valuation_basis ?? "previous_close",
+        valuation_as_of: api.valuation_as_of ?? null,
         close_valuation: api.close_valuation ?? null,
         live_valuation:  api.live_valuation  ?? null,
-        coverage:      api.coverage      ?? null,
+        coverage:        api.coverage        ?? null,
+        close_coverage:  api.close_coverage  ?? null,
+        live_coverage:   api.live_coverage   ?? null,
+        quality_grade:   api.quality_grade   ?? null,
         holdings:        api.holdings        ?? null,
         holdings_date:   api.holdings_date   ?? null,
         holdings_source: api.holdings_source ?? null,
@@ -1126,6 +1157,12 @@ export default function QDIIPage() {
     }
     return list;
   }, [search, sortKey, sortDir, valuations, usActive, session]);
+
+  const selectedFund = useMemo(
+    () => selectedCode ? filtered.find(fund => fund.code === selectedCode) || null : null,
+    [filtered, selectedCode],
+  );
+  const currentValuationColumns = valuationColumns(session);
 
   return (
     <div style={{ minHeight:"100vh", background:CC.bg, paddingBottom:60, transition:"background 0.2s" }}>
@@ -1211,7 +1248,7 @@ export default function QDIIPage() {
                 主动 QDII 基金估值
               </h1>
               <p style={{ fontSize: isMobile ? 11 : 12, opacity:0.85, margin:"0 0 10px", lineHeight:1.6, maxWidth:560 }}>
-                官方净值延迟 T+1/T+2 公布，美股收盘后用季报十大重仓股加权估算今日涨跌幅，帮你在 3PM 申购截止前提前决策。
+                官方净值通常延迟 T+1/T+2 公布；系统按当前市场时段，用最新已披露前十大持仓、股票行情与汇率估算相对前收盘的净值变动。
               </p>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                 {[
@@ -1271,9 +1308,9 @@ export default function QDIIPage() {
                   <div style={{ fontSize:10, color:"rgba(255,255,255,0.55)", fontWeight:700, letterSpacing:"0.05em", marginBottom:1 }}>数据更新策略</div>
                   {[
                     { dot:"#9ca3af", label:"休市 / 周末",      time:"数据冻结" },
-                    { dot:"#fdba74", label:"盘前 16:00–21:30", time:"5分钟刷新" },
-                    { dot:"#93c5fd", label:"盘中 21:30–04:00", time:"5分钟刷新" },
-                    { dot:"#c4b5fd", label:"盘后 04:00–08:00", time:"15分钟刷新" },
+                    { dot:"#fdba74", label:"美股盘前",          time:"5分钟采集" },
+                    { dot:"#93c5fd", label:"美股盘中",          time:"5分钟采集" },
+                    { dot:"#c4b5fd", label:"美股盘后",          time:"15分钟采集" },
                   ].map(r => (
                     <div key={r.label} style={{ display:"flex", alignItems:"center", gap:6 }}>
                       <span style={{ width:6, height:6, borderRadius:"50%", background:r.dot, flexShrink:0 }} />
@@ -1307,7 +1344,7 @@ export default function QDIIPage() {
           <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: isMobile ? 10 : 20 }}>
             {[
               { icon:"⏰", title:"提前决策", desc:"官方净值 T+1/T+2 才公布，估值帮你在 3PM 截止前做判断" },
-              { icon:"🧮", title:"双源估算", desc:"A股时段用昨日盘后涨跌加权估算；美股时段用 Yahoo 实时股价加权" },
+              { icon:"🧮", title:"统一口径", desc:"所有时段都按相对前一交易日收盘的持仓涨跌与汇率变动估算" },
               { icon:"💱", title:"含汇率", desc:"人民币/美元汇率变动同步纳入计算，影响约 ±0.3%" },
               { icon:"⚠️", title:"仅供参考", desc:"持仓数据滞后 1-2 个月，实际净值以基金公司公告为准" },
             ].map(item => (
@@ -1336,7 +1373,12 @@ export default function QDIIPage() {
                 <span>点击任意行查看持仓明细</span>
                 {updatedAt && (
                   <span style={{ color:CC.textDim }}>
-                    · 更新于 {new Date(updatedAt).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                    · 快照更新于 {new Date(updatedAt).toLocaleString("zh-CN", { timeZone:"Asia/Shanghai", month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                  </span>
+                )}
+                {marketAsOf && (
+                  <span style={{ color:CC.textDim }}>
+                    · 行情截至 {new Date(marketAsOf).toLocaleString("zh-CN", { timeZone:"Asia/Shanghai", month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}
                   </span>
                 )}
                 {snapshotStatus !== "fresh" && snapshotStatus !== "offline" && (
@@ -1344,12 +1386,9 @@ export default function QDIIPage() {
                     · {snapshotStatus === "stale" ? "使用上次有效快照" : "部分数据待补齐"}
                   </span>
                 )}
-                {countdown != null && session !== "weekend" && session !== "a_share" && (
-                  <span style={{
-                    color: countdown <= 60 ? (dark ? "#34d399" : "#059669") : CC.textDim,
-                    fontWeight: countdown <= 60 ? 600 : 400,
-                  }}>
-                    · {countdown <= 0 ? "即将更新…" : countdown < 60 ? `${countdown}秒后更新` : `${Math.ceil(countdown/60)}分钟后更新`}
+                {session !== "weekend" && (
+                  <span style={{ color: dark ? "#34d399" : "#059669", fontWeight:600 }}>
+                    · 后台定时采集，页面自动同步
                   </span>
                 )}
               </div>
@@ -1495,11 +1534,11 @@ export default function QDIIPage() {
                       onClick={e => toggleWatch(fund.code, e)}
                       style={{ fontSize:20, color:"#f59e0b", cursor:"pointer", flexShrink:0, lineHeight:1 }}
                     >★</span>
-                    <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={() => setSelected(fund)}>
+                    <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={() => setSelectedCode(fund.code)}>
                       <div style={{ fontWeight:700, fontSize:14, color:CC.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fund.name}</div>
                       <div style={{ fontFamily:"monospace", fontSize:11, color:"#4f46e5", marginTop:2 }}>{fund.code}</div>
                     </div>
-                    <div style={{ fontSize:18, fontWeight:800, color: val == null ? "#a5b4fc" : val >= 0 ? CC.red : CC.green, flexShrink:0, cursor:"pointer" }} onClick={() => setSelected(fund)}>
+                    <div style={{ fontSize:18, fontWeight:800, color: val == null ? "#a5b4fc" : val >= 0 ? CC.red : CC.green, flexShrink:0, cursor:"pointer" }} onClick={() => setSelectedCode(fund.code)}>
                       {val == null ? "—" : `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`}
                     </div>
                   </div>
@@ -1524,7 +1563,7 @@ export default function QDIIPage() {
                 const bg = i % 2 === 0 ? CC.card : CC.bg;
                 return (
                   <div key={fund.code}
-                    onClick={() => setSelected(fund)}
+                    onClick={() => setSelectedCode(fund.code)}
                     style={{ display:"grid", gridTemplateColumns:"40px 1fr 2fr 1fr", alignItems:"center", padding:"14px 20px 14px 16px", cursor:"pointer", background:bg, borderBottom: i < arr.length-1 ? `1px solid ${CC.borderLight}` : "none", transition:"background 0.15s" }}
                     onMouseEnter={e => e.currentTarget.style.background=hoverBg}
                     onMouseLeave={e => e.currentTarget.style.background=bg}
@@ -1558,7 +1597,7 @@ export default function QDIIPage() {
               const bg = i % 2 === 0 ? CC.card : CC.bg;
               return (
                 <div key={fund.code}
-                  onClick={() => setSelected(fund)}
+                  onClick={() => setSelectedCode(fund.code)}
                   style={{ display:"grid", gridTemplateColumns:"40px 1fr 2fr 1fr", alignItems:"center", padding:"14px 20px 14px 16px", cursor:"pointer", background:bg, borderBottom: i < filtered.length-1 ? `1px solid ${CC.borderLight}` : "none", transition:"background 0.15s" }}
                   onMouseEnter={e => e.currentTarget.style.background=hoverBg}
                   onMouseLeave={e => e.currentTarget.style.background=bg}
@@ -1594,17 +1633,13 @@ export default function QDIIPage() {
                       <th style={{ ...mkTh(CC), minWidth:200, textAlign:"left" }}>基金名称</th>
                     </>
                   )}
-                  {(isMobile ? [
-                    { key:"close_valuation", label:"收盘估值", align:"center" },
-                    ...(session !== "weekend" ? [{ key:"live_valuation", label:"实时估值", align:"center" }] : []),
-                  ] : [
+                  {(isMobile ? currentValuationColumns : [
                     { key:"scale",         label:"规模(亿)", align:"center" },
                     { key:"ytd_return",    label:"25年涨幅", align:"right"  },
                     { key:"daily_limit",   label:"每日限额", align:"center" },
                     { key:"status",        label:"状态",     align:"center", noSort:true },
                     { key:"nav",           label:"最新净值", align:"center" },
-                    { key:"close_valuation", label:"收盘估值", align:"center" },
-                    ...(session !== "weekend" ? [{ key:"live_valuation", label: "实时估值", align:"center" }] : []),
+                    ...currentValuationColumns,
                   ]).map(({ key, label, align, noSort }) => {
                     const active = sortKey === key;
                     const arrow = active ? (sortDir === "desc" ? " ▼" : " ▲") : " ↕";
@@ -1625,11 +1660,11 @@ export default function QDIIPage() {
               </thead>
               <tbody>
                 {filtered.map((fund, i) => (
-                  <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={setSelected} isMobile={isMobile} cc={CC} session={session} watched={watchlist.has(fund.code)} onToggleWatch={toggleWatch} />
+                  <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={fundRow => setSelectedCode(fundRow.code)} isMobile={isMobile} cc={CC} session={session} watched={watchlist.has(fund.code)} onToggleWatch={toggleWatch} />
                 ))}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={isMobile ? (session !== "weekend" ? 4 : 3) : (session === "weekend" ? 9 : 10)} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
+                    <td colSpan={(isMobile ? 2 : 8) + currentValuationColumns.length} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
                       未找到相关基金
                     </td>
                   </tr>
@@ -1640,11 +1675,11 @@ export default function QDIIPage() {
             <div style={{ padding:"12px 16px", borderTop:`1px solid ${CC.border}`, fontSize:12, color:CC.textDim, display:"flex", justifyContent:"space-between", alignItems:"center", background:CC.card }}>
               <span>共 {filtered.length} 只{loading ? " · 估值加载中…" : ""}</span>
               <span>
-                {session === "a_share"    ? "收盘估值 + 盘后估值加权" :
-                 session === "us_open"    ? "Yahoo 实时股价加权" :
-                 session === "pre_market" ? "Yahoo 盘前价格加权" :
-                 session === "post_market"? "Yahoo 盘后价格加权" :
-                 "季报持仓 × 收盘涨跌 + 汇率"}
+                {session === "a_share"    ? "上一交易日收盘持仓涨跌 + 汇率" :
+                 session === "us_open"    ? "盘中价格较前收盘涨跌 + 汇率" :
+                 session === "pre_market" ? "盘前价格较前收盘涨跌 + 汇率" :
+                 session === "post_market"? "盘后价格较前收盘涨跌 + 汇率" :
+                 "最近交易日收盘持仓涨跌 + 汇率"}
               </span>
             </div>
           </div>
@@ -1652,7 +1687,7 @@ export default function QDIIPage() {
       </div>
 
       {/* 详情面板 */}
-      {selected && <DetailPanel fund={selected} onClose={() => setSelected(null)} cc={CC} session={session} />}
+      {selectedFund && <DetailPanel fund={selectedFund} onClose={() => setSelectedCode(null)} cc={CC} session={session} />}
 
       {/* 导出弹窗 */}
       {exportImg && createPortal(
