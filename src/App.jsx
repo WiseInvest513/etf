@@ -9,6 +9,7 @@ import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
 import OnchainStocksPage from "./onchain/OnchainStocksPage.jsx";
 import ProductDetailPage from "./product/ProductDetailPage.jsx";
 import TodayDataPage from "./seo/TodayDataPage.jsx";
+import { CATEGORY_PAGE_META, HOME_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
 import { FOOTER_NAV_ITEMS } from "./navigation/navigationConfig.js";
 import {
@@ -38,6 +39,12 @@ const LOCAL_AUTH_BYPASS = resolveLocalAuthBypass({
 });
 const LOCAL_PREVIEW_USER = { email: "local-preview@wise-etf.local", isLocalPreview: true };
 const MARKET_SENTIMENT_FIELDS = ["vix","fear_greed","pe","nasdaq_pe","ndx_price","spx_price"];
+const MAIN_TAB_SEO = {
+  overview: HOME_SEO,
+  ...CATEGORY_PAGE_META,
+  guide: {path:"/guide",title:"WiseETF核心介绍 - 纳指、标普500与QDII数据口径 - WiseETF",description:"了解WiseETF如何展示纳指、标普500、主动QDII和场内ETF的申购额度、费率、收益及溢价数据。"},
+  onchain: {path:"/onchain",title:"链上美股ETF - QQQ与SPY代币化现货购买路径 - WiseETF",description:"比较场外QDII、场内ETF与USDT代币化美股现货的额度、溢价、费率和产品结构。"},
+};
 async function apiFetch(path, options={}) {
   const response = await fetch(`${API_BASE}${path}`, options);
   if(!response.ok){
@@ -4192,6 +4199,23 @@ function MainApp() {
   const [compareList,setCompareList]=useState([]);
   const [showCompare,setShowCompare]=useState(false);
   const [showWechat,setShowWechat]=useState(false);
+
+  useEffect(()=>{
+    const meta=MAIN_TAB_SEO[activeTab]||HOME_SEO;
+    const path=activeTab==="watchlist"?"/watchlist":meta.path;
+    document.title=activeTab==="watchlist"?"我的自选 - WiseETF":meta.title;
+    const upsert=(selector,tag,attrs)=>{
+      let node=document.head.querySelector(selector);
+      if(!node){node=document.createElement(tag);document.head.appendChild(node);}
+      Object.entries(attrs).forEach(([key,value])=>node.setAttribute(key,value));
+    };
+    upsert('meta[name="description"]','meta',{name:"description",content:activeTab==="watchlist"?"WiseETF本地自选基金列表。":meta.description});
+    upsert('meta[property="og:title"]','meta',{property:"og:title",content:document.title});
+    upsert('meta[property="og:description"]','meta',{property:"og:description",content:activeTab==="watchlist"?"WiseETF本地自选基金列表。":meta.description});
+    upsert('meta[property="og:url"]','meta',{property:"og:url",content:`${SITE_ORIGIN}${path}`});
+    upsert('meta[name="robots"]','meta',{name:"robots",content:activeTab==="watchlist"?"noindex,follow":"index,follow"});
+    upsert('link[rel="canonical"]','link',{rel:"canonical",href:`${SITE_ORIGIN}${path}`});
+  },[activeTab]);
 
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth <= 768;

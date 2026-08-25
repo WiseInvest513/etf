@@ -11,6 +11,7 @@ import {
   productRoute,
   subscriptionState,
 } from "./product-detail-model.js";
+import { productSeoTitle } from "../seo/seo-content.js";
 import "./product-detail.css";
 
 const SITE_ORIGIN = "https://wise-etf.com";
@@ -49,7 +50,7 @@ function upsertMeta(selector, attributes) {
 function useProductMetadata(product, row) {
   useEffect(() => {
     if (!product) return undefined;
-    const title = `${product.name}（${product.code}）${product.product_type === "etf" ? "行情与溢价信息" : "数据与申购信息"} · WiseETF`;
+    const title = productSeoTitle(product);
     const description = buildProductDescription(product, row);
     const url = `${SITE_ORIGIN}${productRoute(product)}`;
     document.title = title;

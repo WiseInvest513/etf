@@ -5,10 +5,18 @@ import {
   categoryLabel,
   productRoute,
 } from "../src/product/product-detail-model.js";
+import {
+  CATEGORY_PAGE_META,
+  SITE_ORIGIN,
+  TODAY_FAQS,
+  TODAY_PAGE_META,
+  faqStructuredData,
+  productSeoTitle,
+} from "../src/seo/seo-content.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
-const origin = "https://wise-etf.com";
+const origin = SITE_ORIGIN;
 const catalog = JSON.parse(await readFile(path.join(root, "catalog/products.v1.json"), "utf8"));
 const template = await readFile(path.join(dist, "index.html"), "utf8");
 
@@ -28,7 +36,10 @@ const staticDescription = (product) => {
   if (finite(snapshot.scale)) details.push(`规模${Number(snapshot.scale).toFixed(2)}亿元`);
   if (finite(snapshot.fee)) details.push(`运作费率${Number(snapshot.fee).toFixed(2)}%`);
   if (finite(snapshot.annual_return_2025)) details.push(`2025年收益${Number(snapshot.annual_return_2025).toFixed(2)}%`);
-  return `${product.name}（${product.code}）${categoryLabel(product)}资料${details.length ? `：${details.join("，")}` : ""}。今日申购额度、滚动收益或场内溢价以页面动态快照和数据日期为准。`;
+  const intent = product.product_type === "etf"
+    ? "查询最新溢价率、场内价格、基金净值、成交额和运作费率"
+    : "查询今日申购额度、限购状态、运作费率、基金规模和近一年收益";
+  return `${product.name}（${product.code}）${categoryLabel(product)}：${intent}${details.length ? `；${details.join("，")}` : ""}。动态数据以页面标注日期为准。`;
 };
 
 function replaceHead(html, { title, description, url, structured, marker }) {
@@ -47,7 +58,7 @@ function withFallback(html, content) {
 }
 
 const fallbackStyle = `<style>
-  .seo-fallback{box-sizing:border-box;max-width:1120px;margin:0 auto;padding:46px 24px 70px;color:#182238;font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif}.seo-fallback *{box-sizing:border-box}.seo-fallback a{color:#2164d7;text-decoration:none}.seo-fallback nav{display:flex;gap:16px;padding-bottom:28px;border-bottom:1px solid #e7ebf1;font-size:14px;font-weight:700}.seo-fallback .hero{padding:52px 0 36px}.seo-fallback .eyebrow{color:#2d68dc;font-size:12px;font-weight:800;letter-spacing:.12em}.seo-fallback h1{max-width:900px;margin:14px 0 16px;font-size:clamp(32px,6vw,62px);line-height:1.08;letter-spacing:-.04em}.seo-fallback .lead{max-width:800px;color:#667389;font-size:17px;line-height:1.8}.seo-fallback .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.seo-fallback .card{padding:22px;border:1px solid #e1e6ef;border-radius:16px;background:#f8faff}.seo-fallback .card small{display:block;color:#8a96aa}.seo-fallback .card b{display:block;margin-top:8px;font-size:20px}.seo-fallback .note{margin-top:24px;padding:20px;border-radius:14px;background:#edf5ff;color:#365070;line-height:1.7}.seo-fallback .links{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.seo-fallback .links a{padding:9px 12px;border:1px solid #d8e2f3;border-radius:10px;background:#fff;font-size:13px;font-weight:700}@media(max-width:720px){.seo-fallback{padding:24px 16px 48px}.seo-fallback .grid{grid-template-columns:repeat(2,minmax(0,1fr))}.seo-fallback .hero{padding-top:34px}}
+  .seo-fallback{box-sizing:border-box;max-width:1120px;margin:0 auto;padding:46px 24px 70px;color:#182238;font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif}.seo-fallback *{box-sizing:border-box}.seo-fallback a{color:#2164d7;text-decoration:none}.seo-fallback nav{display:flex;gap:16px;padding-bottom:28px;border-bottom:1px solid #e7ebf1;font-size:14px;font-weight:700}.seo-fallback .hero{padding:52px 0 36px}.seo-fallback .eyebrow{color:#2d68dc;font-size:12px;font-weight:800;letter-spacing:.12em}.seo-fallback h1{max-width:900px;margin:14px 0 16px;font-size:clamp(32px,6vw,62px);line-height:1.08;letter-spacing:-.04em}.seo-fallback h2{margin:42px 0 16px;font-size:24px}.seo-fallback .lead{max-width:800px;color:#667389;font-size:17px;line-height:1.8}.seo-fallback .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.seo-fallback .card{padding:22px;border:1px solid #e1e6ef;border-radius:16px;background:#f8faff}.seo-fallback .card small{display:block;color:#8a96aa}.seo-fallback .card b{display:block;margin-top:8px;font-size:20px}.seo-fallback .note{margin-top:24px;padding:20px;border-radius:14px;background:#edf5ff;color:#365070;line-height:1.7}.seo-fallback .links{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.seo-fallback .links a{padding:9px 12px;border:1px solid #d8e2f3;border-radius:10px;background:#fff;font-size:13px;font-weight:700}.seo-fallback .faq{display:grid;gap:10px}.seo-fallback .faq article{padding:18px 20px;border:1px solid #e1e6ef;border-radius:12px}.seo-fallback .faq h3{margin:0 0 8px;font-size:16px}.seo-fallback .faq p{margin:0;color:#667389;line-height:1.7}@media(max-width:720px){.seo-fallback{padding:24px 16px 48px}.seo-fallback .grid{grid-template-columns:repeat(2,minmax(0,1fr))}.seo-fallback .hero{padding-top:34px}}
 </style>`;
 
 function productFallback(product) {
@@ -69,31 +80,38 @@ function productFallback(product) {
   </main>`;
 }
 
-const todayPages = [
-  {
-    kind: "limits",
-    route: "/today/qdii-limits",
-    title: "今日 QDII 申购额度 · WiseETF",
-    description: "查看纳指、标普500和美股主动QDII基金今天是否开放申购、每日限额及数据日期。获取失败时明确显示待确认。",
-    heading: "今天哪些 QDII 还能买？",
-    lead: "集中查看纳指、标普500与美股主动基金的开放、限额、暂停状态。页面只读取 WiseETF 已有的每日缓存，不会因为用户访问而反复请求全部上游。",
-    products: catalog.products.filter((item) => item.product_type === "fund"),
-  },
-  {
-    kind: "premium",
-    route: "/today/etf-premium",
-    title: "今日场内 ETF 溢价 · WiseETF",
-    description: "查看纳指与标普500场内ETF最新收盘溢价率、场内涨跌、成交额及净值日期，识别高溢价风险。",
-    heading: "今天场内 ETF 贵不贵？",
-    lead: "比较同指数场内 ETF 的收盘溢价、场内涨跌与成交额。只有报价和净值日期都有效时才计算正式溢价，盘中或旧快照会明确标注状态。",
-    products: catalog.products.filter((item) => item.product_type === "etf"),
-  },
-];
+const todayPages = Object.entries(TODAY_PAGE_META).map(([kind, meta]) => ({
+  ...meta,
+  kind,
+  title: `${meta.title} - WiseETF`,
+  heading: meta.title,
+  lead: meta.description,
+  faqs: TODAY_FAQS[kind],
+  products: catalog.products.filter((item) => kind === "limits" ? item.product_type === "fund" : item.product_type === "etf"),
+}));
+
+const categoryPages = Object.entries(CATEGORY_PAGE_META).map(([key, meta]) => ({
+  ...meta,
+  key,
+  products: catalog.products.filter((item) => meta.productType
+    ? item.product_type === meta.productType
+    : item.categories.includes(meta.category)),
+}));
+
+function categoryFallback(page) {
+  const links = page.products.map((product) => `<a href="${productRoute(product)}">${escapeHtml(product.name)}（${escapeHtml(product.code)}）</a>`).join("");
+  return `${fallbackStyle}<main class="seo-fallback">
+    <nav><a href="/">WiseETF</a><a href="/today/qdii-limits">今日额度</a><a href="/today/etf-premium">今日溢价</a></nav>
+    <section class="hero"><span class="eyebrow">FUND COMPARISON · ${escapeHtml(catalog.metadata_as_of)}</span><h1>${escapeHtml(page.heading)}</h1><p class="lead">${escapeHtml(page.lead)}</p></section>
+    <p class="note">页面加载后会读取带日期的每日快照；获取失败时保留可核验的低频产品资料，并明确标记动态字段不可用。</p>
+    <h2>可比较的产品</h2><div class="links">${links}</div>
+  </main>`;
+}
 
 for (const product of catalog.products) {
   const route = productRoute(product);
   const url = `${origin}${route}`;
-  const title = `${product.name}（${product.code}）${product.product_type === "etf" ? "行情与溢价信息" : "数据与申购信息"} · WiseETF`;
+  const title = productSeoTitle(product);
   const description = staticDescription(product);
   const structured = {
     "@context": "https://schema.org",
@@ -124,18 +142,53 @@ for (const product of catalog.products) {
   await writeFile(destination, html, "utf8");
 }
 
-for (const page of todayPages) {
-  const url = `${origin}${page.route}`;
+for (const page of categoryPages) {
+  const url = `${origin}${page.path}`;
   const structured = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
-    name: page.title.replace(" · WiseETF", ""),
+    name: page.heading,
     description: page.description,
     url,
     isPartOf: { "@type": "WebSite", name: "WiseETF", url: origin },
+    mainEntity: {
+      "@type": "ItemList",
+      numberOfItems: page.products.length,
+      itemListElement: page.products.map((product, index) => ({
+        "@type": "ListItem",
+        position: index + 1,
+        name: `${product.name}（${product.code}）`,
+        url: `${origin}${productRoute(product)}`,
+      })),
+    },
+  };
+  let html = replaceHead(template, {
+    title: page.title,
+    description: page.description,
+    url,
+    structured,
+    marker: `data-wise-category="${page.key}"`,
+  });
+  html = withFallback(html, categoryFallback(page));
+  const destination = path.join(dist, page.path.slice(1), "index.html");
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, html, "utf8");
+}
+
+for (const page of todayPages) {
+  const url = `${origin}${page.path}`;
+  const structured = {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: page.title.replace(" - WiseETF", ""),
+    description: page.description,
+    url,
+    isPartOf: { "@type": "WebSite", name: "WiseETF", url: origin },
+    mainEntity: faqStructuredData(page.faqs),
   };
   const links = page.products.slice(0, 18).map((product) => `<a href="${productRoute(product)}">${escapeHtml(product.name)}（${escapeHtml(product.code)}）</a>`).join("");
-  const fallback = `${fallbackStyle}<main class="seo-fallback"><nav><a href="/">WiseETF</a><a href="/today/qdii-limits">今日额度</a><a href="/today/etf-premium">今日溢价</a></nav><section class="hero"><span class="eyebrow">DAILY DATA · ${escapeHtml(catalog.metadata_as_of)}</span><h1>${escapeHtml(page.heading)}</h1><p class="lead">${escapeHtml(page.lead)}</p></section><p class="note">每日动态数据将在页面加载后从 WiseETF 缓存快照展示。若当日来源不可用，页面保留产品入口并明确显示“待确认”，不会把旧数据标成今天。</p><div class="links">${links}</div></main>`;
+  const faq = page.faqs.map((item) => `<article><h3>${escapeHtml(item.question)}</h3><p>${escapeHtml(item.answer)}</p></article>`).join("");
+  const fallback = `${fallbackStyle}<main class="seo-fallback"><nav><a href="/">WiseETF</a><a href="/today/qdii-limits">今日额度</a><a href="/today/etf-premium">今日溢价</a></nav><section class="hero"><span class="eyebrow">DAILY DATA · ${escapeHtml(catalog.metadata_as_of)}</span><h1>${escapeHtml(page.heading)}</h1><p class="lead">${escapeHtml(page.lead)}</p></section><p class="note">每日动态数据将在页面加载后从 WiseETF 缓存快照展示。若当日来源不可用，页面保留产品入口并明确显示“待确认”，不会把旧数据标成今天。</p><div class="links">${links}</div><h2>常见问题</h2><section class="faq">${faq}</section></main>`;
   let html = replaceHead(template, {
     title: page.title,
     description: page.description,
@@ -144,9 +197,9 @@ for (const page of todayPages) {
     marker: `data-wise-today="${page.kind}"`,
   });
   html = withFallback(html, fallback);
-  const destination = path.join(dist, page.route.slice(1), "index.html");
+  const destination = path.join(dist, page.path.slice(1), "index.html");
   await mkdir(path.dirname(destination), { recursive: true });
   await writeFile(destination, html, "utf8");
 }
 
-console.log(`Generated ${catalog.products.length} product pages and ${todayPages.length} daily collection pages.`);
+console.log(`Generated ${catalog.products.length} product pages, ${categoryPages.length} category pages and ${todayPages.length} daily collection pages.`);

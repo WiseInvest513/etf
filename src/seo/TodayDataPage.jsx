@@ -9,23 +9,13 @@ import {
   subscriptionState,
 } from "../product/product-detail-model.js";
 import { sortTodayRows } from "./today-data-model.js";
+import {
+  SITE_ORIGIN,
+  TODAY_FAQS,
+  TODAY_PAGE_META,
+  faqStructuredData,
+} from "./seo-content.js";
 import "./today-data.css";
-
-const SITE_ORIGIN = "https://wise-etf.com";
-const PAGE_META = {
-  limits: {
-    path: "/today/qdii-limits",
-    eyebrow: "QDII PURCHASE STATUS",
-    title: "今日 QDII 申购额度",
-    description: "查看纳指、标普500和美股主动QDII基金今天是否开放申购、每日限额及数据日期。额度获取失败时明确显示待确认，不使用旧额度冒充当前状态。",
-  },
-  premium: {
-    path: "/today/etf-premium",
-    eyebrow: "ETF PREMIUM WATCH",
-    title: "今日场内 ETF 溢价",
-    description: "查看纳指与标普500场内ETF最新收盘溢价率、场内涨跌、成交额及净值日期，识别高溢价风险。",
-  },
-};
 
 const hasNumber = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 const percent = (value) => hasNumber(value) ? `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(2)}%` : "—";
@@ -41,11 +31,12 @@ function setMeta(selector, attributes) {
 
 function useTodayMetadata(kind) {
   useEffect(() => {
-    const meta = PAGE_META[kind];
+    const meta = TODAY_PAGE_META[kind];
+    const faqs = TODAY_FAQS[kind];
     const url = `${SITE_ORIGIN}${meta.path}`;
-    document.title = `${meta.title} · WiseETF`;
+    document.title = `${meta.title} - WiseETF`;
     setMeta('meta[name="description"]', { name: "description", content: meta.description });
-    setMeta('meta[property="og:title"]', { property: "og:title", content: `${meta.title} · WiseETF` });
+    setMeta('meta[property="og:title"]', { property: "og:title", content: `${meta.title} - WiseETF` });
     setMeta('meta[property="og:description"]', { property: "og:description", content: meta.description });
     setMeta('meta[property="og:url"]', { property: "og:url", content: url });
     setMeta('link[rel="canonical"]', { rel: "canonical", href: url });
@@ -64,6 +55,7 @@ function useTodayMetadata(kind) {
       description: meta.description,
       url,
       isPartOf: { "@type": "WebSite", name: "WiseETF", url: SITE_ORIGIN },
+      mainEntity: faqStructuredData(faqs),
     });
     return () => { if (created) structured.remove(); };
   }, [kind]);
@@ -115,7 +107,8 @@ function SortHeader({ field, activeField, direction, onSort, children }) {
 }
 
 export default function TodayDataPage({ kind }) {
-  const meta = PAGE_META[kind] || PAGE_META.limits;
+  const meta = TODAY_PAGE_META[kind] || TODAY_PAGE_META.limits;
+  const faqs = TODAY_FAQS[kind] || TODAY_FAQS.limits;
   const isLimits = kind === "limits";
   useTodayMetadata(kind);
   const staticProducts = useMemo(
@@ -292,6 +285,10 @@ export default function TodayDataPage({ kind }) {
           <article><span>01</span><h3>{isLimits ? "待确认不等于可以买" : "溢价不是额外收益"}</h3><p>{isLimits ? "只有上游明确返回开放、限额或暂停时才展示对应状态。接口失败时保留产品资料，但状态降级为待确认。" : "溢价表示场内价格高于对应净值。买入后即使指数不跌，溢价回落也可能造成损失。"}</p></article>
           <article><span>02</span><h3>{isLimits ? "额度可能随公告变化" : "必须检查两侧日期"}</h3><p>{isLimits ? "销售渠道、份额类别和单日累计规则可能不同，页面适合用于筛选，最终下单前仍需核对销售渠道。" : "场内价格与基金净值可能处于不同披露时点。WiseETF同时保留报价日期和净值日期，避免把错位数据当成实时IOPV。"}</p></article>
           <article><span>03</span><h3>找到替代路径</h3><p>{isLimits ? "场外额度不足时，可以比较同指数的其他份额、场内ETF以及链上代币化现货，而不是只盯着一只产品。" : "高溢价时不必追价，可以比较其他同指数ETF、等待溢价回落，或者选择场外及链上购买路径。"}</p></article>
+        </section>
+        <section className="td-faq">
+          <div className="td-faq-title"><span>常见问题</span><h2>{isLimits ? "关于QDII限购与申购额度" : "关于ETF溢价率与折价"}</h2><p>根据用户常见查询整理，数据口径仍以页面日期和基金公告为准。</p></div>
+          <div>{faqs.map((item) => <details key={item.question}><summary>{item.question}</summary><p>{item.answer}</p></details>)}</div>
         </section>
         <footer className="td-footer"><p>仅提供信息参考，不构成投资建议。动态数据获取失败时不会使用目录中的旧额度或旧溢价冒充今日值。</p><div><a href={isLimits ? "/today/etf-premium" : "/today/qdii-limits"}>查看{isLimits ? "今日溢价" : "今日额度"}</a><a href="/onchain">了解链上美股</a></div></footer>
       </main>

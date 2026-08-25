@@ -64,7 +64,10 @@ export function buildProductDescription(product, row = product) {
   } else if (subscriptionState(row) === "open") {
     details.push("当前开放申购");
   }
-  return `${product.name}（${product.code}）${label}资料${details.length ? `：${details.join("，")}` : ""}。数据日期、费率和状态以页面标注为准。`;
+  const intent = product.product_type === "etf"
+    ? "查询最新溢价率、场内价格、基金净值、成交额和运作费率"
+    : "查询今日申购额度、限购状态、运作费率、基金规模和近一年收益";
+  return `${product.name}（${product.code}）${label}：${intent}${details.length ? `；${details.join("，")}` : ""}。动态数据以页面标注日期为准。`;
 }
 
 export function findProductRow(payload, code) {
