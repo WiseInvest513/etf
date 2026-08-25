@@ -19,6 +19,7 @@ from .normalizers import (
 )
 from .qdii import (
     canonicalize_symbol,
+    classify_qdii_market_session,
     combine_percent_returns,
     compute_fund_valuation,
     currency_for_symbol,
@@ -44,6 +45,7 @@ __all__ = [
     "rolling_nav_return",
     "safe_sort",
     "canonicalize_symbol",
+    "classify_qdii_market_session",
     "combine_percent_returns",
     "compute_fund_valuation",
     "currency_for_symbol",

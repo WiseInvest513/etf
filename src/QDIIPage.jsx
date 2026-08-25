@@ -34,19 +34,20 @@ function getMarketSession() {
   if (nyHour >= 4 && nyHour < 9.5) return "pre_market";
   if (nyHour >= 9.5 && nyHour < 16) return "us_open";
   if (nyHour >= 16 && nyHour < 20) return "post_market";
-  return "weekend";
+  return "closed";
 }
 
 const SESSION_INFO = {
-  a_share:     { label:"A股时段",  valLabel:"上一交易日收盘估值", desc:"上一交易日收盘涨跌幅加权，数据已固定", color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
+  a_share:     { label:"A股时段",  valLabel:"收盘估值", desc:"美股收盘涨跌幅加权，亚洲持仓按最新行情", color:"#ffffff", bg:"rgba(5,150,105,0.85)",   dot:"#6ee7b7" },
   pre_market:  { label:"美股盘前", valLabel:"盘前估值", desc:"盘前涨跌幅实时加权，5分钟刷新",        color:"#ffffff", bg:"rgba(234,88,12,0.85)",   dot:"#fdba74" },
   us_open:     { label:"美股盘中", valLabel:"盘中估值", desc:"相对前收盘的实时涨跌加权，5分钟刷新",    color:"#ffffff", bg:"rgba(37,99,235,0.85)",   dot:"#93c5fd" },
   post_market: { label:"美股盘后", valLabel:"盘后估值", desc:"盘后涨跌幅实时加权，15分钟刷新",       color:"#ffffff", bg:"rgba(124,58,237,0.85)",  dot:"#c4b5fd" },
-  weekend:     { label:"周末休市", valLabel:"最近收盘估值", desc:"最近交易日收盘数据，开盘前保持不变", color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
+  closed:      { label:"美股休市", valLabel:"收盘估值", desc:"收盘数据保持不变，等待盘前开始",       color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
+  weekend:     { label:"周末休市", valLabel:"收盘估值", desc:"收盘数据保持不变，等待下个交易日",     color:"#ffffff", bg:"rgba(107,114,128,0.75)", dot:"#d1d5db" },
 };
 
 function showsCloseValuation(session) {
-  return session === "post_market" || session === "a_share" || session === "weekend";
+  return session === "post_market" || session === "a_share" || session === "closed" || session === "weekend";
 }
 
 function showsLiveValuation(session) {
@@ -58,7 +59,7 @@ function valuationColumns(session) {
   if (showsCloseValuation(session)) {
     columns.push({
       key:"close_valuation",
-      label: session === "a_share" ? "上一交易日收盘估值" : session === "weekend" ? "最近收盘估值" : "收盘估值",
+      label: "收盘估值",
       align:"center",
     });
   }
@@ -207,6 +208,7 @@ function getSessionStatus(session) {
   if (session === "pre_market")  return { label:"美股盘前",  color:"#ea580c", bg:"#fff7ed", border:"#fdba74" };
   if (session === "us_open")     return { label:"美股交易中", color:"#1d4ed8", bg:"#dbeafe", border:"#93c5fd" };
   if (session === "post_market") return { label:"美股盘后",  color:"#7c3aed", bg:"#ede9fe", border:"#c4b5fd" };
+  if (session === "closed")      return { label:"美股休市",  color:"#6b7280", bg:"#f3f4f6", border:"#d1d5db" };
   return                                { label:"休市",      color:"#6b7280", bg:"#f3f4f6", border:"#d1d5db" };
 }
 
@@ -411,7 +413,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                   minWidth:0,
                 }}>
                   <div style={{ fontSize:11, opacity:0.65, marginBottom:5 }}>
-                    {session === "a_share" ? "上一交易日收盘估值" : session === "weekend" ? "最近收盘估值" : "收盘估值"}
+                    收盘估值
                   </div>
                   {fund.close_valuation != null ? (
                     <div style={{ fontSize:isMobile ? 24 : 28, fontWeight:900, letterSpacing:-1,
@@ -498,9 +500,10 @@ function DetailPanel({ fund, onClose, cc, session }) {
                   {session === "pre_market"  ? "当前使用盘前行情。" :
                    session === "us_open"     ? "当前使用美股盘中行情。" :
                    session === "post_market" ? "当前同时保留正式收盘与盘后参考。" :
-                   session === "a_share"     ? "当前使用上一交易日正式收盘行情。" :
+                   session === "a_share"     ? "当前使用美股收盘行情，亚洲持仓按最新行情。" :
+                   session === "closed"      ? "当前使用美股收盘行情。" :
                    "当前使用最近交易日正式收盘行情。"}
-                  {" "}前十覆盖率越高，估值越接近真实净值变动。非美股（港股/欧股）暂无法获取实时价格，会影响覆盖率。
+                  {" "}前十覆盖率越高，估值越接近真实净值变动；不同市场按各自交易时间更新，持仓之间的行情时点可能不同。
                 </div>
               </>
             )}
@@ -579,7 +582,7 @@ function DetailPanel({ fund, onClose, cc, session }) {
                     // never collapses back to just name and weight.
                     const showClose = showsCloseValuation(session);
                     const showLive = showsLiveValuation(session);
-                    const closeLabel = session === "a_share" ? "上一收盘涨跌" : session === "weekend" ? "最近收盘涨跌" : "收盘涨跌";
+                    const closeLabel = "收盘涨跌";
                     const liveLabel  = { pre_market:"盘前涨跌", us_open:"盘中涨跌", post_market:"盘后涨跌" }[session] ?? "当前涨跌";
                     // 估值以每日净值的标准基准计算：所有涨跌均相对前一交易日收盘。
                     const getChanges = (h) => {
@@ -1200,7 +1203,7 @@ export default function QDIIPage() {
                   return (
                     <div style={{ display:"flex", alignItems:"center", gap:5, background: si.bg, border:`1px solid ${si.color}40`, borderRadius:20, padding:"3px 10px", fontSize:11, color: si.color, fontWeight:600 }}>
                       <span style={{ width:6, height:6, borderRadius:"50%", background: si.dot || si.color, display:"inline-block",
-                        ...(session !== "weekend" ? { animation:"pulse 1.5s infinite" } : {}) }} />
+                        ...(!["closed", "weekend"].includes(session) ? { animation:"pulse 1.5s infinite" } : {}) }} />
                       {si.label} · {si.desc}
                     </div>
                   );
@@ -1320,7 +1323,7 @@ export default function QDIIPage() {
                     · {snapshotStatus === "stale" ? "使用上次有效快照" : "部分数据待补齐"}
                   </span>
                 )}
-                {session !== "weekend" && (
+                {!(["closed", "weekend"].includes(session)) && (
                   <span style={{ color: dark ? "#34d399" : "#059669", fontWeight:600 }}>
                     · 后台定时采集，页面自动同步
                   </span>
@@ -1609,11 +1612,12 @@ export default function QDIIPage() {
             <div style={{ padding:"12px 16px", borderTop:`1px solid ${CC.border}`, fontSize:12, color:CC.textDim, display:"flex", justifyContent:"space-between", alignItems:"center", background:CC.card }}>
               <span>共 {filtered.length} 只{loading ? " · 估值加载中…" : ""}</span>
               <span>
-                {session === "a_share"    ? "上一交易日收盘持仓涨跌 + 汇率" :
+                {session === "a_share"    ? "收盘持仓涨跌 + 亚洲行情 + 汇率" :
+                 session === "closed"     ? "收盘持仓涨跌 + 汇率" :
                  session === "us_open"    ? "盘中价格较前收盘涨跌 + 汇率" :
                  session === "pre_market" ? "盘前价格较前收盘涨跌 + 汇率" :
                  session === "post_market"? "盘后价格较前收盘涨跌 + 汇率" :
-                 "最近交易日收盘持仓涨跌 + 汇率"}
+                 "收盘持仓涨跌 + 汇率"}
               </span>
             </div>
           </div>

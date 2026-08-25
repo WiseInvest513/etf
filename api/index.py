@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, List
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Response
@@ -43,6 +44,7 @@ from upstash_redis import Redis
 from api.wise_etf import (
     canonicalize_symbol,
     calculate_etf_premium,
+    classify_qdii_market_session,
     compute_fund_valuation,
     currency_for_symbol,
     fx_pair_for_currency,
@@ -3229,7 +3231,7 @@ def cron_live(authorization: Optional[str] = Header(default=None)):
     """
     _require_job_secret(authorization)
     session = _current_session()
-    if session in ("a_share", "weekend"):
+    if session in ("a_share", "closed", "weekend"):
         return {"ok": True, "skipped": True, "session": session}
 
     # 收集所有 US symbols（前10大持仓，排除港股/A股）
@@ -4563,47 +4565,8 @@ _HOLDINGS_TTL   = 24 * 3600   # 季报持仓，每天刷一次
 _STOCK_CHG_TTL  = 20 * 3600   # 个股涨跌幅，盘后固定
 
 def _current_session() -> str:
-    """
-    返回当前市场时段（基于 HKT，EDT=HKT-12）：
-      a_share     HKT 08:00-16:00 周一至周五（A股交易中）
-      pre_market  HKT 16:00-21:30 周一至周五（美股盘前）
-      us_open     HKT 21:30-04:00 周一至周五（美股盘中，跨午夜）
-                  + HKT 周六 00:00-04:00（美股周五收盘前，Fri 12:00-16:00 ET）
-      post_market HKT 04:00-08:00 周一至周五（美股盘后）
-      weekend     HKT 周六 04:00 至周一 08:00（美股完全休市）
-
-    修正说明：
-      - 周六 HKT 00:00-04:00：美股周五仍在交易（ET 12:00-16:00），应为 us_open
-      - 周一 HKT 00:00-08:00：美股仍是周日休市，应为 weekend（原代码误判为 us_open/post_market）
-    """
-    from datetime import timezone, timedelta
-    HKT = timezone(timedelta(hours=8))
-    now = datetime.now(HKT)
-    wd = now.weekday()  # 0=周一 … 4=周五 5=周六 6=周日
-    h  = now.hour + now.minute / 60.0
-
-    # 周六：
-    #   00:00-04:00 → 美股周五盘中（Fri 12:00-16:00 ET）
-    #   04:00-08:00 → 美股周五盘后（Fri 16:00-20:00 ET）
-    #   08:00+      → 真正休市
-    if wd == 5:
-        if h < 4.0: return "us_open"
-        if h < 8.0: return "post_market"
-        return "weekend"
-
-    # 周日：全天休市（无盘后，美股周六不交易）
-    if wd == 6:
-        return "weekend"
-
-    # 周一：00:00-08:00 仍是美股周日休市（无盘后）；08:00 起 A 股开盘
-    if wd == 0 and h < 8.0:
-        return "weekend"
-
-    # 周一 08:00 至周五 24:00（正常工作日逻辑）
-    if 8.0 <= h < 16.0:      return "a_share"
-    if 16.0 <= h < 21.5:     return "pre_market"
-    if h >= 21.5 or h < 4.0: return "us_open"
-    return "post_market"  # HKT 04:00-08:00
+    """Return a DST-aware QDII display session."""
+    return classify_qdii_market_session()
 
 
 def _valuation_ttl() -> int:
@@ -5363,26 +5326,52 @@ def _qdii_v3_holdings_payload() -> dict:
     return _cache_get(QDII_V3_HOLDINGS_KEY) or _lkg_get(QDII_V3_HOLDINGS_KEY) or {}
 
 
-def _qdii_session_from_quotes(quotes: Dict[str, dict]) -> str:
-    """Derive the US session from provider state so DST is not hard-coded."""
-    states = [
-        quote.get("market_state")
+def _qdii_session_observation_is_current(quote: dict, session: str, now: datetime) -> bool:
+    """Require a quote timestamp inside the official New York session window."""
+    field = "regular_as_of" if session == "us_open" else "extended_as_of"
+    raw = quote.get(field)
+    if not raw:
+        return False
+    try:
+        observed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        current = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        ny_observed = observed.astimezone(ZoneInfo("America/New_York"))
+        ny_current = current.astimezone(ZoneInfo("America/New_York"))
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return False
+    if ny_observed.date() != ny_current.date():
+        return False
+    hour = ny_observed.hour + ny_observed.minute / 60
+    if session == "pre_market":
+        return quote.get("live_session") == "pre" and 4 <= hour < 9.5
+    if session == "us_open":
+        return quote.get("market_state") == "REGULAR" and 9.5 <= hour < 16
+    if session == "post_market":
+        return quote.get("live_session") == "post" and 16 <= hour < 20
+    return False
+
+
+def _qdii_session_from_quotes(quotes: Dict[str, dict], now: Optional[datetime] = None) -> str:
+    """Use the exchange clock first and provider state only as live evidence."""
+    current = now or datetime.now(timezone.utc)
+    scheduled = classify_qdii_market_session(current)
+    if scheduled in {"a_share", "closed", "weekend"}:
+        return scheduled
+    us_quotes = [
+        quote
         for symbol, quote in quotes.items()
         if "=" not in symbol and not any(symbol.endswith(suffix) for suffix in (
             ".HK", ".SS", ".SZ", ".TW", ".TWO", ".KS", ".KQ", ".T",
             ".L", ".PA", ".DE",
         ))
     ]
-    if "REGULAR" in states:
-        return "us_open"
-    if any(state in {"PRE", "PREPRE"} for state in states):
-        return "pre_market"
-    if any(state in {"POST", "POSTPOST"} for state in states):
-        return "post_market"
-    china_now = datetime.now(_CHINA_TZ)
-    if china_now.weekday() < 5 and 8 <= china_now.hour < 16:
-        return "a_share"
-    return "weekend"
+    if any(_qdii_session_observation_is_current(quote, scheduled, current) for quote in us_quotes):
+        return scheduled
+    # A clock-valid session without a matching new observation must retain the
+    # completed close instead of relabelling that close as pre/post-market.
+    return "closed"
 
 
 def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dict, run_id: str) -> dict:
@@ -5400,29 +5389,38 @@ def _qdii_v3_snapshot_from_quotes(quotes: Dict[str, dict], holdings_payload: dic
     }
     security_quotes = {symbol: row for symbol, row in validated_quotes.items() if "=" not in symbol}
     fx_quotes = {symbol: row for symbol, row in validated_quotes.items() if symbol.endswith("=X")}
+    us_security_quotes = {
+        symbol: row for symbol, row in security_quotes.items()
+        if not any(symbol.endswith(suffix) for suffix in (
+            ".HK", ".SS", ".SZ", ".TW", ".TWO", ".KS", ".KQ", ".T",
+            ".L", ".PA", ".DE",
+        ))
+    }
     session = _qdii_session_from_quotes(security_quotes)
-    show_close = session in {"post_market", "a_share", "weekend"}
+    show_close = session in {"post_market", "a_share", "closed", "weekend"}
     show_live = session in {"pre_market", "us_open", "post_market"}
     valuation_kind = {
         "a_share": "previous_close",
         "pre_market": "pre_market",
         "us_open": "intraday",
         "post_market": "post_market",
+        "closed": "latest_close",
         "weekend": "latest_close",
     }.get(session, "latest_close")
     valuation_label = {
-        "a_share": "上一交易日收盘估值",
+        "a_share": "收盘估值",
         "pre_market": "盘前估值",
         "us_open": "盘中估值",
         "post_market": "盘后估值",
-        "weekend": "最近收盘估值",
-    }.get(session, "最近收盘估值")
+        "closed": "收盘估值",
+        "weekend": "收盘估值",
+    }.get(session, "收盘估值")
 
     observation_field = "live_as_of" if show_live else "regular_as_of"
     market_as_of = max(
         (
             str(row.get(observation_field))
-            for row in validated_quotes.values()
+            for row in (us_security_quotes or security_quotes).values()
             if row.get("data_status") == "fresh" and row.get(observation_field)
         ),
         default=None,
@@ -5682,8 +5680,9 @@ def api_qdii_holdings(code: str, response: Response, force: bool = False):
 # pre_market  │ 盘前估值（较前收盘）     │ 不返回          │ 返回
 # us_open     │ 盘中估值（较前收盘）     │ 不返回          │ 返回
 # post_market │ 盘后估值（较前收盘）     │ 正式收盘        │ 返回
-# a_share     │ 上一交易日收盘估值        │ 返回            │ 不返回
-# weekend     │ 最近交易日收盘估值        │ 返回            │ 不返回
+# a_share     │ 收盘估值                  │ 返回            │ 不返回
+# closed      │ 收盘估值                  │ 返回            │ 不返回
+# weekend     │ 收盘估值                  │ 返回            │ 不返回
 @app.get("/api/qdii/valuations")
 def api_qdii_valuations(response: Response):
     """Return the last background-generated QDII snapshot without upstream I/O."""

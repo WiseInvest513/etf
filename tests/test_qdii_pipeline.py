@@ -81,7 +81,7 @@ class QDIISnapshotTests(unittest.TestCase):
         self.assertEqual(len(snapshot["funds"]), 2)
         self.assertAlmostEqual(snapshot["funds"][0]["close_valuation"], 2.22)
         self.assertIsNone(snapshot["funds"][0]["live_valuation"])
-        self.assertEqual(snapshot["funds"][0]["valuation_label"], "上一交易日收盘估值")
+        self.assertEqual(snapshot["funds"][0]["valuation_label"], "收盘估值")
         self.assertEqual(snapshot["funds"][1]["holdings_date"], "2026-06-30")
 
     def test_us_open_exposes_only_intraday_valuation_and_previous_close_changes(self):
@@ -113,6 +113,29 @@ class QDIISnapshotTests(unittest.TestCase):
         self.assertEqual(fund["holdings"][0]["live_price"], 111.5)
         self.assertEqual(fund["holdings"][0]["price_currency"], "USD")
         self.assertEqual(fund["holdings"][0]["change_basis"], "previous_close")
+
+    def test_dataset_market_time_uses_us_quote_not_newer_asian_quote(self):
+        products = [{"code": "A", "name": "Fund A", "master_code": "A"}]
+        holdings = {
+            "portfolios": {"A": {"holdings": [{"symbol": "NVDA", "weight": 20}]}}
+        }
+        quotes = self._quotes()
+        quotes["NVDA"]["regular_as_of"] = "2026-08-24T20:00:00+00:00"
+        quotes["285A.T"] = {
+            **quotes["NVDA"],
+            "currency": "JPY",
+            "regular_as_of": "2026-08-25T04:15:00+00:00",
+            "live_as_of": "2026-08-25T04:15:00+00:00",
+            "exchange_timezone": "Asia/Tokyo",
+        }
+        with patch.object(api, "QDII_V3_PRODUCTS", products), \
+             patch.object(api, "QDII_V3_CODES", ["A"]), \
+             patch.object(api, "_cache_get", return_value=[]), \
+             patch.object(api, "_lkg_get", return_value=[]), \
+             patch.object(api, "quote_observation_is_recent", return_value=True), \
+             patch.object(api, "_qdii_session_from_quotes", return_value="a_share"):
+            snapshot = api._qdii_v3_snapshot_from_quotes(quotes, holdings, "run-as-of")
+        self.assertEqual(snapshot["market_as_of"], "2026-08-24T20:00:00+00:00")
 
     def test_post_market_exposes_close_and_post_market_reference(self):
         products = [{"code": "A", "name": "Fund A", "master_code": "A"}]
@@ -184,6 +207,38 @@ class QDIISnapshotTests(unittest.TestCase):
         fof = next(row for row in snapshot["funds"] if row["code"] == "FOF")
         self.assertEqual(fof["estimation_status"], "unsupported_fund_of_funds")
         self.assertIsNone(fof["close_valuation"])
+
+
+class QDIISessionContractTests(unittest.TestCase):
+    def test_prepre_at_china_noon_cannot_become_premarket(self):
+        now = datetime(2026, 8, 25, 4, 15, tzinfo=ZoneInfo("UTC"))
+        quotes = {
+            "NVDA": {
+                "market_state": "PREPRE",
+                "live_session": "pre",
+                "extended_as_of": "2026-08-25T04:15:00+00:00",
+            }
+        }
+        self.assertEqual(api._qdii_session_from_quotes(quotes, now=now), "a_share")
+
+    def test_premarket_requires_a_current_official_window_observation(self):
+        now = datetime(2026, 8, 25, 8, 15, tzinfo=ZoneInfo("UTC"))
+        stale = {
+            "NVDA": {
+                "market_state": "PRE",
+                "live_session": "pre",
+                "extended_as_of": "2026-08-24T08:15:00+00:00",
+            }
+        }
+        current = {
+            "NVDA": {
+                "market_state": "PRE",
+                "live_session": "pre",
+                "extended_as_of": "2026-08-25T08:15:00+00:00",
+            }
+        }
+        self.assertEqual(api._qdii_session_from_quotes(stale, now=now), "closed")
+        self.assertEqual(api._qdii_session_from_quotes(current, now=now), "pre_market")
 
 
 class QDIIPublicRouteTests(unittest.TestCase):

@@ -4,12 +4,37 @@ from datetime import datetime, timezone
 
 from api.wise_etf.qdii import (
     canonicalize_symbol,
+    classify_qdii_market_session,
     combine_percent_returns,
     compute_fund_valuation,
     normalize_yahoo_quote,
     position_return_cny,
     quote_observation_is_recent,
 )
+
+
+class QDIIMarketSessionTests(unittest.TestCase):
+    def test_china_noon_is_close_display_not_us_premarket(self):
+        self.assertEqual(
+            classify_qdii_market_session(datetime(2026, 8, 25, 4, 15, tzinfo=timezone.utc)),
+            "a_share",
+        )
+
+    def test_official_premarket_uses_dst_aware_new_york_clock(self):
+        self.assertEqual(
+            classify_qdii_market_session(datetime(2026, 8, 25, 8, 15, tzinfo=timezone.utc)),
+            "pre_market",
+        )
+        self.assertEqual(
+            classify_qdii_market_session(datetime(2026, 12, 15, 9, 15, tzinfo=timezone.utc)),
+            "pre_market",
+        )
+
+    def test_weekday_overnight_gap_is_closed(self):
+        self.assertEqual(
+            classify_qdii_market_session(datetime(2026, 12, 15, 8, 30, tzinfo=timezone.utc)),
+            "closed",
+        )
 
 
 class QDIISymbolTests(unittest.TestCase):

@@ -43,6 +43,37 @@ _CURRENCY_BY_SUFFIX = {
 }
 
 
+def classify_qdii_market_session(now: Optional[datetime] = None) -> str:
+    """Classify the display session from exchange-local clocks.
+
+    Yahoo's ``PREPRE`` state can begin during the US overnight gap and must not
+    be treated as official pre-market.  The clock is therefore authoritative;
+    provider state is only used later to prove that a live quote exists.
+    """
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    china = current.astimezone(ZoneInfo("Asia/Shanghai"))
+    new_york = current.astimezone(ZoneInfo("America/New_York"))
+    china_hour = china.hour + china.minute / 60
+    ny_hour = new_york.hour + new_york.minute / 60
+
+    # During the China business day the useful US reference is the completed
+    # close.  Asian holdings may continue to update, but this is not US premarket.
+    if china.weekday() < 5 and 8 <= china_hour < 16:
+        return "a_share"
+    if new_york.weekday() >= 5:
+        return "weekend"
+    if 4 <= ny_hour < 9.5:
+        return "pre_market"
+    if 9.5 <= ny_hour < 16:
+        return "us_open"
+    if 16 <= ny_hour < 20:
+        return "post_market"
+    return "closed"
+
+
 def _finite_number(value: Any) -> Optional[float]:
     if value is None or isinstance(value, bool):
         return None
