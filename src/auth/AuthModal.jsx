@@ -165,7 +165,7 @@ export default function AuthModal({ onClose, onLogin, authRequired = false }) {
     <div className="auth-overlay" onMouseDown={event => {
       if (!authRequired && event.target === event.currentTarget) onClose();
     }}>
-      <div className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div className={`auth-dialog auth-dialog-${mode}`} role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <section className="auth-brand-panel">
           <WiseLogo />
           <div className="auth-brand-copy">
@@ -235,13 +235,12 @@ export default function AuthModal({ onClose, onLogin, authRequired = false }) {
                         <button type="button" onClick={() => setShowConfirmPassword(value => !value)} aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}><PasswordVisibilityIcon show={showConfirmPassword} /></button>
                       </div>
                     </label>
-                    <div className="auth-email-note">
-                      <strong>请确认邮箱准确</strong>
-                      <span>当前不会发送验证邮件，邮箱将作为你的登录账号。</span>
-                    </div>
-                    <label className="auth-confirm-row">
+                    <label className="auth-email-confirm">
                       <input type="checkbox" checked={emailConfirmed} onChange={event => { setEmailConfirmed(event.target.checked); setError(""); }} />
-                      <span>我已确认邮箱填写无误</span>
+                      <span>
+                        <strong>确认邮箱填写无误</strong>
+                        <small>当前不发送验证邮件，邮箱将作为登录账号。</small>
+                      </span>
                     </label>
                   </>
                 )}
