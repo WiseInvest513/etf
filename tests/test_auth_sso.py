@@ -137,7 +137,7 @@ class SettingsContractTests(unittest.TestCase):
             settings = AuthSettings.from_env()
             missing = settings.missing()
         self.assertIn("WISE_AUTH_CLIENT_SECRET", missing)
-        self.assertEqual(settings.redirect_uri, "https://wise-etf.com/api/auth/callback/wise")
+        self.assertEqual(settings.redirect_uri, "https://www.wise-etf.com/api/auth/callback/wise")
         self.assertNotIn("WISE_AUTH_SESSION_SECRET", missing)
         self.assertNotIn("WISE_AUTH_REDIRECT_URI", missing)
 

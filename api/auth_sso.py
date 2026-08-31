@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_ISSUER = "https://wise-invest.org"
 DEFAULT_CLIENT_ID = "wise_etf"
 DEFAULT_SCOPE = "openid profile email wise.membership"
-DEFAULT_PRODUCTION_REDIRECT_URI = "https://wise-etf.com/api/auth/callback/wise"
+DEFAULT_PRODUCTION_REDIRECT_URI = "https://www.wise-etf.com/api/auth/callback/wise"
 DEFAULT_SESSION_TTL = 30 * 24 * 60 * 60
 MAX_SESSION_TTL = 30 * 24 * 60 * 60
 MEMBERSHIP_TIERS = {"MEMBER", "VIP", "VIP_PLUS"}
@@ -193,6 +193,10 @@ class WiseAuthService:
                     "scope": settings.scope,
                     "code_challenge_method": "S256",
                     "token_endpoint_auth_method": "client_secret_basic",
+                    # Both Wise domains currently canonicalize to www with 307.
+                    # Authlib/httpx does not follow redirects unless opted in,
+                    # which otherwise breaks discovery and token exchange.
+                    "follow_redirects": True,
                 },
             )
             self._oauth = oauth
@@ -338,10 +342,19 @@ class WiseAuthService:
         @self.router.get("/login/wise", name="wise_auth_login")
         async def login(request: Request, return_to: str = "/"):
             settings = self._settings(request)
-            request.session["wise_return_to"] = sanitize_return_to(return_to)
-            client = self._client(settings)
-            response = await client.authorize_redirect(request, settings.redirect_uri)
-            return self._no_store(response)
+            safe_return_to = sanitize_return_to(return_to)
+            request.session["wise_return_to"] = safe_return_to
+            try:
+                client = self._client(settings)
+                response = await client.authorize_redirect(request, settings.redirect_uri)
+                return self._no_store(response)
+            except Exception as exc:
+                request.session.clear()
+                logger.error("[wise-auth] authorize redirect failed: %s", type(exc).__name__)
+                return self._no_store(RedirectResponse(
+                    append_query(safe_return_to, auth_error="login_failed"),
+                    status_code=302,
+                ))
 
         @self.router.get("/callback/wise", name="wise_auth_callback")
         async def callback(request: Request):
