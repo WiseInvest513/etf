@@ -4,7 +4,9 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Ba
 import { Analytics } from "@vercel/analytics/react";
 import LazyPage from "./LazyPage.jsx";
 import QDIIPage from "./QDIIPage.jsx";
-import AuthModal from "./auth/AuthModal.jsx";
+import { AuthProvider, useAuth } from "./auth/AuthProvider.jsx";
+import WiseLoginGate from "./auth/WiseLoginGate.jsx";
+import { currentReturnTo } from "./auth/auth-client.js";
 import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
 import OnchainStocksPage from "./onchain/OnchainStocksPage.jsx";
 import ProductDetailPage from "./product/ProductDetailPage.jsx";
@@ -37,7 +39,6 @@ const LOCAL_AUTH_BYPASS = resolveLocalAuthBypass({
   flag: import.meta.env.VITE_LOCAL_AUTH_BYPASS,
   hostname: typeof window === "undefined" ? "" : window.location.hostname,
 });
-const LOCAL_PREVIEW_USER = { email: "local-preview@wise-etf.local", isLocalPreview: true };
 const MARKET_SENTIMENT_FIELDS = ["vix","fear_greed","pe","nasdaq_pe","ndx_price","spx_price"];
 const MAIN_TAB_SEO = {
   overview: HOME_SEO,
@@ -4130,19 +4131,28 @@ function ReportPage() {
 // ─── UserCenter ───────────────────────────────────────────────────────────────
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
+  return <AuthProvider localBypass={LOCAL_AUTH_BYPASS}><AppRoutes/></AuthProvider>;
+}
+
+function AppRoutes() {
   const path=window.location.pathname;
   const productMatch=path.match(/^\/(fund|etf)\/(\d{6})\/?$/);
   if(productMatch) return <ProductDetailPage type={productMatch[1]} code={productMatch[2]}/>;
   if(path==="/today/qdii-limits") return <TodayDataPage kind="limits"/>;
   if(path==="/today/etf-premium") return <TodayDataPage kind="premium"/>;
   if(path==="/admin") return <AdminPage/>;
-  if(path==="/export") return <ReportPage/>;
-  if(path==="/lazy") return <LazyPage/>;
-  if(path==="/qdii") return <QDIIPage/>;
+  if(path==="/login") return <WiseLoginGate><MainApp/></WiseLoginGate>;
+  if(path==="/export") return <WiseLoginGate><ReportPage/></WiseLoginGate>;
+  if(path==="/lazy") return <WiseLoginGate><LazyPage/></WiseLoginGate>;
+  if(path==="/qdii") return <WiseLoginGate><QDIIPage/></WiseLoginGate>;
+  if(["/nasdaq","/sp500","/etf","/active","/watchlist"].includes(path)) {
+    return <WiseLoginGate><MainApp/></WiseLoginGate>;
+  }
   return <MainApp/>;
 }
 
 function MainApp() {
+  const {user,loading:authChecking,login,logout,isLocalPreview}=useAuth();
   const getInitialTab = () => {
     const path = window.location.pathname.replace(/^\//, "");
     const valid = ["guide","nasdaq","sp500","etf","active","watchlist","onchain"];
@@ -4172,14 +4182,6 @@ function MainApp() {
     return Date.now()-parseInt(last)>3*60*60*1000;
   });
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
-  const [user,setUser]=useState(null);
-  const [authChecking,setAuthChecking]=useState(()=>{
-    if(LOCAL_AUTH_BYPASS)return false;
-    try{return Boolean(localStorage.getItem("wise_token")&&localStorage.getItem("wise_email"));}
-    catch{return false;}
-  });
-  const [showAuth,setShowAuth]=useState(false);
-  const [authRequired,setAuthRequired]=useState(false);
   const [showUserCenter,setShowUserCenter]=useState(false);
   const [datasets,setDatasets]=useState({
     nasdaq:{status:DATASET_STATE.LOADING,data:[],source:null,asOf:null,error:null},
@@ -4219,43 +4221,6 @@ function MainApp() {
 
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth <= 768;
-
-  useEffect(()=>{
-    if(LOCAL_AUTH_BYPASS){setAuthChecking(false);return undefined;}
-    let token="",email="";
-    try{
-      token=localStorage.getItem("wise_token")||"";
-      email=localStorage.getItem("wise_email")||"";
-    }catch{
-      setAuthChecking(false);
-      return undefined;
-    }
-    if(!token||!email){setAuthChecking(false);return undefined;}
-
-    const controller=new AbortController();
-    setAuthChecking(true);
-    fetch(`${API_BASE}/auth/me`,{
-      headers:{Authorization:`Bearer ${token}`},
-      cache:"no-store",
-      signal:controller.signal,
-    })
-      .then(response=>response.json())
-      .then(data=>{
-        if(data?.ok&&data?.email){
-          setUser({token,email:data.email});
-          localStorage.setItem("wise_email",data.email);
-          return;
-        }
-        localStorage.removeItem("wise_token");
-        localStorage.removeItem("wise_email");
-        setUser(null);
-      })
-      .catch(error=>{
-        if(error.name!=="AbortError")setUser(null);
-      })
-      .finally(()=>{if(!controller.signal.aborted)setAuthChecking(false);});
-    return()=>controller.abort();
-  },[]);
 
   const [nasdaq,setNasdaq]=useState([]);
   const [sp500, setSp500 ]=useState([]);
@@ -4418,8 +4383,7 @@ function MainApp() {
   const switchTab = id=>{
     if(authChecking)return;
     if(shouldRequireAuth({isProtected:_PROTECTED_TABS.includes(id),hasUser:Boolean(user),localBypass:LOCAL_AUTH_BYPASS})){
-      setAuthRequired(true);
-      setShowAuth(true);
+      login(id === "overview" ? "/" : `/${id}`);
       return;
     }
     setActiveTab(id);
@@ -4625,19 +4589,12 @@ function MainApp() {
           ? <TelegramGroupChatModal onClose={()=>setShowBriefing(false)}/>
           : <GroupChatModal onClose={()=>setShowBriefing(false)}/>
       )}
-      {!LOCAL_AUTH_BYPASS&&showAuth&&(
-        <AuthModal
-          authRequired={authRequired}
-          onClose={()=>{setShowAuth(false);setAuthRequired(false);}}
-          onLogin={u=>{setUser(u);setAuthChecking(false);setShowAuth(false);setAuthRequired(false);}}
-        />
-      )}
-      {showUserCenter&&(user||LOCAL_AUTH_BYPASS)&&(
+      {showUserCenter&&user&&(
         <UserCenter
-          user={user||LOCAL_PREVIEW_USER}
-          localPreview={!user&&LOCAL_AUTH_BYPASS}
+          user={user}
+          localPreview={isLocalPreview}
           onClose={()=>setShowUserCenter(false)}
-          onLogout={()=>{localStorage.removeItem("wise_token");localStorage.removeItem("wise_email");setUser(null);setShowUserCenter(false);}}
+          onLogout={async()=>{if(await logout())setShowUserCenter(false);}}
           favorites={favorites}
           onToggleFavorite={toggleFavorite}
           allFunds={{nasdaq:nasdaqM,sp500:sp500M,active:activeM,etfs:etfsM}}
@@ -4704,7 +4661,7 @@ function MainApp() {
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
               <span style={{fontSize:13}}>💬</span> 加入群聊
             </button>}
-            {LOCAL_AUTH_BYPASS
+            {isLocalPreview
               ? <button type="button" onClick={()=>setShowUserCenter(true)} title="打开本地个人中心预览"
                   style={{display:"flex",alignItems:"center",height:30,padding:"0 10px",border:`1px solid ${C.borderLight}`,borderRadius:16,color:C.textMuted,background:C.card,fontSize:12,fontWeight:600,whiteSpace:"nowrap",cursor:"pointer"}}>
                   本地免登录
@@ -4714,12 +4671,12 @@ function MainApp() {
                     style={{width:32,height:32,display:"grid",placeItems:"center",border:`2px solid ${C.borderLight}`,borderRadius:"50%",color:C.textDim,fontSize:12}}>
                     ···
                   </span>
-              : <button onClick={()=>user?setShowUserCenter(true):(setAuthRequired(false),setShowAuth(true))}
+              : <button onClick={()=>user?setShowUserCenter(true):login(currentReturnTo())}
               style={{display:"flex",alignItems:"center",padding:0,border:`2px solid ${user?"#a5b4fc":C.borderLight}`,borderRadius:"50%",background:"none",cursor:"pointer",transition:"border-color 0.18s",width:32,height:32,overflow:"hidden",flexShrink:0}}
               onMouseEnter={e=>{e.currentTarget.style.borderColor=user?"#6366f1":"#94a3b8";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=user?"#a5b4fc":C.borderLight;}}>
               {user
-                ? <UserAvatar email={user.email} size={28}/>
+                ? <UserAvatar user={user} size={28}/>
                 : <span style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
               }
               </button>}

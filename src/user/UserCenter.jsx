@@ -13,7 +13,7 @@ const NAV_ITEMS = [
   { key: "overview", label: "个人概览", icon: "home" },
   { key: "favorites", label: "我的收藏", icon: "star" },
   { key: "compare", label: "产品对比", icon: "compare" },
-  { key: "security", label: "账号安全", icon: "shield" },
+  { key: "security", label: "账号会员", icon: "shield" },
 ];
 
 function Icon({ name, size = 18 }) {
@@ -33,9 +33,11 @@ function Icon({ name, size = 18 }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 
-export function UserAvatar({ email = "", size = 34 }) {
-  const initial = (email.trim()[0] || "W").toUpperCase();
-  return <span className="uc-avatar" style={{ width: size, height: size, fontSize: Math.max(12, Math.round(size * 0.38)) }} aria-hidden="true">{initial}</span>;
+export function UserAvatar({ user = null, email = user?.email || "", size = 34 }) {
+  const initial = (user?.name?.trim()?.[0] || email.trim()[0] || "W").toUpperCase();
+  return <span className="uc-avatar" style={{ width: size, height: size, fontSize: Math.max(12, Math.round(size * 0.38)) }} aria-hidden="true">
+    {user?.picture ? <img src={user.picture} alt="" referrerPolicy="no-referrer"/> : initial}
+  </span>;
 }
 
 const formatMetric = (value, suffix = "") => value == null || value === "" ? "—" : `${value}${suffix}`;
@@ -67,64 +69,19 @@ function scoreFunds(funds) {
   }));
 }
 
-function PasswordDialog({ onClose }) {
-  const [form, setForm] = useState({ old: "", next: "", confirm: "", visible: false });
-  const [message, setMessage] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const submit = async event => {
-    event.preventDefault();
-    setMessage(null);
-    if (!form.old) return setMessage({ ok: false, text: "请输入当前密码" });
-    if (form.next.length < 8) return setMessage({ ok: false, text: "新密码至少需要 8 位" });
-    if (form.next !== form.confirm) return setMessage({ ok: false, text: "两次输入的新密码不一致" });
-    setLoading(true);
-    try {
-      const token = localStorage.getItem("wise_token") || "";
-      const response = await fetch("/api/auth/change_password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ old_password: form.old, new_password: form.next }),
-      });
-      const data = await response.json();
-      setMessage({ ok: Boolean(data.ok), text: data.msg || (data.ok ? "密码修改成功" : "修改失败，请重试") });
-      if (data.ok) window.setTimeout(onClose, 1000);
-    } catch {
-      setMessage({ ok: false, text: "网络异常，请稍后重试" });
-    } finally {
-      setLoading(false);
-    }
-  };
-  return <div className="uc-dialog-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
-    <form className="uc-dialog" onSubmit={submit}>
-      <button type="button" className="uc-icon-button uc-dialog-close" onClick={onClose} aria-label="关闭"><Icon name="close"/></button>
-      <div className="uc-dialog-icon"><Icon name="lock" size={22}/></div>
-      <h3>修改登录密码</h3>
-      <p>设置新密码后，当前设备仍会保持登录。</p>
-      {[['old','当前密码'],['next','新密码'],['confirm','确认新密码']].map(([key, label]) => <label className="uc-field" key={key}>
-        <span>{label}</span>
-        <input type={form.visible ? "text" : "password"} value={form[key]} onChange={event => { setForm(current => ({ ...current, [key]: event.target.value })); setMessage(null); }} autoComplete={key === 'old' ? 'current-password' : 'new-password'} />
-      </label>)}
-      <label className="uc-checkbox"><input type="checkbox" checked={form.visible} onChange={event => setForm(current => ({ ...current, visible: event.target.checked }))}/>显示密码</label>
-      {message && <div className={`uc-message ${message.ok ? "is-success" : "is-error"}`}>{message.text}</div>}
-      <button className="uc-primary-button" disabled={loading}>{loading ? "处理中…" : "确认修改"}</button>
-    </form>
-  </div>;
-}
-
 export default function UserCenter({ user, onClose, onLogout, favorites, allFunds, onToggleFavorite, localPreview = false }) {
   const [active, setActive] = useState("overview");
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [compareCodes, setCompareCodes] = useState([]);
-  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const onKey = event => event.key === "Escape" && (showPassword ? setShowPassword(false) : onClose());
+    const onKey = event => event.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => { document.body.style.overflow = previous; window.removeEventListener("keydown", onKey); };
-  }, [onClose, showPassword]);
+  }, [onClose]);
 
   const groupedFunds = useMemo(() => GROUPS.map(group => ({
     ...group,
@@ -141,6 +98,8 @@ export default function UserCenter({ user, onClose, onLogout, favorites, allFund
   const scores = scoreFunds(compareFunds);
   const availableCount = saved.filter(fund => normalizeSubscriptionStatus(fund).canSubscribe).length;
   const etfCount = saved.filter(fund => fund.categoryKey === "etfs").length;
+  const displayName = user.name || user.email?.split("@")[0] || "Wise 用户";
+  const membership = user.membershipLabel || "普通用户";
 
   const toggleCompare = code => {
     setCompareCodes(current => current.includes(code) ? current.filter(item => item !== code) : current.length < 4 ? [...current, code] : current);
@@ -157,8 +116,8 @@ export default function UserCenter({ user, onClose, onLogout, favorites, allFund
       <aside className="uc-sidebar">
         <div className="uc-brand"><span>WISE</span> ETF</div>
         <div className="uc-profile-compact">
-          <UserAvatar email={user.email} size={48}/>
-          <div><strong>{user.email?.split("@")[0] || "Wise 用户"}</strong><span>{user.email}</span></div>
+          <UserAvatar user={user} size={48}/>
+          <div><strong>{displayName}</strong><span>{membership}</span></div>
         </div>
         <nav className="uc-nav" aria-label="个人中心导航">
           {NAV_ITEMS.map(item => <button key={item.key} className={active === item.key ? "is-active" : ""} onClick={() => setActive(item.key)}><Icon name={item.icon}/><span>{item.label}</span>{item.key === "favorites" && favorites.length > 0 && <em>{favorites.length}</em>}{item.key === "compare" && compareCodes.length > 0 && <em>{compareCodes.length}</em>}</button>)}
@@ -173,7 +132,7 @@ export default function UserCenter({ user, onClose, onLogout, favorites, allFund
 
         <div className="uc-content">
           {active === "overview" && <>
-            <div className="uc-page-heading"><div><span className="uc-eyebrow">PERSONAL CENTER</span><h2>你好，{user.email?.split("@")[0] || "Wise 用户"}</h2><p>在这里集中管理关注的产品和账号设置。</p></div><UserAvatar email={user.email} size={58}/></div>
+            <div className="uc-page-heading"><div><span className="uc-eyebrow">PERSONAL CENTER</span><h2>你好，{displayName}</h2><p>{membership} · 在这里集中管理关注的产品和账号信息。</p></div><UserAvatar user={user} size={58}/></div>
             <div className="uc-stat-grid">
               <button onClick={goToFavorites}><span>已收藏产品</span><strong>{saved.length}</strong><small>集中查看关注标的</small></button>
               <button onClick={() => { setFilter("etfs"); setActive("favorites"); }}><span>场内 ETF</span><strong>{etfCount}</strong><small>重点关注每日溢价</small></button>
@@ -198,19 +157,20 @@ export default function UserCenter({ user, onClose, onLogout, favorites, allFund
           {active === "compare" && <ComparePanel funds={compareFunds} scores={scores} saved={saved} compareCodes={compareCodes} onToggle={toggleCompare}/>}
 
           {active === "security" && <>
-            <div className="uc-page-heading"><div><span className="uc-eyebrow">ACCOUNT</span><h2>账号安全</h2><p>管理登录信息与当前账号状态。</p></div><div className="uc-safe-badge"><Icon name="shield"/>{localPreview ? "本地预览" : "状态正常"}</div></div>
+            <div className="uc-page-heading"><div><span className="uc-eyebrow">WISE ID</span><h2>账号与会员</h2><p>登录身份和会员状态由 Wise ID 统一管理。</p></div><div className="uc-safe-badge"><Icon name="shield"/>{localPreview ? "本地预览" : "Wise ID 已连接"}</div></div>
             <section className="uc-panel uc-account-card">
-              <div><span>登录邮箱</span><strong>{user.email}</strong><small>该邮箱是当前账号的唯一登录标识</small></div>
-              <div><span>登录密码</span><strong>{localPreview ? "预览模式不可用" : "已设置"}</strong>{!localPreview && <button onClick={() => setShowPassword(true)}>修改密码</button>}</div>
-              <div><span>会话状态</span><strong>{localPreview ? "仅本机开发预览" : "当前设备已登录"}</strong><small>{localPreview ? "未创建账号，也不会写入登录凭证" : "请勿在公共设备上保持登录"}</small></div>
+              <div><span>Wise ID</span><strong>{user.wiseUserId || "—"}</strong><small>同一 Wise ID 可用于 Wise 生态内的产品</small></div>
+              <div><span>登录邮箱</span><strong>{user.email}</strong><small>{user.emailVerified ? "邮箱已通过 Wise ID 验证" : "邮箱验证状态待确认"}</small></div>
+              <div><span>会员等级</span><strong>{membership}</strong><small>会员权益以 Wise ID 返回的实时状态为准</small></div>
+              <div><span>会话状态</span><strong>{localPreview ? "仅本机开发预览" : "当前设备已安全登录"}</strong><small>{localPreview ? "未创建真实登录会话" : "Wise ETF 不保存你的密码"}</small></div>
             </section>
-            <section className="uc-security-tip"><div><Icon name="shield" size={22}/></div><p><strong>账号安全建议</strong><span>使用与其他网站不同的密码，并避免将登录信息分享给他人。目前暂不提供邮箱验证码和找回密码功能，请妥善保存密码。</span></p></section>
+            <section className="uc-security-tip"><div><Icon name="shield" size={22}/></div><p><strong>由 Wise ID 保护登录</strong><span>Wise ETF 不再单独创建或保存密码。若需管理账号资料或登录安全，请前往 Wise ID。</span></p></section>
+            {!localPreview && <a className="uc-wise-id-link" href="https://wise-invest.org" target="_blank" rel="noreferrer">前往 Wise ID 管理账号</a>}
             <button className="uc-logout-button" onClick={localPreview ? onClose : onLogout}><Icon name="logout"/>{localPreview ? "关闭个人中心" : "退出当前账号"}</button>
           </>}
         </div>
       </main>
     </section>
-    {showPassword && <PasswordDialog onClose={() => setShowPassword(false)}/>}
   </div>;
 }
 

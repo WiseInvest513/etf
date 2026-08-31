@@ -48,8 +48,26 @@ npm run dev
 
 访问 http://localhost:5173
 
-生产环境必须设置 `CRON_SECRET`、`JWT_SECRET` 和 Upstash Redis 凭据；
+生产环境必须设置 `CRON_SECRET`、Wise ID OIDC 凭据和 Upstash Redis；
 cron/admin 接口默认关闭匿名访问。可参考 [`.env.example`](./.env.example)。
+
+## Wise ID 统一登录
+
+Wise ETF 不再保存邮箱密码或向浏览器签发长期 JWT。用户通过 Wise Invest 的
+OIDC Authorization Code + PKCE 登录，回调后由 Wise ETF 在 Redis 中建立
+30 天可撤销会话，浏览器只持有 `HttpOnly` 会话 Cookie。
+
+在 Wise Invest 的 SSO 后台为 `wise_etf` 登记以下回调地址：
+
+```text
+https://wise-etf.com/api/auth/callback/wise
+http://localhost:5173/api/auth/callback/wise
+```
+
+生产环境只需配置 `WISE_AUTH_CLIENT_SECRET`。会话签名密钥会通过用途隔离的
+SHA-256 从 Client Secret 自动派生，正式回调地址默认使用 `wise-etf.com`。
+真实 secret 只能保存在本地或 Vercel 环境变量中，不能使用 `VITE_*` 前缀，
+也不能提交到 Git。只有切换主域名时才需要覆盖 `WISE_AUTH_REDIRECT_URI`。
 
 ## 更新节奏
 

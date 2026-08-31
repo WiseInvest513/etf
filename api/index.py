@@ -14,7 +14,7 @@ CRON_SECRET。
 """
 
 import json, os, re, logging, time, xml.etree.ElementTree as ET
-import hmac, hashlib, secrets, base64
+import hmac, secrets
 from threading import BoundedSemaphore, Lock, local
 
 # 加载 .env.local（本地开发环境）
@@ -39,7 +39,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from upstash_redis import Redis
+
+from api.auth_sso import WiseAuthService, is_production, oauth_cookie_name, oauth_flow_secret
 
 from api.wise_etf import (
     canonicalize_symbol,
@@ -2277,6 +2280,14 @@ def _build_etfs() -> tuple:
 # ─── FastAPI ──────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Wise-ETF API", version="5.0.0")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=oauth_flow_secret(),
+    session_cookie=oauth_cookie_name(),
+    max_age=10 * 60,
+    same_site="lax",
+    https_only=is_production(),
+)
 _cors_env = [origin.strip() for origin in os.environ.get("CORS_ORIGINS", "").split(",") if origin.strip()]
 _cors_origins = _cors_env or ["https://wise-etf.com", "https://www.wise-etf.com"]
 if os.environ.get("APP_ENV", "").lower() in {"development", "dev", "local", "test"}:
@@ -2286,7 +2297,11 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
 )
+
+wise_auth = WiseAuthService(_get_redis)
+app.include_router(wise_auth.router)
 
 
 def _cache_header(response: Response, seconds: int):
@@ -3274,237 +3289,6 @@ def cron_live(authorization: Optional[str] = Header(default=None)):
             _cache_mset({f"qdii:live:{s}": pct for s, pct in live_res.items()}, 7 * 60)
         logger.info(f"[cron/live] pre_market live={len(live_res)}/{len(symbols)}")
         return {"ok": True, "ts": now, "session": session, "live": len(live_res)}
-
-
-# ─── 用户认证 ──────────────────────────────────────────────────────────────────
-
-_JWT_SECRET = os.environ.get("JWT_SECRET", "")
-_JWT_SECRET_CACHE: Optional[str] = None
-_JWT_SECRET_REDIS_KEY = "wise:auth:jwt_secret:v1"
-
-
-def _require_jwt_secret() -> str:
-    """Return an explicit env secret or a Redis-persisted random fallback.
-
-    The fallback is generated with SET NX, so concurrent serverless cold starts
-    converge on one stable secret without placing credentials in source code.
-    """
-    global _JWT_SECRET_CACHE
-    if _JWT_SECRET:
-        return _JWT_SECRET
-    if _JWT_SECRET_CACHE:
-        return _JWT_SECRET_CACHE
-
-    r = _get_redis()
-    if not r:
-        raise HTTPException(status_code=503, detail="认证服务暂时不可用")
-    try:
-        stored = r.get(_JWT_SECRET_REDIS_KEY)
-        if isinstance(stored, bytes):
-            stored = stored.decode("utf-8")
-        if not stored:
-            candidate = secrets.token_urlsafe(48)
-            created = r.set(_JWT_SECRET_REDIS_KEY, candidate, nx=True)
-            stored = candidate if created else r.get(_JWT_SECRET_REDIS_KEY)
-            if isinstance(stored, bytes):
-                stored = stored.decode("utf-8")
-        if not isinstance(stored, str) or len(stored) < 32:
-            raise RuntimeError("invalid JWT signing secret")
-        _JWT_SECRET_CACHE = stored
-        return stored
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"[auth] signing secret unavailable: {type(exc).__name__}")
-        raise HTTPException(status_code=503, detail="认证服务暂时不可用")
-
-def _hash_password(password: str) -> str:
-    """PBKDF2-SHA256 加密密码，返回 salt:hash"""
-    salt = secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 260000)
-    return f"{salt}:{h.hex()}"
-
-def _verify_password(password: str, stored: str) -> bool:
-    """验证密码"""
-    try:
-        salt, hashed = stored.split(":", 1)
-        h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 260000)
-        return hmac.compare_digest(h.hex(), hashed)
-    except Exception:
-        return False
-
-def _make_token(email: str) -> str:
-    """生成 30 天有效的 HMAC-SHA256 token"""
-    secret = _require_jwt_secret()
-    user = _user_get(email) or {}
-    token_version = int(user.get("token_version") or 1)
-    exp = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    payload = f"{email}|{exp}|{token_version}"
-    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
-
-def _verify_token(token: str) -> Optional[str]:
-    """验证 token，返回 email 或 None"""
-    try:
-        secret = _require_jwt_secret()
-    except HTTPException:
-        return None
-    try:
-        decoded = base64.urlsafe_b64decode(token.encode() + b"==").decode()
-        email, exp_str, version_text, sig = decoded.split("|", 3)
-        payload = f"{email}|{exp_str}|{version_text}"
-        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            return None
-        if datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ") < datetime.utcnow():
-            return None
-        user = _user_get(email)
-        if not user or int(user.get("token_version") or 1) != int(version_text):
-            return None
-        return email
-    except Exception:
-        return None
-
-def _user_get(email: str) -> Optional[dict]:
-    """从 Redis 读取用户"""
-    return _cache_get(f"wise_user:{email.lower()}")
-
-def _user_save(email: str, password_hash: str, *, rotate_tokens: bool = False) -> bool:
-    """永久存储用户到 Redis"""
-    r = _get_redis()
-    if not r:
-        return False
-    try:
-        existing = _user_get(email) or {}
-        token_version = int(existing.get("token_version") or 1) + (1 if rotate_tokens else 0)
-        r.set(f"wise_user:{email.lower()}", json.dumps({
-            "email": email.lower(),
-            "password": password_hash,
-            "created_at": existing.get("created_at") or datetime.utcnow().isoformat(),
-            "password_updated_at": datetime.utcnow().isoformat() if rotate_tokens else existing.get("password_updated_at"),
-            "token_version": token_version,
-        }))
-        return True
-    except Exception:
-        return False
-
-
-from fastapi import Request as _Request, Header as _Header
-
-
-def _rate_limit(scope: str, identifier: str, *, limit: int, window_seconds: int) -> None:
-    """Small Redis-backed auth throttle; unavailable Redis already prevents auth writes."""
-    r = _get_redis()
-    if not r:
-        return
-    digest = hashlib.sha256(identifier.encode("utf-8", "ignore")).hexdigest()[:24]
-    key = f"rate:{scope}:{digest}"
-    try:
-        count = int(r.incr(key))
-        if count == 1:
-            r.expire(key, window_seconds)
-        if count > limit:
-            raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.warning(f"[rate_limit] {scope}: {exc}")
-
-@app.post("/api/auth/register")
-async def auth_register(request: _Request):
-    """用户注册：邮箱 + 密码（加密存 Redis）"""
-    _require_jwt_secret()
-    try:
-        body = await request.json()
-    except Exception:
-        return {"ok": False, "msg": "请求格式错误"}
-    email    = body.get("email", "").strip().lower()
-    password = body.get("password", "")
-    client_ip = request.client.host if request.client else "unknown"
-    _rate_limit("register", client_ip, limit=5, window_seconds=3600)
-    if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
-        return {"ok": False, "msg": "邮箱格式不正确"}
-    if len(password) < 8:
-        return {"ok": False, "msg": "密码至少8位"}
-    if not any(c.isupper() for c in password):
-        return {"ok": False, "msg": "密码需包含大写字母"}
-    if not any(c.islower() for c in password):
-        return {"ok": False, "msg": "密码需包含小写字母"}
-    if not any(c.isdigit() for c in password):
-        return {"ok": False, "msg": "密码需包含数字"}
-    if _user_get(email):
-        return {"ok": False, "msg": "该邮箱已注册"}
-    if not _user_save(email, _hash_password(password)):
-        return {"ok": False, "msg": "注册失败，请稍后重试"}
-    token = _make_token(email)
-    logger.info(f"[auth] register: {email}")
-    return {"ok": True, "token": token, "email": email}
-
-
-@app.post("/api/auth/login")
-async def auth_login(request: _Request):
-    """用户登录"""
-    _require_jwt_secret()
-    try:
-        body = await request.json()
-    except Exception:
-        return {"ok": False, "msg": "请求格式错误"}
-    email    = body.get("email", "").strip().lower()
-    password = body.get("password", "")
-    client_ip = request.client.host if request.client else "unknown"
-    _rate_limit("login", f"{client_ip}|{email}", limit=10, window_seconds=600)
-    user = _user_get(email)
-    if not user or not _verify_password(password, user.get("password", "")):
-        return {"ok": False, "msg": "邮箱或密码错误"}
-    token = _make_token(email)
-    logger.info(f"[auth] login: {email}")
-    return {"ok": True, "token": token, "email": email}
-
-
-@app.get("/api/auth/me")
-def auth_me(authorization: str = _Header(None)):
-    """验证 token，返回用户信息"""
-    _require_jwt_secret()
-    if not authorization or not authorization.startswith("Bearer "):
-        return {"ok": False, "msg": "未登录"}
-    email = _verify_token(authorization[7:])
-    if not email:
-        return {"ok": False, "msg": "登录已过期，请重新登录"}
-    return {"ok": True, "email": email}
-
-
-@app.post("/api/auth/change_password")
-async def auth_change_password(request: _Request, authorization: str = _Header(None)):
-    """修改密码：验证旧密码后更新"""
-    _require_jwt_secret()
-    if not authorization or not authorization.startswith("Bearer "):
-        return {"ok": False, "msg": "未登录"}
-    email = _verify_token(authorization[7:])
-    if not email:
-        return {"ok": False, "msg": "登录已过期，请重新登录"}
-    try:
-        body = await request.json()
-    except Exception:
-        return {"ok": False, "msg": "请求格式错误"}
-    old_password = body.get("old_password", "")
-    new_password = body.get("new_password", "")
-    user = _user_get(email)
-    if not user or not _verify_password(old_password, user.get("password", "")):
-        return {"ok": False, "msg": "当前密码不正确"}
-    if len(new_password) < 8:
-        return {"ok": False, "msg": "新密码至少8位"}
-    if not any(c.isupper() for c in new_password):
-        return {"ok": False, "msg": "新密码需包含大写字母"}
-    if not any(c.islower() for c in new_password):
-        return {"ok": False, "msg": "新密码需包含小写字母"}
-    if not any(c.isdigit() for c in new_password):
-        return {"ok": False, "msg": "新密码需包含数字"}
-    if old_password == new_password:
-        return {"ok": False, "msg": "新密码不能与当前密码相同"}
-    if not _user_save(email, _hash_password(new_password), rotate_tokens=True):
-        return {"ok": False, "msg": "修改失败，请稍后重试"}
-    logger.info(f"[auth] change_password: {email}")
-    return {"ok": True, "msg": "密码修改成功"}
 
 
 @app.get("/api/cron/post_snap")
