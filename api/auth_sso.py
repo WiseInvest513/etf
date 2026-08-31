@@ -22,9 +22,11 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 try:
     from authlib.integrations.base_client import OAuthError
+    from authlib.integrations.starlette_client.apps import StarletteOAuth2App
     from authlib.integrations.starlette_client import OAuth
 except ImportError:  # Keep non-auth data routes importable before dependencies install.
     OAuth = None
+    StarletteOAuth2App = None
 
     class OAuthError(Exception):
         error = "oauth_unavailable"
@@ -40,6 +42,40 @@ DEFAULT_PRODUCTION_REDIRECT_URI = "https://www.wise-etf.com/api/auth/callback/wi
 DEFAULT_SESSION_TTL = 30 * 24 * 60 * 60
 MAX_SESSION_TTL = 30 * 24 * 60 * 60
 MEMBERSHIP_TIERS = {"MEMBER", "VIP", "VIP_PLUS"}
+
+
+def canonicalize_wise_endpoint(value: Any) -> Any:
+    """Route Wise OIDC network calls directly to the canonical www host.
+
+    The provider intentionally keeps ``issuer=https://wise-invest.org`` but its
+    HTTP endpoints currently redirect to ``www.wise-invest.org``.  Following
+    that redirect is unsafe for authenticated token/userinfo calls because
+    HTTP clients strip Authorization when the host changes.  Only endpoint
+    transport URLs are rewritten; the OIDC issuer remains untouched.
+    """
+    if not isinstance(value, str):
+        return value
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or parsed.hostname != "wise-invest.org":
+        return value
+    return urlunsplit((parsed.scheme, "www.wise-invest.org", parsed.path, parsed.query, parsed.fragment))
+
+
+if StarletteOAuth2App is not None:
+    class WiseOAuth2App(StarletteOAuth2App):
+        async def load_server_metadata(self):
+            metadata = await super().load_server_metadata()
+            for key in (
+                "authorization_endpoint",
+                "token_endpoint",
+                "userinfo_endpoint",
+                "jwks_uri",
+            ):
+                if key in metadata:
+                    metadata[key] = canonicalize_wise_endpoint(metadata[key])
+            return metadata
+else:  # pragma: no cover - exercised only when optional auth deps are absent.
+    WiseOAuth2App = None
 
 
 def is_production() -> bool:
@@ -184,6 +220,10 @@ class WiseAuthService:
         )
         if self._oauth is None or signature != self._oauth_signature:
             oauth = OAuth()
+            # Keep discovery authoritative while preventing authenticated OIDC
+            # requests from losing their Authorization header on a cross-host
+            # 307 redirect from wise-invest.org to www.wise-invest.org.
+            oauth.oauth2_client_cls = WiseOAuth2App
             oauth.register(
                 name="wise",
                 client_id=settings.client_id,

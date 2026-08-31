@@ -10,6 +10,7 @@ from api.auth_sso import (
     AuthSettings,
     WiseAuthService,
     append_query,
+    canonicalize_wise_endpoint,
     membership_label,
     oauth_flow_secret,
     sanitize_return_to,
@@ -132,6 +133,16 @@ class SessionContractTests(unittest.TestCase):
 
 
 class SettingsContractTests(unittest.TestCase):
+    def test_wise_service_endpoints_use_canonical_transport_host(self):
+        self.assertEqual(
+            canonicalize_wise_endpoint("https://wise-invest.org/oauth/token"),
+            "https://www.wise-invest.org/oauth/token",
+        )
+        self.assertEqual(
+            canonicalize_wise_endpoint("https://other.example/oauth/token"),
+            "https://other.example/oauth/token",
+        )
+
     def test_production_only_requires_client_secret(self):
         with patch.dict("os.environ", {"APP_ENV": "production"}, clear=True):
             settings = AuthSettings.from_env()
