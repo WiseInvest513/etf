@@ -21,6 +21,16 @@ export const TODAY_PAGE_META = {
   },
 };
 
+export const DECISION_PAGE_META = {
+  chooser: {
+    path: "/chooser",
+    title: "纳指与标普500场内还是场外 - QDII购买路径比较 - WiseETF",
+    description: "比较纳指100与标普500场外QDII申购额度、场内ETF溢价率、运作费率、跟踪误差和成交情况，筛选更匹配的购买路径。",
+    heading: "纳指和标普500，今天场内还是场外？",
+    lead: "把今日申购额度、ETF溢价、费率、跟踪误差与成交情况放到同一个页面比较。",
+  },
+};
+
 export const TODAY_FAQS = {
   limits: [
     {

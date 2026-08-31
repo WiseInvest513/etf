@@ -41,6 +41,22 @@ test("session response is normalized into the frontend user model", () => {
   });
 });
 
+test("Google or GitHub Wise ID sessions remain valid when email verification is not asserted", () => {
+  const user = normalizeAuthSession({
+    ok: true,
+    authenticated: true,
+    user: {
+      wise_user_id: "wise-oauth-user",
+      email: "oauth@example.com",
+      email_verified: false,
+      membership_tier: "MEMBER",
+    },
+  });
+  assert.equal(user.wiseUserId, "wise-oauth-user");
+  assert.equal(user.emailVerified, false);
+  assert.equal(user.membershipTier, "MEMBER");
+});
+
 test("anonymous or malformed session is rejected", () => {
   assert.equal(normalizeAuthSession({ ok: true, authenticated: false, user: null }), null);
   assert.equal(normalizeAuthSession({ ok: true, authenticated: true, user: { email: "user@example.com" } }), null);

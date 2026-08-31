@@ -283,15 +283,20 @@ class WiseAuthService:
         wise_user_id = str(claims.get("wise_user_id") or subject).strip()
         email = str(claims.get("email") or "").strip().lower()
         verified = claims.get("email_verified") is True
-        if not subject or not wise_user_id or not email or not verified:
-            raise HTTPException(status_code=403, detail="Wise ID 缺少已验证的用户信息")
+        # OIDC `sub` / Wise ID is the stable login identity. Google and GitHub
+        # accounts may legitimately arrive with a missing or false
+        # `email_verified` claim even though Wise Invest has authenticated the
+        # user. Preserve that profile flag for display, but do not mistake the
+        # user's upstream sign-in method for an invalid Wise ID session.
+        if not subject or not wise_user_id or not email:
+            raise HTTPException(status_code=403, detail="Wise ID 缺少必要的用户信息")
         tier = normalize_membership_tier(claims.get("membership_tier"))
         name = str(claims.get("name") or email.split("@", 1)[0] or wise_user_id).strip()[:200]
         return {
             "sub": subject[:200],
             "wise_user_id": wise_user_id[:200],
             "email": email[:320],
-            "email_verified": True,
+            "email_verified": verified,
             "name": name,
             "picture": cls._safe_picture(claims.get("picture")),
             "membership_tier": tier,

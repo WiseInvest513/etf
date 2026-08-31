@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { productRoute } from "../src/product/product-detail-model.js";
-import { CATEGORY_PAGE_META, TODAY_PAGE_META } from "../src/seo/seo-content.js";
+import { CATEGORY_PAGE_META, DECISION_PAGE_META, TODAY_PAGE_META } from "../src/seo/seo-content.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
@@ -12,6 +12,7 @@ const routes = [
   ...catalog.products.map(productRoute),
   ...Object.values(CATEGORY_PAGE_META).map((page) => page.path),
   ...Object.values(TODAY_PAGE_META).map((page) => page.path),
+  ...Object.values(DECISION_PAGE_META).map((page) => page.path),
 ];
 
 if (new Set(routes).size !== routes.length) throw new Error("SEO routes contain duplicates");
@@ -45,6 +46,11 @@ for (const page of Object.values(TODAY_PAGE_META)) {
 for (const [key, page] of Object.entries(CATEGORY_PAGE_META)) {
   const html = await readFile(path.join(dist, page.path.slice(1), "index.html"), "utf8");
   if (!html.includes(`data-wise-category="${key}"`)) throw new Error(`Missing category marker: ${page.path}`);
+}
+
+for (const [key, page] of Object.entries(DECISION_PAGE_META)) {
+  const html = await readFile(path.join(dist, page.path.slice(1), "index.html"), "utf8");
+  if (!html.includes(`data-wise-decision="${key}"`)) throw new Error(`Missing decision marker: ${page.path}`);
 }
 
 for (const product of catalog.products) {

@@ -11,6 +11,7 @@ import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
 import OnchainStocksPage from "./onchain/OnchainStocksPage.jsx";
 import ProductDetailPage from "./product/ProductDetailPage.jsx";
 import TodayDataPage from "./seo/TodayDataPage.jsx";
+import PathChooserPage from "./chooser/PathChooserPage.jsx";
 import { CATEGORY_PAGE_META, HOME_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
 import { FOOTER_NAV_ITEMS } from "./navigation/navigationConfig.js";
@@ -4140,6 +4141,7 @@ function AppRoutes() {
   if(productMatch) return <ProductDetailPage type={productMatch[1]} code={productMatch[2]}/>;
   if(path==="/today/qdii-limits") return <TodayDataPage kind="limits"/>;
   if(path==="/today/etf-premium") return <TodayDataPage kind="premium"/>;
+  if(path==="/chooser") return <PathChooserPage/>;
   if(path==="/admin") return <AdminPage/>;
   if(path==="/login") return <WiseLoginGate><MainApp/></WiseLoginGate>;
   if(path==="/export") return <WiseLoginGate><ReportPage/></WiseLoginGate>;
@@ -4742,6 +4744,19 @@ function MainApp() {
               <DataStatusBanner key={key} dataset={datasets[key]} label={label}/>
             ))}
             <DataStatusBanner dataset={sentimentDataset} label="市场概览与情绪"/>
+            <a href="/chooser" style={{
+              display:"grid",gridTemplateColumns:isMobile?"1fr":"minmax(0,1fr) auto",gap:isMobile?16:28,alignItems:"center",
+              marginBottom:isMobile?20:28,padding:isMobile?"22px 20px":"25px 28px",border:`1px solid ${C.accent}24`,borderRadius:18,
+              background:"linear-gradient(135deg,#edf4ff 0%,#f7fbff 58%,#f0fbf7 100%)",color:C.text,textDecoration:"none",
+              boxShadow:"0 10px 30px rgba(40,113,227,.07)",
+            }}>
+              <div>
+                <div style={{fontSize:10,fontWeight:850,letterSpacing:".12em",color:C.accent,marginBottom:7}}>场内 × 场外 · 购买路径比较</div>
+                <div style={{fontSize:isMobile?18:21,fontWeight:820,letterSpacing:"-.02em",marginBottom:5}}>今天买纳指或标普，场内还是场外？</div>
+                <div style={{fontSize:11,color:C.textDim,lineHeight:1.6}}>把今日申购额度、ETF 溢价、费率、跟踪误差和成交情况放在一起比较。</div>
+              </div>
+              <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:132,padding:"11px 15px",borderRadius:11,background:C.accent,color:"#fff",fontSize:11,fontWeight:800}}>开始比较 →</span>
+            </a>
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
               {[

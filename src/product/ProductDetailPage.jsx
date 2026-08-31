@@ -12,6 +12,7 @@ import {
   subscriptionState,
 } from "./product-detail-model.js";
 import { productSeoTitle } from "../seo/seo-content.js";
+import { productIndexKey } from "../chooser/chooser-model.js";
 import "./product-detail.css";
 
 const SITE_ORIGIN = "https://wise-etf.com";
@@ -243,6 +244,7 @@ export default function ProductDetailPage({ type, code }) {
     }
   };
   const categoryPath = isEtf ? "/etf" : product.categories.includes("nasdaq_passive") ? "/nasdaq" : product.categories.includes("sp500_passive") ? "/sp500" : "/active";
+  const chooserIndex = productIndexKey(product);
 
   return (
     <div className="pd-page">
@@ -281,6 +283,11 @@ export default function ProductDetailPage({ type, code }) {
           <div><span>当前判断</span><h2>{decision.title}</h2><p>{decision.text}</p></div>
           <a href={isEtf ? "/today/etf-premium" : "/today/qdii-limits"}>查看完整{isEtf ? "溢价榜" : "额度清单"} →</a>
         </section>
+
+        {chooserIndex && <a className="pd-cross-route" href={`/chooser?index=${chooserIndex}&amount=1000&mode=monthly&broker=yes`}>
+          <div><span>换一个角度比较</span><b>这只产品和同指数的场内、场外方案有什么区别？</b><small>同时查看今日额度、溢价、费率、跟踪误差和成交情况</small></div>
+          <strong>比较购买路径 →</strong>
+        </a>}
 
         <section className="pd-grid">
           <div className="pd-panel pd-overview">
@@ -336,7 +343,7 @@ export default function ProductDetailPage({ type, code }) {
 
         <footer className="pd-footer">
           <p>数据仅用于信息展示，不构成投资建议。申购额度、净值、场内价格和溢价率可能处于不同披露时点，交易前请以基金公告及销售渠道为准。</p>
-          <div className="pd-footer-links"><a href={isEtf ? "/today/etf-premium" : "/today/qdii-limits"}>查看今日清单</a><a href="/onchain">了解链上购买路径</a><a href="/">更多 WiseETF 数据</a></div>
+          <div className="pd-footer-links">{chooserIndex && <a href={`/chooser?index=${chooserIndex}`}>比较场内外路径</a>}<a href={isEtf ? "/today/etf-premium" : "/today/qdii-limits"}>查看今日清单</a><a href="/onchain">了解链上购买路径</a><a href="/">更多 WiseETF 数据</a></div>
         </footer>
       </main>
       <Analytics />

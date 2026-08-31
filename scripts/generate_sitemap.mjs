@@ -5,7 +5,7 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const catalog = JSON.parse(await readFile(path.join(root, "catalog/products.v1.json"), "utf8"));
 const origin = "https://wise-etf.com";
-const corePaths = ["/", "/guide", "/nasdaq", "/sp500", "/etf", "/active", "/onchain", "/lazy", "/qdii", "/today/qdii-limits", "/today/etf-premium"];
+const corePaths = ["/", "/guide", "/nasdaq", "/sp500", "/etf", "/active", "/onchain", "/lazy", "/qdii", "/chooser", "/today/qdii-limits", "/today/etf-premium"];
 const escapeXml = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
 const entries = [
   ...corePaths.map((route) => ({ route, lastmod: catalog.metadata_as_of || null })),

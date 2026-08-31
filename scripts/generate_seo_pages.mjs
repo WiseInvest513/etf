@@ -7,6 +7,7 @@ import {
 } from "../src/product/product-detail-model.js";
 import {
   CATEGORY_PAGE_META,
+  DECISION_PAGE_META,
   SITE_ORIGIN,
   TODAY_FAQS,
   TODAY_PAGE_META,
@@ -97,6 +98,8 @@ const categoryPages = Object.entries(CATEGORY_PAGE_META).map(([key, meta]) => ({
     ? item.product_type === meta.productType
     : item.categories.includes(meta.category)),
 }));
+
+const decisionPages = Object.entries(DECISION_PAGE_META).map(([key, meta]) => ({ ...meta, key }));
 
 function categoryFallback(page) {
   const links = page.products.map((product) => `<a href="${productRoute(product)}">${escapeHtml(product.name)}（${escapeHtml(product.code)}）</a>`).join("");
@@ -202,4 +205,28 @@ for (const page of todayPages) {
   await writeFile(destination, html, "utf8");
 }
 
-console.log(`Generated ${catalog.products.length} product pages, ${categoryPages.length} category pages and ${todayPages.length} daily collection pages.`);
+for (const page of decisionPages) {
+  const url = `${origin}${page.path}`;
+  const structured = {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    name: page.heading,
+    description: page.description,
+    url,
+    isPartOf: { "@type": "WebSite", name: "WiseETF", url: origin },
+  };
+  const fallback = `${fallbackStyle}<main class="seo-fallback"><nav><a href="/">WiseETF</a><a href="/today/qdii-limits">今日额度</a><a href="/today/etf-premium">今日溢价</a></nav><section class="hero"><span class="eyebrow">ON-EXCHANGE OR OFF-EXCHANGE</span><h1>${escapeHtml(page.heading)}</h1><p class="lead">${escapeHtml(page.lead)}</p></section><section class="grid"><div class="card"><small>场外第一步</small><b>先看能否申购</b></div><div class="card"><small>场内第一步</small><b>先看是否溢价</b></div><div class="card"><small>长期持有</small><b>比较费率与误差</b></div><div class="card"><small>交易体验</small><b>检查成交与账户</b></div></section><p class="note">交互页面加载后读取 WiseETF 每日只读快照。动态数据不可用时只展示待确认，不使用目录旧值冒充今日额度或溢价。</p><div class="links"><a href="${page.path}">打开场内外选择器</a><a href="/nasdaq">比较纳指产品</a><a href="/sp500">比较标普500产品</a></div></main>`;
+  let html = replaceHead(template, {
+    title: page.title,
+    description: page.description,
+    url,
+    structured,
+    marker: `data-wise-decision="${page.key}"`,
+  });
+  html = withFallback(html, fallback);
+  const destination = path.join(dist, page.path.slice(1), "index.html");
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, html, "utf8");
+}
+
+console.log(`Generated ${catalog.products.length} product pages, ${categoryPages.length} category pages, ${todayPages.length} daily collection pages and ${decisionPages.length} decision pages.`);

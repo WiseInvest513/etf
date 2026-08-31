@@ -18,6 +18,7 @@ export const FOOTER_NAV_ITEMS = [
   { id: "nasdaq", label: "纳指被动" }, { id: "sp500", label: "标普 500" },
   { id: "etf", label: "场内 ETF" }, { id: "active", label: "美股主动" },
   { id: "onchain", label: "链上美股" },
+  { id: "chooser", label: "场内外选择", href: "/chooser" },
   { id: "today-limits", label: "今日额度", href: "/today/qdii-limits" },
   { id: "today-premium", label: "今日溢价", href: "/today/etf-premium" },
   { id: "lazy", label: "懒人组合", href: "/lazy" }, { id: "qdii", label: "估值", href: "/qdii" },

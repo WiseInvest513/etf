@@ -70,14 +70,25 @@ class ProfileContractTests(unittest.TestCase):
         self.assertEqual(profile["membership_tier"], "VIP_PLUS")
         self.assertEqual(profile["membership_label"], "Wise SVIP")
 
-    def test_unverified_email_is_rejected(self):
-        with self.assertRaises(HTTPException) as raised:
-            WiseAuthService._normalize_profile({
-                "sub": "oidc-subject",
-                "email": "user@example.com",
-                "email_verified": False,
-            })
-        self.assertEqual(raised.exception.status_code, 403)
+    def test_unverified_email_flag_does_not_reject_a_valid_wise_identity(self):
+        profile = WiseAuthService._normalize_profile({
+            "sub": "oidc-subject",
+            "wise_user_id": "wise-google-or-github",
+            "email": "user@example.com",
+            "email_verified": False,
+        })
+        self.assertEqual(profile["wise_user_id"], "wise-google-or-github")
+        self.assertFalse(profile["email_verified"])
+
+    def test_missing_identity_or_email_is_still_rejected(self):
+        for claims in (
+            {"email": "user@example.com", "email_verified": True},
+            {"sub": "oidc-subject", "email_verified": True},
+        ):
+            with self.subTest(claims=claims):
+                with self.assertRaises(HTTPException) as raised:
+                    WiseAuthService._normalize_profile(claims)
+                self.assertEqual(raised.exception.status_code, 403)
 
     def test_unknown_membership_is_safely_downgraded(self):
         profile = WiseAuthService._normalize_profile({
