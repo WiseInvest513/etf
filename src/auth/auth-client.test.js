@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { membershipLabel, normalizeAuthSession, wiseLoginUrl } from "./auth-client.js";
+import { authErrorMessage, membershipLabel, normalizeAuthSession, wiseLoginUrl } from "./auth-client.js";
 
 test("Wise ID login keeps the requested local route", () => {
   assert.equal(
@@ -39,4 +39,10 @@ test("anonymous or malformed session is rejected", () => {
 
 test("unknown membership does not gain paid access labels", () => {
   assert.equal(membershipLabel("unexpected"), "普通用户");
+});
+
+test("callback failures explain the failing SSO stage", () => {
+  assert.match(authErrorMessage("client_configuration"), /客户端配置/);
+  assert.match(authErrorMessage("profile_incomplete"), /账号资料不完整/);
+  assert.match(authErrorMessage("session_unavailable"), /登录会话/);
 });

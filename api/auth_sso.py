@@ -24,11 +24,16 @@ try:
     from authlib.integrations.base_client import OAuthError
     from authlib.integrations.starlette_client.apps import StarletteOAuth2App
     from authlib.integrations.starlette_client import OAuth
+    from authlib.oauth2 import OAuth2Error
 except ImportError:  # Keep non-auth data routes importable before dependencies install.
     OAuth = None
     StarletteOAuth2App = None
 
     class OAuthError(Exception):
+        error = "oauth_unavailable"
+        description = "Authlib is not installed"
+
+    class OAuth2Error(Exception):
         error = "oauth_unavailable"
         description = "Authlib is not installed"
 
@@ -399,10 +404,12 @@ class WiseAuthService:
         @self.router.get("/callback/wise", name="wise_auth_callback")
         async def callback(request: Request):
             return_to = sanitize_return_to(request.session.pop("wise_return_to", "/"))
+            stage = "token_exchange"
             try:
                 settings = self._settings(request)
                 client = self._client(settings)
                 token = await client.authorize_access_token(request)
+                stage = "profile"
                 claims = dict(token.get("userinfo") or {})
                 # UserInfo is authoritative for membership and profile fields.  If it
                 # is temporarily unavailable, the already-verified ID token claims
@@ -413,6 +420,7 @@ class WiseAuthService:
                 except Exception as exc:
                     logger.warning("[wise-auth] userinfo fallback: %s", type(exc).__name__)
                 profile = self._normalize_profile(claims)
+                stage = "session"
                 session_id = self._create_session(profile, settings.session_ttl)
                 request.session.clear()
                 response = RedirectResponse(return_to, status_code=302)
@@ -422,15 +430,32 @@ class WiseAuthService:
             except HTTPException as exc:
                 request.session.clear()
                 logger.warning("[wise-auth] callback rejected: http_%s", exc.status_code)
-                return self._no_store(RedirectResponse(append_query(return_to, auth_error="login_failed"), status_code=302))
+                error_code = "profile_incomplete" if exc.status_code == 403 else (
+                    "session_unavailable" if exc.status_code == 503 else "login_failed"
+                )
+                return self._no_store(RedirectResponse(append_query(return_to, auth_error=error_code), status_code=302))
             except OAuthError as exc:
                 request.session.clear()
                 logger.warning("[wise-auth] oauth callback rejected: %s", getattr(exc, "error", type(exc).__name__))
                 return self._no_store(RedirectResponse(append_query(return_to, auth_error="authorization_failed"), status_code=302))
+            except OAuth2Error as exc:
+                request.session.clear()
+                oauth_error = str(getattr(exc, "error", "") or "").lower()
+                logger.warning("[wise-auth] token rejected: %s", oauth_error or type(exc).__name__)
+                error_code = {
+                    "invalid_client": "client_configuration",
+                    "invalid_grant": "authorization_expired",
+                }.get(oauth_error, "token_exchange_failed")
+                return self._no_store(RedirectResponse(append_query(return_to, auth_error=error_code), status_code=302))
             except Exception as exc:
                 request.session.clear()
-                logger.error("[wise-auth] callback failed: %s", type(exc).__name__)
-                return self._no_store(RedirectResponse(append_query(return_to, auth_error="login_failed"), status_code=302))
+                logger.error("[wise-auth] callback failed at %s: %s", stage, type(exc).__name__)
+                error_code = {
+                    "token_exchange": "token_exchange_failed",
+                    "profile": "profile_incomplete",
+                    "session": "session_unavailable",
+                }.get(stage, "login_failed")
+                return self._no_store(RedirectResponse(append_query(return_to, auth_error=error_code), status_code=302))
 
         @self.router.get("/session", name="wise_auth_session")
         async def session(request: Request):

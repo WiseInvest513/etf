@@ -17,6 +17,7 @@ export default function WiseLoginGate({ children, title = "使用 Wise ID 继续
 
   return <main className="wise-login-page">
     <section className="wise-login-card" aria-labelledby="wise-login-title">
+      <a className="wise-login-close" href="/" aria-label="返回 Wise ETF 首页" title="返回首页">×</a>
       <div className="wise-login-brand"><WiseMark/><span>Wise <strong>ETF</strong></span></div>
       <div className="wise-login-badge">WISE ID · UNIFIED ACCOUNT</div>
       <h1 id="wise-login-title">{loading ? "正在确认登录状态" : title}</h1>
@@ -31,6 +32,7 @@ export default function WiseLoginGate({ children, title = "使用 Wise ID 继续
       <button className="wise-login-primary" type="button" disabled={loading} onClick={() => login(currentReturnTo())}>
         {loading ? <><i className="wise-login-spinner"/>确认中…</> : <>使用 Wise ID 登录 <span>→</span></>}
       </button>
+      <a className="wise-login-home" href="/">暂不登录，返回首页</a>
       <div className="wise-login-points">
         <span>统一账号</span><span>安全授权</span><span>登录后返回当前页面</span>
       </div>

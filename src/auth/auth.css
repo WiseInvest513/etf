@@ -13,6 +13,7 @@
 }
 
 .wise-login-card {
+  position: relative;
   width: min(480px, 100%);
   box-sizing: border-box;
   padding: 42px;
@@ -22,6 +23,25 @@
   box-shadow: 0 30px 90px rgba(30, 52, 96, .16);
   text-align: center;
 }
+
+.wise-login-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 20px;
+  line-height: 1;
+  text-decoration: none;
+  transition: background .18s ease, color .18s ease;
+}
+
+.wise-login-close:hover { background: #e2e8f0; color: #172033; }
 
 .wise-login-brand {
   display: flex;
@@ -120,6 +140,17 @@
 }
 .wise-login-primary:disabled { cursor: wait; opacity: .68; }
 .wise-login-primary > span { font-size: 18px; }
+
+.wise-login-home {
+  display: inline-block;
+  margin-top: 14px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.wise-login-home:hover { color: #3158d5; }
 
 .wise-login-points {
   display: flex;
