@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { authErrorMessage, membershipLabel, normalizeAuthSession, wiseLoginUrl } from "./auth-client.js";
+import {
+  authErrorMessage,
+  hasMembership,
+  membershipLabel,
+  normalizeAuthSession,
+  normalizeMembershipTier,
+  wiseLoginUrl,
+} from "./auth-client.js";
 
 test("Wise ID login keeps the requested local route", () => {
   assert.equal(
@@ -29,6 +36,8 @@ test("session response is normalized into the frontend user model", () => {
     picture: null,
     membershipTier: "VIP_PLUS",
     membershipLabel: "Wise SVIP",
+    isVip: true,
+    isSvip: true,
   });
 });
 
@@ -39,6 +48,15 @@ test("anonymous or malformed session is rejected", () => {
 
 test("unknown membership does not gain paid access labels", () => {
   assert.equal(membershipLabel("unexpected"), "普通用户");
+  assert.equal(normalizeMembershipTier("unexpected"), "MEMBER");
+  assert.equal(hasMembership("unexpected", "VIP"), false);
+});
+
+test("membership hierarchy distinguishes ordinary, VIP and SVIP users", () => {
+  assert.equal(hasMembership("MEMBER", "VIP"), false);
+  assert.equal(hasMembership("VIP", "VIP"), true);
+  assert.equal(hasMembership("VIP_PLUS", "VIP"), true);
+  assert.equal(hasMembership("VIP", "VIP_PLUS"), false);
 });
 
 test("callback failures explain the failing SSO stage", () => {

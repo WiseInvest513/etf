@@ -47,6 +47,11 @@ DEFAULT_PRODUCTION_REDIRECT_URI = "https://www.wise-etf.com/api/auth/callback/wi
 DEFAULT_SESSION_TTL = 30 * 24 * 60 * 60
 MAX_SESSION_TTL = 30 * 24 * 60 * 60
 MEMBERSHIP_TIERS = {"MEMBER", "VIP", "VIP_PLUS"}
+MEMBERSHIP_LEVELS = {
+    "MEMBER": 0,
+    "VIP": 1,
+    "VIP_PLUS": 2,
+}
 
 
 def canonicalize_wise_endpoint(value: Any) -> Any:
@@ -174,6 +179,19 @@ def membership_label(tier: str) -> str:
     }.get(tier, "普通用户")
 
 
+def normalize_membership_tier(tier: Any) -> str:
+    """Fail closed when Wise ID sends an unknown membership value."""
+    normalized = str(tier or "MEMBER").strip().upper()
+    return normalized if normalized in MEMBERSHIP_TIERS else "MEMBER"
+
+
+def membership_at_least(current_tier: Any, required_tier: Any) -> bool:
+    """Compare Wise membership levels without trusting browser-provided data."""
+    current = normalize_membership_tier(current_tier)
+    required = normalize_membership_tier(required_tier)
+    return MEMBERSHIP_LEVELS[current] >= MEMBERSHIP_LEVELS[required]
+
+
 class WiseAuthService:
     def __init__(self, redis_factory: Callable[[], Any]):
         self.redis_factory = redis_factory
@@ -267,9 +285,7 @@ class WiseAuthService:
         verified = claims.get("email_verified") is True
         if not subject or not wise_user_id or not email or not verified:
             raise HTTPException(status_code=403, detail="Wise ID 缺少已验证的用户信息")
-        tier = str(claims.get("membership_tier") or "MEMBER").strip().upper()
-        if tier not in MEMBERSHIP_TIERS:
-            tier = "MEMBER"
+        tier = normalize_membership_tier(claims.get("membership_tier"))
         name = str(claims.get("name") or email.split("@", 1)[0] or wise_user_id).strip()[:200]
         return {
             "sub": subject[:200],
@@ -346,15 +362,37 @@ class WiseAuthService:
         return record
 
     def require_membership(self, *allowed_tiers: str):
-        allowed = {tier.upper() for tier in allowed_tiers}
+        allowed = {normalize_membership_tier(tier) for tier in allowed_tiers}
 
         def dependency(request: Request) -> dict[str, Any]:
             record = self.require_user(request)
-            if str(record.get("membership_tier") or "MEMBER").upper() not in allowed:
+            if normalize_membership_tier(record.get("membership_tier")) not in allowed:
                 raise HTTPException(status_code=403, detail="当前会员等级无权使用此功能")
             return record
 
         return dependency
+
+    def require_membership_at_least(self, required_tier: str):
+        """Server-side feature gate for tiered functions.
+
+        Use ``require_membership_at_least("VIP")`` on paid endpoints so both
+        VIP and SVIP users are accepted, while ordinary members receive 403.
+        The tier is read only from the signed-in Redis session created from
+        Wise ID UserInfo; request parameters and browser state are ignored.
+        """
+        required = normalize_membership_tier(required_tier)
+
+        def dependency(request: Request) -> dict[str, Any]:
+            record = self.require_user(request)
+            if not membership_at_least(record.get("membership_tier"), required):
+                raise HTTPException(status_code=403, detail=f"此功能需要{membership_label(required)}")
+            return record
+
+        return dependency
+
+    def require_vip(self):
+        """Convenience dependency for all Wise VIP and Wise SVIP features."""
+        return self.require_membership_at_least("VIP")
 
     @staticmethod
     def _no_store(response):

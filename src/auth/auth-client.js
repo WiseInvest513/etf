@@ -4,8 +4,23 @@ export const MEMBERSHIP_LABELS = Object.freeze({
   VIP_PLUS: "Wise SVIP",
 });
 
+export const MEMBERSHIP_LEVELS = Object.freeze({
+  MEMBER: 0,
+  VIP: 1,
+  VIP_PLUS: 2,
+});
+
+export function normalizeMembershipTier(tier) {
+  const normalized = String(tier || "MEMBER").trim().toUpperCase();
+  return Object.hasOwn(MEMBERSHIP_LEVELS, normalized) ? normalized : "MEMBER";
+}
+
 export function membershipLabel(tier) {
-  return MEMBERSHIP_LABELS[String(tier || "MEMBER").toUpperCase()] || MEMBERSHIP_LABELS.MEMBER;
+  return MEMBERSHIP_LABELS[normalizeMembershipTier(tier)];
+}
+
+export function hasMembership(tier, requiredTier = "VIP") {
+  return MEMBERSHIP_LEVELS[normalizeMembershipTier(tier)] >= MEMBERSHIP_LEVELS[normalizeMembershipTier(requiredTier)];
 }
 
 export function currentReturnTo(locationLike = window.location) {
@@ -31,8 +46,10 @@ export function normalizeAuthSession(payload) {
     emailVerified: user.email_verified === true,
     name: String(user.name || user.email),
     picture: user.picture || null,
-    membershipTier: String(user.membership_tier || "MEMBER").toUpperCase(),
+    membershipTier: normalizeMembershipTier(user.membership_tier),
     membershipLabel: user.membership_label || membershipLabel(user.membership_tier),
+    isVip: hasMembership(user.membership_tier, "VIP"),
+    isSvip: hasMembership(user.membership_tier, "VIP_PLUS"),
   };
 }
 

@@ -11,7 +11,9 @@ from api.auth_sso import (
     WiseAuthService,
     append_query,
     canonicalize_wise_endpoint,
+    membership_at_least,
     membership_label,
+    normalize_membership_tier,
     oauth_flow_secret,
     sanitize_return_to,
 )
@@ -87,6 +89,13 @@ class ProfileContractTests(unittest.TestCase):
         self.assertEqual(profile["membership_tier"], "MEMBER")
         self.assertEqual(membership_label(profile["membership_tier"]), "普通用户")
 
+    def test_membership_hierarchy_is_explicit_and_fails_closed(self):
+        self.assertFalse(membership_at_least("MEMBER", "VIP"))
+        self.assertTrue(membership_at_least("VIP", "VIP"))
+        self.assertTrue(membership_at_least("VIP_PLUS", "VIP"))
+        self.assertFalse(membership_at_least("VIP", "VIP_PLUS"))
+        self.assertEqual(normalize_membership_tier("unexpected"), "MEMBER")
+
 
 class SessionContractTests(unittest.TestCase):
     def setUp(self):
@@ -129,6 +138,21 @@ class SessionContractTests(unittest.TestCase):
         self.assertEqual(self.service.require_membership("VIP", "VIP_PLUS")(request)["membership_tier"], "VIP")
         with self.assertRaises(HTTPException) as raised:
             self.service.require_membership("VIP_PLUS")(request)
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_vip_guard_accepts_vip_and_svip_but_rejects_member(self):
+        vip_session = self.service._create_session(self.profile, 3600)
+        vip_request = request_with_cookie(self.service._session_cookie_name(), vip_session)
+        self.assertEqual(self.service.require_vip()(vip_request)["membership_tier"], "VIP")
+
+        svip_session = self.service._create_session({**self.profile, "membership_tier": "VIP_PLUS"}, 3600)
+        svip_request = request_with_cookie(self.service._session_cookie_name(), svip_session)
+        self.assertEqual(self.service.require_vip()(svip_request)["membership_tier"], "VIP_PLUS")
+
+        member_session = self.service._create_session({**self.profile, "membership_tier": "MEMBER"}, 3600)
+        member_request = request_with_cookie(self.service._session_cookie_name(), member_session)
+        with self.assertRaises(HTTPException) as raised:
+            self.service.require_vip()(member_request)
         self.assertEqual(raised.exception.status_code, 403)
 
 

@@ -17,6 +17,8 @@ const LOCAL_PREVIEW_USER = Object.freeze({
   picture: null,
   membershipTier: "MEMBER",
   membershipLabel: "普通用户",
+  isVip: false,
+  isSvip: false,
   isLocalPreview: true,
 });
 
