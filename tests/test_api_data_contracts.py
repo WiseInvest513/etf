@@ -41,6 +41,108 @@ class CacheNamespaceTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
 
 
+class FundSubscriptionWindowTests(unittest.TestCase):
+    def test_weekend_basic_response_cannot_publish_suspended_status(self):
+        saturday = datetime(2026, 9, 5, 9, 10, tzinfo=api._CHINA_TZ)
+        upstream = {
+            "DWJZ": "1.7521",
+            "FSRQ": "2026-09-03",
+            "RZDF": "1.07",
+            "SYL_1N": "19.01",
+            "SYL_JN": "11.63",
+            "SGZT": "暂停申购",
+            "MAXSG": "10",
+        }
+        with patch.object(api, "_china_now", return_value=saturday):
+            result = api._normalize_basic_information("019172", upstream)
+
+        self.assertEqual(result["nav"], 1.7521)
+        self.assertEqual(result["subscription_status"], "unknown")
+        self.assertEqual(result["subscription_status_status"], "unavailable")
+        self.assertEqual(result["daily_limit"], "待确认")
+        self.assertIsNone(result["subscription_as_of"])
+        self.assertEqual(result["daily_source_status"], "partial")
+
+    def test_weekend_dated_cache_is_sanitized(self):
+        saturday = datetime(2026, 9, 5, 12, tzinfo=api._CHINA_TZ)
+        rows = [{
+            "code": "019172",
+            "subscription_status": "suspended",
+            "subscription_status_status": "fresh",
+            "subscription_as_of": "2026-09-05",
+            "daily_limit": "暂停申购",
+            "daily_limit_cny": 10,
+            "data_status": "fresh",
+            "daily_status": "fresh",
+        }]
+        with patch.object(api, "_china_now", return_value=saturday):
+            result = api._sanitize_fund_subscription_rows(rows)
+
+        self.assertEqual(result[0]["subscription_status"], "unknown")
+        self.assertEqual(result[0]["daily_limit"], "待确认")
+        self.assertIsNone(result[0]["daily_limit_cny"])
+        self.assertEqual(result[0]["data_status"], "partial")
+        self.assertEqual(rows[0]["subscription_status"], "suspended")
+
+    def test_weekend_cron_skips_provider_and_publish(self):
+        saturday = datetime(2026, 9, 5, 9, 10, tzinfo=api._CHINA_TZ)
+        with (
+            patch.object(api, "_require_job_secret"),
+            patch.object(api, "_china_now", return_value=saturday),
+            patch.object(api, "_acquire_job_lock", side_effect=AssertionError("lock must not run")),
+            patch.object(api, "_refresh_fund_category", side_effect=AssertionError("provider must not run")),
+        ):
+            payload = api.cron_fund_category("nasdaq_passive", None)
+
+        self.assertTrue(payload["result"]["skipped"])
+        self.assertFalse(payload["result"]["published"])
+
+    def test_weekend_public_route_does_not_requery_provider(self):
+        saturday = datetime(2026, 9, 5, 12, tzinfo=api._CHINA_TZ)
+        polluted = [{
+            "code": "019172",
+            "subscription_status": "suspended",
+            "subscription_status_status": "fresh",
+            "subscription_as_of": "2026-09-05",
+            "daily_limit": "暂停申购",
+            "data_status": "fresh",
+            "daily_status": "fresh",
+        }]
+        with (
+            patch.object(api, "_china_now", return_value=saturday),
+            patch.object(api, "_mem_get", return_value=polluted),
+            patch.object(api, "_build_funds", side_effect=AssertionError("provider must not run")),
+        ):
+            payload = api.get_funds("nasdaq_passive", Response())
+
+        self.assertEqual(payload["data"][0]["subscription_status"], "unknown")
+        self.assertEqual(payload["data"][0]["daily_limit"], "待确认")
+        self.assertEqual(payload["status"], "partial")
+
+    def test_weekend_legacy_projection_is_also_sanitized_without_refresh(self):
+        saturday = datetime(2026, 9, 5, 12, tzinfo=api._CHINA_TZ)
+        polluted = {
+            "019172": {
+                "subscription_status": "suspended",
+                "subscription_status_status": "fresh",
+                "subscription_as_of": "2026-09-05",
+                "daily_limit": "暂停申购",
+                "nav_date": "2026-09-03",
+            },
+        }
+        with (
+            patch.object(api, "_china_now", return_value=saturday),
+            patch.object(api, "_mem_get", return_value=polluted),
+            patch.object(api, "_cache_get", return_value={"status": "fresh", "total_count": 1}),
+            patch.object(api, "_build_live_data", side_effect=AssertionError("provider must not run")),
+        ):
+            payload = api.get_live_data(Response())
+
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["data"]["019172"]["subscription_status"], "unknown")
+        self.assertEqual(payload["data"]["019172"]["daily_limit"], "待确认")
+
+
 class DailyBoardContractTests(unittest.TestCase):
     def test_board_is_read_only_and_marks_old_dynamic_values_stale(self):
         old_fund = {
@@ -110,6 +212,27 @@ class DailyBoardContractTests(unittest.TestCase):
 
         self.assertEqual(payload["funds"]["status"], "fresh")
         self.assertEqual(payload["etfs"]["status"], "fresh")
+
+    def test_board_never_shows_weekend_pause_as_actionable(self):
+        fund = {
+            "code": "F1",
+            "subscription_status": "suspended",
+            "daily_limit": "暂停申购",
+            "subscription_as_of": "2026-09-05",
+            "subscription_status_status": "fresh",
+        }
+
+        rows, source = api._daily_board_fund_rows(
+            "nasdaq_passive",
+            "2026-09-05",
+            [fund],
+            "cache",
+        )
+
+        self.assertEqual(source, "cache")
+        self.assertEqual(rows[0]["subscription_status"], "unknown")
+        self.assertEqual(rows[0]["subscription_snapshot_status"], "unavailable")
+        self.assertIsNone(rows[0]["daily_limit"])
 
 
 class TrackingErrorProviderTests(unittest.TestCase):
@@ -289,6 +412,7 @@ class DailyNavFallbackTests(unittest.TestCase):
             "daily_source_status": "partial",
         }
         with (
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 10, tzinfo=api._CHINA_TZ)),
             patch.object(api, "_fetch_basic_information", return_value=basic),
             patch.object(api, "_fetch_pingzhong_daily", return_value=fallback),
         ):
@@ -401,6 +525,17 @@ class JobSecretTests(unittest.TestCase):
 
 
 class FundCacheContractTests(unittest.TestCase):
+    def setUp(self):
+        self._now_patch = patch.object(
+            api,
+            "_china_now",
+            return_value=datetime(2026, 8, 20, 10, tzinfo=api._CHINA_TZ),
+        )
+        self._now_patch.start()
+
+    def tearDown(self):
+        self._now_patch.stop()
+
     @staticmethod
     def _full_fund_snapshot(code="160213"):
         return {
@@ -897,6 +1032,17 @@ class EtfCacheContractTests(unittest.TestCase):
 
 
 class LiveDataCacheContractTests(unittest.TestCase):
+    def setUp(self):
+        self._now_patch = patch.object(
+            api,
+            "_china_now",
+            return_value=datetime(2026, 8, 20, 10, tzinfo=api._CHINA_TZ),
+        )
+        self._now_patch.start()
+
+    def tearDown(self):
+        self._now_patch.stop()
+
     def test_partial_live_data_merges_lkg_without_promoting_it(self):
         previous = {
             "000001": {"rolling_1y": 10.0, "nav_date": "2026-08-18"},

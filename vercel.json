@@ -53,9 +53,9 @@
     }
   },
   "crons": [
-    { "path": "/api/cron/funds/nasdaq_passive", "schedule": "10 1 * * *" },
-    { "path": "/api/cron/funds/sp500_passive", "schedule": "20 1 * * *" },
-    { "path": "/api/cron/funds/us_active", "schedule": "30 1 * * *" },
+    { "path": "/api/cron/funds/nasdaq_passive", "schedule": "10 1 * * 1-5" },
+    { "path": "/api/cron/funds/sp500_passive", "schedule": "20 1 * * 1-5" },
+    { "path": "/api/cron/funds/us_active", "schedule": "30 1 * * 1-5" },
     { "path": "/api/cron/etfs",    "schedule": "30 7 * * 1-5" },
     { "path": "/api/cron/prem",    "schedule": "30 23 * * 1-5" },
     { "path": "/api/cron/qdii/holdings/0", "schedule": "10 0 * * *" },

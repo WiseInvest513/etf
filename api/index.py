@@ -819,7 +819,13 @@ def _normalize_basic_information(code: str, data: dict) -> dict:
     rolling_1y = parse_number(data.get("SYL_1N"))
     return_ytd = parse_number(data.get("SYL_JN"))
     nav_date = str(data.get("FSRQ") or "").strip() or None
-    purchase = normalize_purchase(data.get("SGZT"), data.get("MAXSG"))
+    observed_at = _china_now()
+    subscription_window = _is_fund_subscription_window(observed_at)
+    purchase = (
+        normalize_purchase(data.get("SGZT"), data.get("MAXSG"))
+        if subscription_window
+        else normalize_purchase(None, None)
+    )
     status = purchase.status
     # legacy v1 中 limited 仍视为可申购，避免旧小程序把它误画成暂停。
     legacy_status = "open" if status in ("open", "limited") else status
@@ -839,9 +845,9 @@ def _normalize_basic_information(code: str, data: dict) -> dict:
         "subscription_status_status": "fresh" if status != "unknown" else "unavailable",
         "daily_limit": _format_daily_limit(status, purchase.daily_limit_cny),
         "daily_limit_cny": purchase.daily_limit_cny,
-        "subscription_as_of": datetime.now(_CHINA_TZ).date().isoformat(),
+        "subscription_as_of": observed_at.date().isoformat() if subscription_window else None,
         "source": "eastmoney_basic",
-        "daily_source_status": "full",
+        "daily_source_status": "full" if subscription_window else "partial",
         "fetched_at": fetched_at,
     }
 
@@ -872,6 +878,88 @@ def _valid_iso_datetime(value: object) -> bool:
 
 def _china_now() -> datetime:
     return datetime.now(_CHINA_TZ)
+
+
+def _is_fund_subscription_window(now: Optional[datetime] = None) -> bool:
+    """Whether a provider response can describe an actionable purchase state.
+
+    Fund sales endpoints commonly report every product as suspended outside the
+    mainland subscription window, especially on weekends. Those transport
+    states must never replace the last valid business-day snapshot.
+    """
+    current = (now or _china_now()).astimezone(_CHINA_TZ)
+    return current.weekday() < 5 and (8, 30) <= (current.hour, current.minute) < (15, 0)
+
+
+def _expected_fund_subscription_date(now: Optional[datetime] = None) -> str:
+    """Latest weekday on which a normal fund subscription snapshot is expected."""
+    current = (now or _china_now()).astimezone(_CHINA_TZ)
+    candidate = current.date()
+    if current.weekday() >= 5 or (current.hour, current.minute) < (8, 30):
+        candidate -= timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate.isoformat()
+
+
+def _sanitize_fund_subscription_rows(rows: Optional[list]) -> Optional[list]:
+    """Hide non-business-day purchase states from previously polluted caches."""
+    if rows is None:
+        return None
+    expected = _expected_fund_subscription_date()
+    sanitized = []
+    for original in rows:
+        if not isinstance(original, dict):
+            sanitized.append(original)
+            continue
+        row = dict(original)
+        as_of = row.get("subscription_as_of")
+        invalid = False
+        try:
+            observed = date.fromisoformat(as_of) if isinstance(as_of, str) else None
+            invalid = observed is not None and (observed.weekday() >= 5 or observed.isoformat() > expected)
+        except ValueError:
+            invalid = True
+        if invalid:
+            row.update({
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+                "subscription_status_status": "unavailable",
+                "daily_limit": "待确认",
+                "daily_limit_cny": None,
+                "subscription_as_of": None,
+                "data_status": "partial",
+                "daily_status": "partial",
+            })
+        sanitized.append(row)
+    return sanitized
+
+
+def _sanitize_fund_subscription_mapping(data: Optional[dict]) -> Optional[dict]:
+    """Mapping variant used by the legacy `/api/live_data` contract."""
+    if data is None:
+        return None
+    codes = []
+    rows = []
+    passthrough = {}
+    for code, row in data.items():
+        if isinstance(row, dict):
+            codes.append(code)
+            rows.append(row)
+        else:
+            passthrough[code] = row
+    cleaned = _sanitize_fund_subscription_rows(rows) or []
+    return {**passthrough, **dict(zip(codes, cleaned))}
+
+
+def _fund_projection_is_current(data: Optional[dict]) -> bool:
+    expected = _expected_fund_subscription_date()
+    rows = [row for row in (data or {}).values() if isinstance(row, dict)]
+    return bool(rows) and all(
+        row.get("subscription_status_status") == "fresh"
+        and row.get("subscription_as_of") == expected
+        for row in rows
+    )
 
 
 def _as_of_instant(value: object) -> Optional[datetime]:
@@ -1981,6 +2069,11 @@ def _build_funds(category: str) -> tuple:
             "subscription_as_of",
             "subscription_status",
         )
+        if subscription_accepted:
+            # Purchase state is one atomic group. In particular, a real
+            # suspension must clear a numeric limit retained by an older LKG.
+            for field in subscription_fields:
+                merged[field] = live.get(field)
         track_accepted = _apply_monotonic_group(
             merged,
             track,
@@ -2336,11 +2429,11 @@ def _dataset_status(rows: list, source: str) -> str:
 
 
 def _fund_cache_is_current(rows: list) -> bool:
-    today = _china_now().date().isoformat()
+    expected = _expected_fund_subscription_date()
     return bool(rows) and all(
         isinstance(row, dict)
         and row.get("subscription_status_status") == "fresh"
-        and row.get("subscription_as_of") == today
+        and row.get("subscription_as_of") == expected
         for row in rows
     )
 
@@ -2418,6 +2511,20 @@ def _daily_board_fund_rows(
     for original in cached or []:
         row = {**original, "daily_board_category": category}
         as_of = row.get("subscription_as_of")
+        try:
+            observed = date.fromisoformat(as_of) if isinstance(as_of, str) else None
+        except ValueError:
+            observed = None
+        if observed is not None and observed.weekday() >= 5:
+            row.update({
+                "daily_limit": None,
+                "daily_limit_cny": None,
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+                "subscription_as_of": None,
+                "subscription_status_status": "unavailable",
+            })
+            as_of = None
         has_status = row.get("subscription_status") in {"open", "limited", "suspended"}
         is_fresh = (
             source != "catalog"
@@ -2549,11 +2656,38 @@ def get_funds(category: str, response: Response):
     cache_key = f"funds_{category}"
 
     # 1. 内存缓存
-    cached = _mem_get(cache_key, "funds")
+    cached = _sanitize_fund_subscription_rows(_mem_get(cache_key, "funds"))
     cached_status = _dataset_status(cached, "cache") if cached is not None else None
     if cached_status == "fresh" and not _fund_cache_is_current(cached):
         cached = [{**row, "data_status": "stale", "daily_status": "stale"} for row in cached]
         cached_status = "stale"
+    if not _is_fund_subscription_window():
+        source = "cache"
+        if cached is None:
+            cached = _sanitize_fund_subscription_rows(_file_load(cache_key))
+            source = "lkg"
+        if cached is None:
+            cached = [{
+                **row,
+                "daily_limit": "待确认",
+                "daily_limit_cny": None,
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+                "subscription_as_of": None,
+                "subscription_status_status": "unavailable",
+                "data_status": "reference",
+                "daily_status": "unavailable",
+            } for row in STATIC_FUNDS.get(category, [])]
+            source = "reference"
+        _cache_header(response, 3600)
+        return {
+            "data": cached,
+            "count": len(cached),
+            "source": source,
+            "status": _dataset_status(cached, source),
+            "as_of": _latest_field_date(cached, ("nav_date", "subscription_as_of", "track_error_as_of")),
+            "schema_version": "2.0",
+        }
     if cached is not None and cached_status == "fresh":
         _cache_header(response, 3600)
         return {
@@ -3093,6 +3227,18 @@ def _refresh_fund_category(category: str) -> dict:
 def cron_fund_category(category: str, authorization: Optional[str] = Header(default=None)):
     """One category per invocation keeps the Vercel function under 30 seconds."""
     _require_job_secret(authorization)
+    now = _china_now()
+    if not _is_fund_subscription_window(now):
+        return {
+            "ts": now.isoformat(),
+            "v": "v6",
+            "result": {
+                "category": category,
+                "skipped": True,
+                "reason": "outside fund subscription window",
+                "published": False,
+            },
+        }
     lock_key = f"funds:{category}"
     token = _acquire_job_lock(lock_key)
     if token is None:
@@ -3100,7 +3246,7 @@ def cron_fund_category(category: str, authorization: Optional[str] = Header(defa
     try:
         return {
             "ts": _china_now().isoformat(),
-            "v": "v5",
+            "v": "v6",
             "run_id": token,
             "result": _refresh_fund_category(category),
         }
@@ -3614,8 +3760,25 @@ def get_live_data(response: Response):
     """昨日涨跌(day_change) + 近1年滚动涨幅(rolling_1y) + 申购状态
     缓存策略：服务端内存+文件缓存12h，cron 每日 09:30 预热
     """
-    cached = _mem_get("live_data", "live_data")
+    cached = _sanitize_fund_subscription_mapping(_mem_get("live_data", "live_data"))
     cached_meta = (_cache_get("live_data:meta") or {}) if cached is not None else {}
+    if not _is_fund_subscription_window():
+        source = "cache"
+        data = cached
+        if data is None:
+            data = _sanitize_fund_subscription_mapping(_lkg_get("live_data")) or {}
+            source = "lkg" if data else "empty"
+        status = "fresh" if _fund_projection_is_current(data) else ("partial" if data else "unavailable")
+        _cache_header(response, 43200)
+        return {
+            "data": data,
+            "source": source,
+            "status": status,
+            "as_of": _latest_field_date(list(data.values()), ("nav_date", "subscription_as_of")),
+            "fresh_count": len(data) if status == "fresh" else 0,
+            "total_count": cached_meta.get("total_count", len(_ALL_CODES)),
+            "schema_version": "2.0",
+        }
     if cached is not None and cached_meta.get("status") == "fresh":
         _cache_header(response, 43200)
         return {
