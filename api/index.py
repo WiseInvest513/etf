@@ -8,7 +8,7 @@
 缓存分层：带 TTL 的 Redis 热缓存 + 独立永久 Last-Known-Good。部分抓取只
 进入热缓存，不覆盖完整 LKG；前端会收到 fresh/partial/stale/reference 状态。
 
-定时任务（UTC）：01:10/01:20/01:30 分类别刷新场外基金；07:30 工作日
+定时任务（UTC）：02:10/02:20/02:30 分类别刷新场外基金；07:30 工作日
 ETF 收盘快照；23:30 工作日补齐历史溢价。所有 cron/admin 路由默认要求
 CRON_SECRET。
 """
@@ -888,14 +888,16 @@ def _is_fund_subscription_window(now: Optional[datetime] = None) -> bool:
     states must never replace the last valid business-day snapshot.
     """
     current = (now or _china_now()).astimezone(_CHINA_TZ)
-    return current.weekday() < 5 and (8, 30) <= (current.hour, current.minute) < (15, 0)
+    # 东方财富在工作日开盘前也会把全部产品短暂返回为“暂停申购”；
+    # 09:35 后当天状态稳定，并会持续保留到当日结束，晚间仍可安全补采。
+    return current.weekday() < 5 and (current.hour, current.minute) >= (9, 35)
 
 
 def _expected_fund_subscription_date(now: Optional[datetime] = None) -> str:
     """Latest weekday on which a normal fund subscription snapshot is expected."""
     current = (now or _china_now()).astimezone(_CHINA_TZ)
     candidate = current.date()
-    if current.weekday() >= 5 or (current.hour, current.minute) < (8, 30):
+    if current.weekday() >= 5 or (current.hour, current.minute) < (9, 35):
         candidate -= timedelta(days=1)
     while candidate.weekday() >= 5:
         candidate -= timedelta(days=1)
@@ -932,6 +934,29 @@ def _sanitize_fund_subscription_rows(rows: Optional[list]) -> Optional[list]:
                 "daily_status": "partial",
             })
         sanitized.append(row)
+
+    # 若整个分类在同一批次全部变成暂停，说明上游返回的是时段性占位状态，
+    # 不能把它作为可操作数据展示或覆盖 LKG。
+    fresh_rows = [
+        row for row in sanitized
+        if isinstance(row, dict)
+        and row.get("subscription_status_status") == "fresh"
+        and row.get("subscription_status") != "unknown"
+    ]
+    if len(fresh_rows) >= 3 and all(
+        row.get("subscription_status") == "suspended" for row in fresh_rows
+    ):
+        for row in fresh_rows:
+            row.update({
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+                "subscription_status_status": "unavailable",
+                "daily_limit": "待确认",
+                "daily_limit_cny": None,
+                "subscription_as_of": None,
+                "data_status": "partial",
+                "daily_status": "partial",
+            })
     return sanitized
 
 
@@ -2008,6 +2033,26 @@ def _build_funds(category: str) -> tuple:
 
     success_rate = len(live_map) / len(codes)
     logger.info(f"[{category}] {len(live_map)}/{len(codes)} live ({success_rate:.0%})")
+
+    fresh_subscription_rows = [
+        row for row in live_map.values()
+        if row.get("subscription_status_status") == "fresh"
+        and row.get("subscription_status") != "unknown"
+    ]
+    if len(fresh_subscription_rows) >= 3 and all(
+        row.get("subscription_status") == "suspended" for row in fresh_subscription_rows
+    ):
+        logger.error(f"[{category}] rejected implausible all-suspended subscription batch")
+        for row in fresh_subscription_rows:
+            row.update({
+                "buy_status": "unknown",
+                "subscription_status": "unknown",
+                "subscription_status_status": "unavailable",
+                "daily_limit": "待确认",
+                "daily_limit_cny": None,
+                "subscription_as_of": None,
+                "daily_source_status": "partial",
+            })
 
     # 目录静态元数据始终优先；LKG 只补日更字段，不能把旧规模/费率覆盖回来。
     results = []

@@ -42,6 +42,25 @@ class CacheNamespaceTests(unittest.TestCase):
 
 
 class FundSubscriptionWindowTests(unittest.TestCase):
+    def test_weekday_preopen_response_cannot_publish_suspended_status(self):
+        monday = datetime(2026, 9, 7, 9, 10, tzinfo=api._CHINA_TZ)
+        upstream = {"SGZT": "暂停申购", "MAXSG": "10"}
+        with patch.object(api, "_china_now", return_value=monday):
+            result = api._normalize_basic_information("019524", upstream)
+
+        self.assertEqual(result["subscription_status"], "unknown")
+        self.assertIsNone(result["subscription_as_of"])
+
+    def test_weekday_evening_response_can_publish_same_day_status(self):
+        monday = datetime(2026, 9, 7, 22, 10, tzinfo=api._CHINA_TZ)
+        upstream = {"SGZT": "限大额", "MAXSG": "10"}
+        with patch.object(api, "_china_now", return_value=monday):
+            result = api._normalize_basic_information("019524", upstream)
+
+        self.assertEqual(result["subscription_status"], "limited")
+        self.assertEqual(result["daily_limit"], "10元")
+        self.assertEqual(result["subscription_as_of"], "2026-09-07")
+
     def test_weekend_basic_response_cannot_publish_suspended_status(self):
         saturday = datetime(2026, 9, 5, 9, 10, tzinfo=api._CHINA_TZ)
         upstream = {
@@ -83,6 +102,24 @@ class FundSubscriptionWindowTests(unittest.TestCase):
         self.assertIsNone(result[0]["daily_limit_cny"])
         self.assertEqual(result[0]["data_status"], "partial")
         self.assertEqual(rows[0]["subscription_status"], "suspended")
+
+    def test_all_suspended_weekday_batch_is_sanitized(self):
+        monday = datetime(2026, 9, 7, 12, tzinfo=api._CHINA_TZ)
+        rows = [
+            {
+                "code": str(index),
+                "subscription_status": "suspended",
+                "subscription_status_status": "fresh",
+                "subscription_as_of": "2026-09-07",
+                "daily_limit": "暂停申购",
+            }
+            for index in range(3)
+        ]
+        with patch.object(api, "_china_now", return_value=monday):
+            result = api._sanitize_fund_subscription_rows(rows)
+
+        self.assertTrue(all(row["subscription_status"] == "unknown" for row in result))
+        self.assertTrue(all(row["daily_limit"] == "待确认" for row in result))
 
     def test_weekend_cron_skips_provider_and_publish(self):
         saturday = datetime(2026, 9, 5, 9, 10, tzinfo=api._CHINA_TZ)
