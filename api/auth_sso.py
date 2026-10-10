@@ -366,6 +366,16 @@ class WiseAuthService:
             raise HTTPException(status_code=401, detail="请先使用 Wise ID 登录")
         return record
 
+    def optional_user(self, request: Request) -> Optional[dict[str, Any]]:
+        """Return the trusted server session when present, otherwise ``None``.
+
+        Read-only endpoints can use this to vary the amount of data returned by
+        membership without turning the whole endpoint into an authentication
+        error.  Membership still comes exclusively from the Wise ID session;
+        browser parameters are never trusted.
+        """
+        return self._read_session(request)
+
     def require_membership(self, *allowed_tiers: str):
         allowed = {normalize_membership_tier(tier) for tier in allowed_tiers}
 

@@ -244,11 +244,43 @@ class QDIISessionContractTests(unittest.TestCase):
 class QDIIPublicRouteTests(unittest.TestCase):
     def test_public_valuation_route_only_reads_snapshot(self):
         snapshot = {"schema_version": "3", "status": "fresh", "funds": [{"code": "A"}]}
+        response = Response()
         with patch.object(api, "_cache_get", return_value=snapshot), \
              patch.object(api, "_yf_batch_quote_rows") as upstream:
-            result = api.api_qdii_valuations(Response())
-        self.assertEqual(result, snapshot)
+            result = api.api_qdii_valuations(response)
+        self.assertEqual(result["funds"], snapshot["funds"])
+        self.assertEqual(result["access"]["membership_tier"], "MEMBER")
+        self.assertFalse(result["access"]["is_vip"])
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.assertEqual(response.headers["vary"], "Cookie")
         upstream.assert_not_called()
+
+    def test_member_valuation_response_is_limited_to_first_twelve(self):
+        snapshot = {
+            "schema_version": "3",
+            "status": "fresh",
+            "funds": [{"code": f"F{i:02d}"} for i in range(20)],
+        }
+        with patch.object(api, "_cache_get", return_value=snapshot):
+            result = api.api_qdii_valuations(Response())
+        self.assertEqual(len(result["funds"]), api.QDII_FREE_FUND_LIMIT)
+        self.assertEqual(result["access"]["total_count"], 20)
+        self.assertEqual(result["access"]["locked_count"], 8)
+        self.assertEqual(result["access"]["visible_codes"], [f"F{i:02d}" for i in range(12)])
+
+    def test_vip_valuation_response_keeps_complete_snapshot(self):
+        snapshot = {
+            "schema_version": "3",
+            "status": "fresh",
+            "funds": [{"code": f"F{i:02d}"} for i in range(20)],
+        }
+        request = object()
+        with patch.object(api, "_cache_get", return_value=snapshot), \
+             patch.object(api.wise_auth, "optional_user", return_value={"membership_tier": "VIP"}):
+            result = api.api_qdii_valuations(Response(), request)
+        self.assertEqual(len(result["funds"]), 20)
+        self.assertTrue(result["access"]["is_vip"])
+        self.assertEqual(result["access"]["locked_count"], 0)
 
     def test_public_route_does_not_rebuild_when_no_snapshot_exists(self):
         with patch.object(api, "_cache_get", return_value=None), \
@@ -293,6 +325,37 @@ class QDIIPublicRouteTests(unittest.TestCase):
             result = api.api_qdii_holdings("A", Response(), force=True)
         self.assertEqual(result["status"], "fresh")
         upstream.assert_not_called()
+
+    def test_locked_holdings_require_vip_membership(self):
+        products = [
+            {"code": f"F{i:02d}", "name": f"Fund {i}", "master_code": f"F{i:02d}"}
+            for i in range(13)
+        ]
+        with patch.object(api, "QDII_V3_PRODUCTS", products), \
+             patch.object(api, "QDII_V3_CODES", {row["code"] for row in products}):
+            with self.assertRaises(HTTPException) as raised:
+                api.api_qdii_holdings("F12", Response())
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_vip_can_read_holdings_after_the_free_limit(self):
+        products = [
+            {"code": f"F{i:02d}", "name": f"Fund {i}", "master_code": f"F{i:02d}"}
+            for i in range(13)
+        ]
+        payload = {
+            "status": "fresh",
+            "updated_at": "2026-10-10T00:00:00+00:00",
+            "portfolios": {
+                "F12": {"report_date": "2026-09-30", "source": "test", "holdings": [{"symbol": "NVDA", "weight": 10}]},
+            },
+        }
+        request = object()
+        with patch.object(api, "QDII_V3_PRODUCTS", products), \
+             patch.object(api, "QDII_V3_CODES", {row["code"] for row in products}), \
+             patch.object(api, "_qdii_v3_holdings_payload", return_value=payload), \
+             patch.object(api.wise_auth, "optional_user", return_value={"membership_tier": "VIP"}):
+            result = api.api_qdii_holdings("F12", Response(), request)
+        self.assertEqual(result["holdings"][0]["symbol"], "NVDA")
 
 
 class QDIIHoldingCronTests(unittest.TestCase):

@@ -37,12 +37,19 @@ from typing import Optional, Dict, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from upstash_redis import Redis
 
-from api.auth_sso import WiseAuthService, is_production, oauth_cookie_name, oauth_flow_secret
+from api.auth_sso import (
+    WiseAuthService,
+    is_production,
+    membership_at_least,
+    normalize_membership_tier,
+    oauth_cookie_name,
+    oauth_flow_secret,
+)
 
 from api.wise_etf import (
     canonicalize_symbol,
@@ -5635,12 +5642,25 @@ def calc_valuation_for_fund(code: str, stock_cache: dict, fx_change: float,
 
 # ─── API 端点 ──────────────────────────────────────────────────────────────────
 
+QDII_FREE_FUND_LIMIT = 12
+
+
+def _qdii_request_membership(request: Optional[Request]) -> tuple[str, bool]:
+    record = wise_auth.optional_user(request) if request is not None else None
+    tier = normalize_membership_tier((record or {}).get("membership_tier"))
+    return tier, membership_at_least(tier, "VIP")
+
 @app.get("/api/qdii/holdings/{code}")
-def api_qdii_holdings(code: str, response: Response, force: bool = False):
+def api_qdii_holdings(code: str, response: Response, request: Request = None, force: bool = False):
     """Read the last verified portfolio snapshot; never fetch upstream here."""
     if code not in QDII_V3_CODES:
         raise HTTPException(status_code=404, detail="unknown QDII fund code")
-    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+    free_codes = {str(product.get("code") or "") for product in QDII_V3_PRODUCTS[:QDII_FREE_FUND_LIMIT]}
+    _, is_vip = _qdii_request_membership(request)
+    if code not in free_codes and not is_vip:
+        raise HTTPException(status_code=403, detail="更多 QDII 持仓与估值需要 Wise VIP")
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Vary"] = "Cookie"
     product = next(row for row in QDII_V3_PRODUCTS if row["code"] == code)
     master_code = product.get("master_code") or code
     payload = _qdii_v3_holdings_payload()
@@ -5675,41 +5695,70 @@ def api_qdii_holdings(code: str, response: Response, force: bool = False):
 # a_share     │ 收盘估值                  │ 返回            │ 不返回
 # closed      │ 收盘估值                  │ 返回            │ 不返回
 # weekend     │ 收盘估值                  │ 返回            │ 不返回
+
+
+def _qdii_snapshot_for_membership(snapshot: dict, request: Optional[Request]) -> dict:
+    """Apply the QDII entitlement before serialized data leaves the server."""
+    tier, is_vip = _qdii_request_membership(request)
+    all_funds = snapshot.get("funds") if isinstance(snapshot.get("funds"), list) else []
+    visible_funds = all_funds if is_vip else all_funds[:QDII_FREE_FUND_LIMIT]
+    total_count = len(all_funds)
+    visible_codes = [str(fund.get("code") or "") for fund in visible_funds if isinstance(fund, dict)]
+    return {
+        **snapshot,
+        "funds": visible_funds,
+        "access": {
+            "membership_tier": tier,
+            "is_vip": is_vip,
+            "free_limit": QDII_FREE_FUND_LIMIT,
+            "visible_count": len(visible_funds),
+            "total_count": total_count,
+            "locked_count": max(0, total_count - len(visible_funds)),
+            "visible_codes": visible_codes,
+        },
+    }
+
+
+def _private_qdii_response(response: Response, snapshot: dict, request: Optional[Request]) -> dict:
+    # The response varies by the HttpOnly Wise ID session cookie.  Never allow
+    # browser/CDN shared caches to reuse a VIP payload for a MEMBER request.
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    return _qdii_snapshot_for_membership(snapshot, request)
+
+
 @app.get("/api/qdii/valuations")
-def api_qdii_valuations(response: Response):
+def api_qdii_valuations(response: Response, request: Request = None):
     """Return the last background-generated QDII snapshot without upstream I/O."""
     # Public traffic is read-only.  The protected qdii/quotes cron is the only
     # writer and the only code path allowed to contact quote providers.
     snapshot = _cache_get(QDII_V3_VALUATIONS_KEY)
     if snapshot:
-        response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=300"
-        return snapshot
+        return _private_qdii_response(response, snapshot, request)
     snapshot = _lkg_get(QDII_V3_VALUATIONS_KEY)
     if snapshot:
-        response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=3600"
-        return {**snapshot, "status": "stale"}
+        return _private_qdii_response(response, {**snapshot, "status": "stale"}, request)
     # First deployment may not have an LKG yet.  A diagnostic partial snapshot
     # is still more useful than an empty page, but it never takes precedence
     # over a previously complete snapshot.
     snapshot = _cache_get(QDII_V3_PARTIAL_VALUATIONS_KEY)
     if snapshot:
-        response.headers["Cache-Control"] = "public, max-age=30"
-        return {**snapshot, "status": "partial"}
-    response.headers["Cache-Control"] = "public, max-age=30"
-    return {
+        return _private_qdii_response(response, {**snapshot, "status": "partial"}, request)
+    return _private_qdii_response(response, {
         "schema_version": "3",
         "status": "unavailable",
         "session": _current_session(),
         "updated_at": None,
         "funds": [],
         "error": "QDII snapshot has not been generated yet",
-    }
+    }, request)
 
 
 @app.get("/api/v2/qdii/valuations")
-def api_qdii_valuations_v2(response: Response):
+def api_qdii_valuations_v2(response: Response, request: Request = None):
     """Versioned alias for clients migrating away from the legacy contract."""
-    return api_qdii_valuations(response)
+    return api_qdii_valuations(response, request)
 
 
 def _legacy_api_qdii_valuations_disabled(response: Response):

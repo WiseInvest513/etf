@@ -4688,7 +4688,7 @@ function MainApp() {
                 : <span style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
               }
               </button>}
-            <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn" aria-label="菜单"
+            <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn" aria-label={mobileMenuOpen?"关闭菜单":"打开菜单"} aria-expanded={mobileMenuOpen} aria-controls="site-mobile-menu"
               style={{display:"none",flexDirection:"column",gap:5,background:"none",border:"none",cursor:"pointer",padding:6}}>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(45deg) translateY(7px)":"none"}}/>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",opacity:mobileMenuOpen?0:1}}/>

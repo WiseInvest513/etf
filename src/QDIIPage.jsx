@@ -1,6 +1,10 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Tooltip, PieChart, Pie, Cell } from "recharts";
+import { useAuth } from "./auth/AuthProvider.jsx";
+import { VIP_JOIN_URL } from "./navigation/navigationConfig.js";
+
+const QDII_FREE_FUND_LIMIT = 12;
 
 function useIsMobile() {
   const [m, setM] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
@@ -10,6 +14,43 @@ function useIsMobile() {
     return () => window.removeEventListener("resize", fn);
   }, []);
   return m;
+}
+
+function VipUnlockCard({ lockedCount, compact = false }) {
+  if (lockedCount <= 0) return null;
+  return (
+    <div style={{
+      margin: compact ? 0 : "14px 0 0",
+      padding: compact ? "22px 18px" : "24px 20px",
+      borderRadius: compact ? 0 : 16,
+      border: compact ? "none" : "1px solid #f3d89a",
+      background:"linear-gradient(135deg,rgba(255,251,235,0.98),rgba(239,246,255,0.98))",
+      display:"flex", alignItems:"center", justifyContent:"space-between",
+      gap:18, flexWrap:"wrap", textAlign:"left",
+    }}>
+      <div style={{ minWidth:0, flex:"1 1 280px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:7 }}>
+          <span style={{ width:28, height:28, borderRadius:9, display:"inline-flex", alignItems:"center", justifyContent:"center", background:"linear-gradient(135deg,#f59e0b,#f97316)", color:"#fff", fontSize:14 }}>◆</span>
+          <span style={{ fontSize:14, fontWeight:800, color:"#1f2937" }}>免费估值已查看完毕</span>
+        </div>
+        <div style={{ fontSize:12, lineHeight:1.7, color:"#64748b" }}>
+          普通用户可查看前 {QDII_FREE_FUND_LIMIT} 只；加入 Wise VIP，解锁其余 {lockedCount} 只基金的完整估值、持仓明细与行情数据。
+        </div>
+      </div>
+      <a
+        href={VIP_JOIN_URL}
+        style={{
+          height:42, padding:"0 20px", borderRadius:12, flexShrink:0,
+          display:"inline-flex", alignItems:"center", justifyContent:"center", gap:8,
+          background:"linear-gradient(135deg,#1d4ed8,#6d28d9)", color:"#fff",
+          textDecoration:"none", fontSize:13, fontWeight:800,
+          boxShadow:"0 10px 24px rgba(79,70,229,0.22)",
+        }}
+      >
+        加入 Wise VIP <span aria-hidden="true">→</span>
+      </a>
+    </div>
+  );
 }
 
 // 仅用于接口尚未返回前的 UI 兜底。正常情况下以后端 Yahoo marketState
@@ -901,6 +942,8 @@ function drawQDIIExportCanvas(rows, session, logoImg=null){
 // ─── 主页面 ───────────────────────────────────────────────────────────────────
 export default function QDIIPage() {
   const isMobile = useIsMobile();
+  const { user } = useAuth();
+  const cacheKey = `qdii_val_cache_v2_${user?.membershipTier || "MEMBER"}`;
   // Store only the code so an open detail drawer always follows the latest
   // snapshot instead of freezing the row object captured at click time.
   const [selectedCode, setSelectedCode] = useState(null);
@@ -910,15 +953,24 @@ export default function QDIIPage() {
 
   // ── API 数据 ──
   const [valuations, setValuations]   = useState(() => {
-    // 从 localStorage 恢复上次成功的估值，避免页面刷新时"计算中…"闪烁
+    // 会员级别使用独立缓存，避免账号切换后沿用另一等级的数据。
     try {
-      const saved = localStorage.getItem("qdii_val_cache");
-      if (saved) return JSON.parse(saved);
+      localStorage.removeItem("qdii_val_cache");
+      const saved = localStorage.getItem(cacheKey);
+      if (saved) return JSON.parse(saved)?.funds || {};
     } catch {
       // Invalid or unavailable local cache is equivalent to a cold start.
     }
     return {};
   });   // { code -> {valuation, holdings, coverage, nav} }
+  const [access, setAccess] = useState(() => ({
+    isVip: Boolean(user?.isVip),
+    freeLimit: QDII_FREE_FUND_LIMIT,
+    totalCount: QDII_FUNDS.length,
+    visibleCount: user?.isVip ? QDII_FUNDS.length : Math.min(QDII_FREE_FUND_LIMIT, QDII_FUNDS.length),
+    lockedCount: user?.isVip ? 0 : Math.max(0, QDII_FUNDS.length - QDII_FREE_FUND_LIMIT),
+    visibleCodes: [],
+  }));
   const [usActive, setUsActive]       = useState({});   // { code -> {scale, ytd_return, daily_limit, buy_status} }
   const [fxPrice, setFxPrice]         = useState(null);
   const [indexData, setIndexData]     = useState([
@@ -929,12 +981,12 @@ export default function QDIIPage() {
   ]);
   const [loading, setLoading]         = useState(() => {
     // 有 localStorage 缓存时不显示初始 loading，避免遮盖旧数据
-    try { return !localStorage.getItem("qdii_val_cache"); } catch { return true; }
+    try { return !localStorage.getItem(cacheKey); } catch { return true; }
   });
   const [updatedAt, setUpdatedAt]     = useState(null);
   const [marketAsOf, setMarketAsOf]   = useState(null);
   const [snapshotStatus, setSnapshotStatus] = useState(() => {
-    try { return localStorage.getItem("qdii_val_cache") ? "stale" : "unavailable"; }
+    try { return localStorage.getItem(cacheKey) ? "stale" : "unavailable"; }
     catch { return "unavailable"; }
   });
   const [session, setSession]         = useState(() => getMarketSession());
@@ -1013,7 +1065,16 @@ export default function QDIIPage() {
         const map = {};
         (data.funds || []).forEach(f => { map[f.code] = f; });
         setValuations(map);
-        try { localStorage.setItem("qdii_val_cache", JSON.stringify(map)); } catch {
+        const nextAccess = {
+          isVip: data.access?.is_vip === true,
+          freeLimit: Number(data.access?.free_limit) || QDII_FREE_FUND_LIMIT,
+          totalCount: Number(data.access?.total_count) || data.funds.length,
+          visibleCount: Number(data.access?.visible_count) || data.funds.length,
+          lockedCount: Number(data.access?.locked_count) || 0,
+          visibleCodes: Array.isArray(data.access?.visible_codes) ? data.access.visible_codes : data.funds.map(f => f.code),
+        };
+        setAccess(nextAccess);
+        try { localStorage.setItem(cacheKey, JSON.stringify({ funds:map, access:nextAccess })); } catch {
           // A valid server snapshot remains usable even if local storage is full.
         }
         setUpdatedAt(data.updated_at || null);
@@ -1032,7 +1093,7 @@ export default function QDIIPage() {
         console.warn("[qdii] valuations fetch failed", e);
       })
       .finally(() => { if (showLoading) setLoading(false); });
-  }, []);
+  }, [cacheKey]);
 
   // 初始拉取
   useEffect(() => {
@@ -1092,12 +1153,25 @@ export default function QDIIPage() {
     // Static rows are display-only fallbacks.  The API/catalog union is the
     // authoritative product set, so newly added funds do not disappear merely
     // because this legacy fallback array has not been edited yet.
-    const productMap = new Map(QDII_FUNDS.map(f => [f.code, f]));
+    const valuationCodes = Object.keys(valuations);
+    const fallbackCodes = QDII_FUNDS.slice(0, access.freeLimit).map(f => f.code);
+    const permittedCodes = new Set(
+      access.isVip
+        ? [...QDII_FUNDS.map(f => f.code), ...valuationCodes]
+        : (access.visibleCodes.length ? access.visibleCodes : (valuationCodes.length ? valuationCodes.slice(0, access.freeLimit) : fallbackCodes)),
+    );
+    const productMap = new Map(
+      QDII_FUNDS.filter(f => access.isVip || permittedCodes.has(f.code)).map(f => [f.code, f]),
+    );
     Object.values(usActive).forEach(f => {
-      if (f?.code) productMap.set(f.code, { ...(productMap.get(f.code) || {}), ...f });
+      if (f?.code && (access.isVip || permittedCodes.has(f.code))) {
+        productMap.set(f.code, { ...(productMap.get(f.code) || {}), ...f });
+      }
     });
     Object.values(valuations).forEach(f => {
-      if (f?.code) productMap.set(f.code, { ...(productMap.get(f.code) || {}), ...f });
+      if (f?.code && (access.isVip || permittedCodes.has(f.code))) {
+        productMap.set(f.code, { ...(productMap.get(f.code) || {}), ...f });
+      }
     });
 
     // 将 API 估值数据 + 美股主动数据合并进产品目录
@@ -1152,7 +1226,7 @@ export default function QDIIPage() {
       });
     }
     return list;
-  }, [search, sortKey, sortDir, valuations, usActive, session]);
+  }, [search, sortKey, sortDir, valuations, usActive, session, access]);
 
   const selectedFund = useMemo(
     () => selectedCode ? filtered.find(fund => fund.code === selectedCode) || null : null,
@@ -1303,8 +1377,19 @@ export default function QDIIPage() {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:12 }}>
           <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", width: isMobile ? "100%" : "auto", gap:8 }}>
             <div>
-              <div style={{ fontSize:18, fontWeight:800, color:CC.text, marginBottom:2 }}>
-                {Object.keys(valuations).length || Object.keys(usActive).length || QDII_FUNDS.length} 只主动型 QDII 场外基金
+              <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:2 }}>
+                <span style={{ fontSize:18, fontWeight:800, color:CC.text }}>
+                  {access.totalCount || QDII_FUNDS.length} 只主动型 QDII 场外基金
+                </span>
+                <span style={{
+                  display:"inline-flex", alignItems:"center", height:22, padding:"0 9px", borderRadius:999,
+                  fontSize:10, fontWeight:800,
+                  color: access.isVip ? "#6d28d9" : "#92400e",
+                  background: access.isVip ? "#ede9fe" : "#fef3c7",
+                  border:`1px solid ${access.isVip ? "#ddd6fe" : "#fde68a"}`,
+                }}>
+                  {access.isVip ? `${user?.membershipLabel || "Wise VIP"} · 已解锁全部` : `普通用户 · 免费查看 ${access.freeLimit} 只`}
+                </span>
               </div>
               <div style={{ fontSize:12, color:CC.textDim, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                 <span>点击任意行查看持仓明细</span>
@@ -1553,6 +1638,7 @@ export default function QDIIPage() {
             {filtered.length === 0 && (
               <div style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>未找到相关基金</div>
             )}
+            {!access.isVip && access.lockedCount > 0 && <VipUnlockCard lockedCount={access.lockedCount} compact />}
           </div>
         ) : (
           // ── 完整表格（原有逻辑）──
@@ -1599,6 +1685,13 @@ export default function QDIIPage() {
                 {filtered.map((fund, i) => (
                   <FundRow key={fund.code} fund={fund} isEven={i % 2 === 0} onClick={fundRow => setSelectedCode(fundRow.code)} isMobile={isMobile} cc={CC} session={session} watched={watchlist.has(fund.code)} onToggleWatch={toggleWatch} />
                 ))}
+                {!access.isVip && access.lockedCount > 0 && (
+                  <tr>
+                    <td colSpan={(isMobile ? 2 : 8) + currentValuationColumns.length} style={{ padding:0, borderTop:`1px solid ${CC.borderLight}` }}>
+                      <VipUnlockCard lockedCount={access.lockedCount} compact />
+                    </td>
+                  </tr>
+                )}
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={(isMobile ? 2 : 8) + currentValuationColumns.length} style={{ padding:"60px 0", textAlign:"center", color:CC.textDim, fontSize:14 }}>
@@ -1610,7 +1703,10 @@ export default function QDIIPage() {
             </table>
 
             <div style={{ padding:"12px 16px", borderTop:`1px solid ${CC.border}`, fontSize:12, color:CC.textDim, display:"flex", justifyContent:"space-between", alignItems:"center", background:CC.card }}>
-              <span>共 {filtered.length} 只{loading ? " · 估值加载中…" : ""}</span>
+              <span>
+                {access.isVip ? `共 ${filtered.length} 只` : `已显示 ${filtered.length} / 共 ${access.totalCount || filtered.length} 只`}
+                {loading ? " · 估值加载中…" : ""}
+              </span>
               <span>
                 {session === "a_share"    ? "收盘持仓涨跌 + 亚洲行情 + 汇率" :
                  session === "closed"     ? "收盘持仓涨跌 + 汇率" :

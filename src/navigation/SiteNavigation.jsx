@@ -28,15 +28,20 @@ export function DesktopNavigation({ activeTab, onNavigate }) {
 }
 
 export function MobileNavigation({ activeTab, onNavigate, onClose, onCommunity }) {
-  return <div className="site-mobile-nav">
+  const navigate = tab => {
+    onClose();
+    onNavigate(tab);
+  };
+
+  return <div id="site-mobile-menu" className="site-mobile-nav" role="navigation" aria-label="移动端主导航">
     {NAV_GROUPS.map(group => !group.children
-      ? <button key={group.key} type="button" className={`${activeTab === group.tab ? "is-active" : ""} ${group.featured ? "is-featured" : ""}`} onClick={() => { onNavigate(group.tab); onClose(); }}><span>{group.label}{group.badge && <em>{group.badge}</em>}</span><Arrow/></button>
+      ? <button key={group.key} type="button" className={`${activeTab === group.tab ? "is-active" : ""} ${group.featured ? "is-featured" : ""}`} onClick={() => navigate(group.tab)}><span>{group.label}{group.badge && <em>{group.badge}</em>}</span><Arrow/></button>
       : <section key={group.key}><h3>{group.label}</h3>{group.children.map(item => item.href
-        ? <a key={item.id} href={item.href}><span><strong>{item.label}</strong><small>{item.description}</small></span><Arrow/></a>
-        : <button key={item.id} type="button" className={activeTab === item.id ? "is-active" : ""} onClick={() => { onNavigate(item.id); onClose(); }}><span><strong>{item.label}</strong><small>{item.description}</small></span><Arrow/></button>)}</section>)}
-    <a className="site-mobile-vip" href={VIP_JOIN_URL}>
+        ? <a key={item.id} href={item.href} onClick={onClose}><span><strong>{item.label}</strong><small>{item.description}</small></span><Arrow/></a>
+        : <button key={item.id} type="button" className={activeTab === item.id ? "is-active" : ""} onClick={() => navigate(item.id)}><span><strong>{item.label}</strong><small>{item.description}</small></span><Arrow/></button>)}</section>)}
+    <a className="site-mobile-vip" href={VIP_JOIN_URL} onClick={onClose}>
       <span><b aria-hidden="true">✦</b> 加入 VIP</span><Arrow/>
     </a>
-    <button type="button" className="site-mobile-community" onClick={() => { onCommunity(); onClose(); }}>💬 <span>加入群聊</span></button>
+    <button type="button" className="site-mobile-community" onClick={() => { onClose(); onCommunity(); }}>💬 <span>加入群聊</span></button>
   </div>;
 }
