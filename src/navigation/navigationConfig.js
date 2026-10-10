@@ -14,6 +14,8 @@ export const NAV_GROUPS = [
   ]},
 ];
 
+export const VIP_JOIN_URL = "https://vip.wise-invest.org/join";
+
 export const FOOTER_NAV_ITEMS = [
   { id: "nasdaq", label: "纳指被动" }, { id: "sp500", label: "标普 500" },
   { id: "etf", label: "场内 ETF" }, { id: "active", label: "美股主动" },

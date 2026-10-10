@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NAV_GROUPS } from "./navigationConfig.js";
+import { NAV_GROUPS, VIP_JOIN_URL } from "./navigationConfig.js";
 import "./site-navigation.css";
 
 const Chevron = () => <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>;
@@ -34,6 +34,9 @@ export function MobileNavigation({ activeTab, onNavigate, onClose, onCommunity }
       : <section key={group.key}><h3>{group.label}</h3>{group.children.map(item => item.href
         ? <a key={item.id} href={item.href}><span><strong>{item.label}</strong><small>{item.description}</small></span><Arrow/></a>
         : <button key={item.id} type="button" className={activeTab === item.id ? "is-active" : ""} onClick={() => { onNavigate(item.id); onClose(); }}><span><strong>{item.label}</strong><small>{item.description}</small></span><Arrow/></button>)}</section>)}
+    <a className="site-mobile-vip" href={VIP_JOIN_URL}>
+      <span><b aria-hidden="true">✦</b> 加入 VIP</span><Arrow/>
+    </a>
     <button type="button" className="site-mobile-community" onClick={() => { onCommunity(); onClose(); }}>💬 <span>加入群聊</span></button>
   </div>;
 }

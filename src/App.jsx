@@ -14,7 +14,7 @@ import TodayDataPage from "./seo/TodayDataPage.jsx";
 import PathChooserPage from "./chooser/PathChooserPage.jsx";
 import { CATEGORY_PAGE_META, HOME_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
-import { FOOTER_NAV_ITEMS } from "./navigation/navigationConfig.js";
+import { FOOTER_NAV_ITEMS, VIP_JOIN_URL } from "./navigation/navigationConfig.js";
 import {
   DATASET_STATE,
   deriveDatasetState,
@@ -4657,6 +4657,12 @@ function MainApp() {
 
           {/* Right actions */}
           <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            {!isMobile&&<a href={VIP_JOIN_URL}
+              style={{display:"flex",alignItems:"center",gap:5,height:30,padding:"0 12px",borderRadius:20,border:"1px solid #efd28a",background:"linear-gradient(135deg,#fff9eb,#fff1ca)",color:"#8f610d",fontSize:12,fontWeight:750,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap",textDecoration:"none"}}
+              onMouseEnter={e=>{e.currentTarget.style.background="linear-gradient(135deg,#fff5d9,#ffe9ad)";e.currentTarget.style.borderColor="#e4bd55";e.currentTarget.style.transform="translateY(-1px)";}}
+              onMouseLeave={e=>{e.currentTarget.style.background="linear-gradient(135deg,#fff9eb,#fff1ca)";e.currentTarget.style.borderColor="#efd28a";e.currentTarget.style.transform="none";}}>
+              <span aria-hidden="true" style={{fontSize:13,color:"#d49720"}}>✦</span> 加入 VIP
+            </a>}
             {!isMobile&&<button onClick={()=>setShowBriefing(true)}
               style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
               onMouseEnter={e=>{e.currentTarget.style.background="#07c16014";e.currentTarget.style.color="#07c160";e.currentTarget.style.borderColor="#07c16044";}}
