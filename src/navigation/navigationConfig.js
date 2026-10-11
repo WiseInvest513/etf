@@ -1,22 +1,20 @@
 export const NAV_GROUPS = [
   { key: "guide", label: "核心介绍", tab: "guide" },
-  { key: "funds", label: "基金数据", children: [
-    { id: "nasdaq", label: "纳指被动", description: "纳斯达克 100 场外基金" },
-    { id: "sp500", label: "标普 500", description: "标普 500 场外基金" },
-    { id: "etf", label: "场内 ETF", description: "行情、溢价与成交" },
-    { id: "active", label: "美股主动", description: "主动型 QDII 产品" },
-  ]},
+  { key: "learn", label: "ETF 学习", href: "/learn/etf" },
+  { key: "nasdaq", label: "纳指基金", tab: "nasdaq" },
+  { key: "sp500", label: "标普基金", tab: "sp500" },
+  { key: "etf", label: "场内 ETF", tab: "etf" },
+  { key: "active", label: "主动基金", tab: "active" },
   { key: "onchain", label: "链上美股", tab: "onchain", featured: true, badge: "新" },
-  { key: "tools", label: "投资工具", children: [
-    { id: "lazy", label: "懒人组合", description: "经典资产配置组合", href: "/lazy" },
-    { id: "qdii", label: "QDII 估值", description: "主动 QDII 盘中估值", href: "/qdii" },
-    { id: "export", label: "导出数据", description: "生成数据快照", href: "/export" },
-  ]},
+  { key: "lazy", label: "懒人组合", href: "/lazy" },
+  { key: "qdii", label: "QDII 估值", href: "/qdii" },
+  { key: "export", label: "导出数据", href: "/export" },
 ];
 
 export const VIP_JOIN_URL = "https://vip.wise-invest.org/join";
 
 export const FOOTER_NAV_ITEMS = [
+  { id: "learn", label: "ETF 学习", href: "/learn/etf" },
   { id: "nasdaq", label: "纳指被动" }, { id: "sp500", label: "标普 500" },
   { id: "etf", label: "场内 ETF" }, { id: "active", label: "美股主动" },
   { id: "onchain", label: "链上美股" },

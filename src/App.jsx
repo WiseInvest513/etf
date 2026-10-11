@@ -1,17 +1,11 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Area, AreaChart, ReferenceLine, ComposedChart, Line, LineChart, PieChart, Pie, Cell } from "recharts";
 import { Analytics } from "@vercel/analytics/react";
-import LazyPage from "./LazyPage.jsx";
-import QDIIPage from "./QDIIPage.jsx";
 import { AuthProvider, useAuth } from "./auth/AuthProvider.jsx";
 import WiseLoginGate from "./auth/WiseLoginGate.jsx";
 import { currentReturnTo } from "./auth/auth-client.js";
 import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
-import OnchainStocksPage from "./onchain/OnchainStocksPage.jsx";
-import ProductDetailPage from "./product/ProductDetailPage.jsx";
-import TodayDataPage from "./seo/TodayDataPage.jsx";
-import PathChooserPage from "./chooser/PathChooserPage.jsx";
 import { CATEGORY_PAGE_META, HOME_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
 import { FOOTER_NAV_ITEMS, VIP_JOIN_URL } from "./navigation/navigationConfig.js";
@@ -28,6 +22,14 @@ import {
   resolveLocalAuthBypass,
   shouldRequireAuth,
 } from "./data/model.js";
+
+const LazyPage = lazy(() => import("./LazyPage.jsx"));
+const QDIIPage = lazy(() => import("./QDIIPage.jsx"));
+const OnchainStocksPage = lazy(() => import("./onchain/OnchainStocksPage.jsx"));
+const ProductDetailPage = lazy(() => import("./product/ProductDetailPage.jsx"));
+const TodayDataPage = lazy(() => import("./seo/TodayDataPage.jsx"));
+const PathChooserPage = lazy(() => import("./chooser/PathChooserPage.jsx"));
+const EtfLearningPage = lazy(() => import("./learn/EtfLearningPage.jsx"));
 
 // ─── Community Mode ───────────────────────────────────────────────────────────
 // "telegram" → 弹窗显示电报图片 + 点击加入群聊按钮
@@ -1141,16 +1143,12 @@ function SectionHeader({title,subtitle,count,color=C.accent,timestamp,sortable})
 }
 
 function DataStatusBanner({dataset,label="数据"}){
-  if(!dataset||dataset.status===DATASET_STATE.FRESH||dataset.status===DATASET_STATE.LOADING) return null;
+  if(!dataset||![DATASET_STATE.ERROR,DATASET_STATE.EMPTY].includes(dataset.status)) return null;
   const tone=dataset.status===DATASET_STATE.ERROR?{bg:C.redBg,color:C.red,border:`${C.red}30`}
-    :dataset.status===DATASET_STATE.EMPTY?{bg:C.borderLight,color:C.textMuted,border:C.border}
-    :{bg:C.orangeBg,color:C.orange,border:`${C.orange}35`};
-  const text=dataset.status===DATASET_STATE.ERROR?`${label}加载失败`
-    :dataset.status===DATASET_STATE.EMPTY?`${label}暂无可用数据`
-    :dataset.status===DATASET_STATE.STALE?`${label}正在使用上次有效数据`
-    :`${label}仅部分字段更新成功`;
+    :{bg:C.borderLight,color:C.textMuted,border:C.border};
+  const text=dataset.status===DATASET_STATE.ERROR?`${label}暂时无法加载`:`${label}暂无可用数据`;
   return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 13px",margin:"0 0 16px",borderRadius:10,background:tone.bg,color:tone.color,border:`1px solid ${tone.border}`,fontSize:12}}>
-    <span>{text}{dataset.asOf?` · 数据截至 ${dataset.asOf}`:""}{dataset.source?` · ${dataset.source}`:""}</span>
+    <span>{text}</span>
   </div>;
 }
 
@@ -4131,22 +4129,43 @@ function ReportPage() {
 
 // ─── UserCenter ───────────────────────────────────────────────────────────────
 // ─── Main App ─────────────────────────────────────────────────────────────────
+function DeferredPage({ children, compact = false }) {
+  return (
+    <Suspense fallback={(
+      <div role="status" aria-live="polite" style={{
+        minHeight:compact?280:"100dvh",
+        display:"grid", placeItems:"center",
+        padding:24, background:compact?"transparent":"#f7f9fc",
+      }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, color:"#64748b", fontSize:13, fontWeight:650 }}>
+          <span aria-hidden="true" style={{ width:18, height:18, borderRadius:"50%", border:"2px solid #dbe4f4", borderTopColor:"#315bd6", animation:"routeLoadingSpin .7s linear infinite" }}/>
+          正在加载页面…
+        </div>
+        <style>{`@keyframes routeLoadingSpin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    )}>
+      {children}
+    </Suspense>
+  );
+}
+
 export default function App() {
   return <AuthProvider localBypass={LOCAL_AUTH_BYPASS}><AppRoutes/></AuthProvider>;
 }
 
 function AppRoutes() {
   const path=window.location.pathname;
+  if(path.replace(/\/$/, "") === "/learn/etf" || path.startsWith("/learn/etf/articles/")) return <DeferredPage><EtfLearningPage path={path}/></DeferredPage>;
   const productMatch=path.match(/^\/(fund|etf)\/(\d{6})\/?$/);
-  if(productMatch) return <ProductDetailPage type={productMatch[1]} code={productMatch[2]}/>;
-  if(path==="/today/qdii-limits") return <TodayDataPage kind="limits"/>;
-  if(path==="/today/etf-premium") return <TodayDataPage kind="premium"/>;
-  if(path==="/chooser") return <PathChooserPage/>;
+  if(productMatch) return <DeferredPage><ProductDetailPage type={productMatch[1]} code={productMatch[2]}/></DeferredPage>;
+  if(path==="/today/qdii-limits") return <DeferredPage><TodayDataPage kind="limits"/></DeferredPage>;
+  if(path==="/today/etf-premium") return <DeferredPage><TodayDataPage kind="premium"/></DeferredPage>;
+  if(path==="/chooser") return <DeferredPage><PathChooserPage/></DeferredPage>;
   if(path==="/admin") return <AdminPage/>;
   if(path==="/login") return <WiseLoginGate><MainApp/></WiseLoginGate>;
   if(path==="/export") return <WiseLoginGate><ReportPage/></WiseLoginGate>;
-  if(path==="/lazy") return <WiseLoginGate><LazyPage/></WiseLoginGate>;
-  if(path==="/qdii") return <WiseLoginGate><QDIIPage/></WiseLoginGate>;
+  if(path==="/lazy") return <WiseLoginGate><DeferredPage><LazyPage/></DeferredPage></WiseLoginGate>;
+  if(path==="/qdii") return <WiseLoginGate><DeferredPage><QDIIPage/></DeferredPage></WiseLoginGate>;
   if(["/nasdaq","/sp500","/etf","/active","/watchlist"].includes(path)) {
     return <WiseLoginGate><MainApp/></WiseLoginGate>;
   }
@@ -4586,7 +4605,7 @@ function MainApp() {
           </div>
         </div>
       )}
-      {showBriefing&&!showDisclaimer&&(
+      {showBriefing&&!showDisclaimer&&!mobileMenuOpen&&(
         COMMUNITY_MODE==="telegram"
           ? <TelegramGroupChatModal onClose={()=>setShowBriefing(false)}/>
           : <GroupChatModal onClose={()=>setShowBriefing(false)}/>
@@ -4688,7 +4707,7 @@ function MainApp() {
                 : <span style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
               }
               </button>}
-            <button onClick={()=>setMobileMenuOpen(o=>!o)} className="hamburger-btn" aria-label={mobileMenuOpen?"关闭菜单":"打开菜单"} aria-expanded={mobileMenuOpen} aria-controls="site-mobile-menu"
+            <button onClick={()=>{setShowBriefing(false);setMobileMenuOpen(o=>!o);}} className="hamburger-btn" aria-label={mobileMenuOpen?"关闭菜单":"打开菜单"} aria-expanded={mobileMenuOpen} aria-controls="site-mobile-menu"
               style={{display:"none",flexDirection:"column",gap:5,background:"none",border:"none",cursor:"pointer",padding:6}}>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",transform:mobileMenuOpen?"rotate(45deg) translateY(7px)":"none"}}/>
               <span style={{display:"block",width:22,height:2,background:mobileMenuOpen?C.accent:C.textMuted,borderRadius:2,transition:"all 0.25s",opacity:mobileMenuOpen?0:1}}/>
@@ -4762,6 +4781,10 @@ function MainApp() {
                 <div style={{fontSize:11,color:C.textDim,lineHeight:1.6}}>把今日申购额度、ETF 溢价、费率、跟踪误差和成交情况放在一起比较。</div>
               </div>
               <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:132,padding:"11px 15px",borderRadius:11,background:C.accent,color:"#fff",fontSize:11,fontWeight:800}}>开始比较 →</span>
+            </a>
+            <a href="/learn/etf" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:18,marginBottom:isMobile?20:28,padding:isMobile?"16px 18px":"17px 24px",border:`1px solid ${C.border}`,borderRadius:12,background:C.card,color:C.text,textDecoration:"none"}}>
+              <span style={{fontSize:isMobile?12:13,lineHeight:1.8}}><strong style={{color:C.accent}}>ETF 学习</strong><span style={{marginLeft:12}}>从 ETF 是什么，到纳指100与标普500，先弄清楚自己买的是什么。</span></span>
+              <span style={{fontSize:12,color:C.accent,fontWeight:750,whiteSpace:"nowrap"}}>开始阅读 →</span>
             </a>
             {/* Stat row */}
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(5,1fr)",gap:isMobile?10:16,marginBottom:isMobile?20:36}}>
@@ -4936,7 +4959,7 @@ function MainApp() {
           </>
         )}
 
-        {activeTab==="onchain"&&<OnchainStocksPage/>}
+        {activeTab==="onchain"&&<DeferredPage compact><OnchainStocksPage/></DeferredPage>}
 
         {/* ════ NASDAQ ════ */}
         {activeTab==="nasdaq"&&(

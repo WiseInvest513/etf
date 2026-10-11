@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { LEARNING_PAGES } from "../src/learn/learning-seo.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const catalog = JSON.parse(await readFile(path.join(root, "catalog/products.v1.json"), "utf8"));
@@ -9,6 +10,7 @@ const corePaths = ["/", "/guide", "/nasdaq", "/sp500", "/etf", "/active", "/onch
 const escapeXml = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
 const entries = [
   ...corePaths.map((route) => ({ route, lastmod: catalog.metadata_as_of || null })),
+  ...LEARNING_PAGES.map((page) => ({ route: page.path, lastmod: page.updatedAt })),
   ...catalog.products.map((product) => ({
     route: `/${product.product_type === "etf" ? "etf" : "fund"}/${product.code}`,
     lastmod: product.metadata_as_of || catalog.metadata_as_of || null,

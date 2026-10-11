@@ -1,0 +1,24 @@
+{
+  "createdAt": "2026-10-11",
+  "tool": "OpenAI built-in imagegen",
+  "encoding": "JPEG quality 86, converted from generated PNG with sips; no creative edits",
+  "assets": [
+    {
+      "file": "etf-basket.jpg",
+      "purpose": "First article list cover only; not displayed as an article hero",
+      "prompt": "A wide 3:2 educational editorial illustration on a pure white background. Transparent silver-glass ETF basket with subtle blue accents, generic chip, cloud, shopping, medical, factory, bank and globe tiles gathered through simple arrows into the basket, then three fund share tickets to the right. Minimal polished 3D materials, restrained blue mint and lavender. Only label ETF. No company logos, real holding weights, percentages, market prices, return claims or decorative typography. Keep clean whitespace and a clear assets-to-fund-to-shares relationship."
+    },
+    {
+      "file": "index-baskets.jpg",
+      "purpose": "Conceptual selection-scope comparison; not actual holdings or industry weights",
+      "prompt": "A wide 2:1 educational comparison illustration on pure white. Two equal-size transparent silver-glass baskets aligned at the same baseline. Left basket labeled 100, with generic chip, cloud, retail, medical and factory tiles. Right basket labeled 500, with generic chip, bank, factory, energy, medical and retail tiles. Restrained blue mint lavender materials, no real brands, percentages, industry weights, prices or return claims. Neutral comparison, neither basket portrayed as safer or superior. The only lettering is 100 and 500. Clean whitespace suitable for website article figure."
+    }
+  ],
+  "vectorAssets": {
+    "createdAt": "2026-10-11",
+    "method": "Repository-native SVG diagrams and editorial covers; no external logos or generated market charts",
+    "covers": ["purchase-routes", "major-us-etfs", "nasdaq-vs-sp500", "compare-index-funds", "limits-premium-nav", "understand-returns", "historical-drawdowns", "long-term-plan"],
+    "diagrams": ["purchase-map", "etf-map", "index-overlap", "cost-layers", "premium-mechanics", "return-bridge", "drawdown-path", "plan-loop"],
+    "note": "Figures with numeric prices, weights or paths are explicitly fictional teaching examples; historical statistics remain in dated, sourced tables. Covers appear only in the learning list."
+  }
+}

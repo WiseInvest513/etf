@@ -26,6 +26,14 @@
       "destination": "/today/etf-premium/index.html"
     },
     {
+      "source": "/learn/etf",
+      "destination": "/learn/etf/index.html"
+    },
+    {
+      "source": "/learn/etf/articles/:slug",
+      "destination": "/learn/etf/articles/:slug/index.html"
+    },
+    {
       "source": "/nasdaq",
       "destination": "/nasdaq/index.html"
     },
