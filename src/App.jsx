@@ -1355,11 +1355,9 @@ function ChartTooltip({active,payload,label,unit="%"}) {
 function TelegramGroupChatModal({onClose}) {
   const [tab, setTab] = useState("telegram");
   const handleClose = () => {
-    localStorage.setItem("group_chat_last_shown", String(Date.now()));
     onClose();
   };
   const handleNoShow = () => {
-    localStorage.setItem("group_chat_no_show", new Date().toDateString());
     onClose();
   };
   const isTelegram = tab === "telegram";
@@ -1417,7 +1415,7 @@ function TelegramGroupChatModal({onClose}) {
           ) : null}
           <button onClick={handleNoShow}
             style={{background:"none",border:"none",fontSize:12,color:C.textDim,cursor:"pointer",textDecoration:"none",textAlign:"center"}}>
-            今天不再展示
+            关闭
           </button>
         </div>
       </div>
@@ -1427,11 +1425,9 @@ function TelegramGroupChatModal({onClose}) {
 
 function GroupChatModal({onClose}) {
   const handleClose = () => {
-    localStorage.setItem("group_chat_last_shown", String(Date.now()));
     onClose();
   };
   const handleNoShow = () => {
-    localStorage.setItem("group_chat_no_show", new Date().toDateString());
     onClose();
   };
   return (
@@ -4188,20 +4184,13 @@ function MainApp() {
   const [,setScrolled]=useState(false);
   const [showBackToTop,setShowBackToTop]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
-  const [showDisclaimer,setShowDisclaimer]=useState(()=>{
-    if(typeof window!=="undefined"&&window.innerWidth<=768){
-      localStorage.setItem("etf-disclaimer","1");
-      return false;
-    }
-    return !localStorage.getItem("etf-disclaimer");
-  });
-  const [showBriefing,setShowBriefing]=useState(()=>{
-    if(!localStorage.getItem("etf-disclaimer")) return false;
-    if(localStorage.getItem("group_chat_no_show")===new Date().toDateString()) return false;
-    const last=localStorage.getItem("group_chat_last_shown");
-    if(!last) return true;
-    return Date.now()-parseInt(last)>3*60*60*1000;
-  });
+  const [showDisclaimer,setShowDisclaimer]=useState(false);
+  const [showBriefing,setShowBriefing]=useState(false);
+  useEffect(() => {
+    const hide = () => setShowBriefing(false);
+    window.addEventListener("wise-popup:opening", hide);
+    return () => window.removeEventListener("wise-popup:opening", hide);
+  }, []);
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
   const [showUserCenter,setShowUserCenter]=useState(false);
   const [datasets,setDatasets]=useState({
@@ -4578,7 +4567,7 @@ function MainApp() {
   const dismissDisclaimer = ()=>{
     localStorage.setItem("etf-disclaimer","1");
     setShowDisclaimer(false);
-    if(localStorage.getItem("briefing_date")!==new Date().toDateString()) setShowBriefing(true);
+    // Do not open a second automatic promotion.
   };
 
   return (
@@ -4682,7 +4671,8 @@ function MainApp() {
               onMouseLeave={e=>{e.currentTarget.style.background="linear-gradient(135deg,#fff9eb,#fff1ca)";e.currentTarget.style.borderColor="#efd28a";e.currentTarget.style.transform="none";}}>
               <span aria-hidden="true" style={{fontSize:13,color:"#d49720"}}>✦</span> 加入 VIP
             </a>}
-            {!isMobile&&<button onClick={()=>setShowBriefing(true)}
+            <button type="button" data-wise-vote="">为 Wise 投票</button>
+            {!isMobile&&<button onClick={()=>{window.dispatchEvent(new Event("wise-community:opening"));setShowBriefing(true);}}
               style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
               onMouseEnter={e=>{e.currentTarget.style.background="#07c16014";e.currentTarget.style.color="#07c160";e.currentTarget.style.borderColor="#07c16044";}}
               onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=C.textMuted;e.currentTarget.style.borderColor=C.borderLight;}}>
@@ -4717,7 +4707,7 @@ function MainApp() {
         </div>
         {/* Mobile dropdown menu */}
         {mobileMenuOpen&&(
-          <MobileNavigation activeTab={activeTab} onNavigate={switchTab} onClose={()=>setMobileMenuOpen(false)} onCommunity={()=>setShowBriefing(true)}/>
+          <MobileNavigation activeTab={activeTab} onNavigate={switchTab} onClose={()=>setMobileMenuOpen(false)} onCommunity={()=>{window.dispatchEvent(new Event("wise-community:opening"));setShowBriefing(true);}}/>
         )}
       </header>
 
