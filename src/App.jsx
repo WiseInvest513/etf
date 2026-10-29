@@ -4186,11 +4186,7 @@ function MainApp() {
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
   const [showDisclaimer,setShowDisclaimer]=useState(false);
   const [showBriefing,setShowBriefing]=useState(false);
-  useEffect(() => {
-    const hide = () => setShowBriefing(false);
-    window.addEventListener("wise-popup:opening", hide);
-    return () => window.removeEventListener("wise-popup:opening", hide);
-  }, []);
+  useEffect(() => { setShowBriefing(true); }, []);
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
   const [showUserCenter,setShowUserCenter]=useState(false);
   const [datasets,setDatasets]=useState({
@@ -4671,7 +4667,7 @@ function MainApp() {
               onMouseLeave={e=>{e.currentTarget.style.background="linear-gradient(135deg,#fff9eb,#fff1ca)";e.currentTarget.style.borderColor="#efd28a";e.currentTarget.style.transform="none";}}>
               <span aria-hidden="true" style={{fontSize:13,color:"#d49720"}}>✦</span> 加入 VIP
             </a>}
-            <button type="button" data-wise-vote="">为 Wise 投票</button>
+
             {!isMobile&&<button onClick={()=>{window.dispatchEvent(new Event("wise-community:opening"));setShowBriefing(true);}}
               style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,border:`1px solid ${C.borderLight}`,background:"none",color:C.textMuted,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap"}}
               onMouseEnter={e=>{e.currentTarget.style.background="#07c16014";e.currentTarget.style.color="#07c160";e.currentTarget.style.borderColor="#07c16044";}}
