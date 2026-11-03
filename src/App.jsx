@@ -1352,21 +1352,29 @@ function ChartTooltip({active,payload,label,unit="%"}) {
 
 // ─── Disclaimer Modal ─────────────────────────────────────────────────────────
 // ─── Daily Briefing Modal ─────────────────────────────────────────────────────
-function TelegramGroupChatModal({onClose}) {
+function TelegramGroupChatModal({onClose,automatic=false}) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
-    const show = () => window.dispatchEvent(new Event("wise-community:request"));
+    let requested = false;
+    const show = () => {
+      if (requested || !window.WiseCommunityPopup) return;
+      requested = true;
+      if (automatic) {
+        if (!window.WiseCommunityPopup.openAutomatic()) closeRef.current();
+      } else window.dispatchEvent(new Event("wise-community:request"));
+    };
     const closed = () => closeRef.current();
     window.addEventListener("wise-community:ready", show);
     window.addEventListener("wise-community:closed", closed);
-    show();
+    const timer = window.setTimeout(show, 0);
     return () => {
+      window.clearTimeout(timer);
       window.removeEventListener("wise-community:ready", show);
       window.removeEventListener("wise-community:closed", closed);
       window.dispatchEvent(new Event("wise-community:close"));
     };
-  }, []);
+  }, [automatic]);
   return null;
 }
 function GroupChatModal(props) { return <TelegramGroupChatModal {...props}/>; }
@@ -4093,7 +4101,7 @@ function MainApp() {
     return !localStorage.getItem("etf-disclaimer");
   });
   const [showBriefing,setShowBriefing]=useState(false);
-  useEffect(() => { setShowBriefing(true); }, []);
+  useEffect(() => { setShowBriefing("automatic"); }, []);
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
   const [showUserCenter,setShowUserCenter]=useState(false);
   const [datasets,setDatasets]=useState({
@@ -4499,8 +4507,8 @@ function MainApp() {
       )}
       {showBriefing&&!showDisclaimer&&!mobileMenuOpen&&(
         COMMUNITY_MODE==="telegram"
-          ? <TelegramGroupChatModal onClose={()=>setShowBriefing(false)}/>
-          : <GroupChatModal onClose={()=>setShowBriefing(false)}/>
+          ? <TelegramGroupChatModal automatic={showBriefing === "automatic"} onClose={()=>setShowBriefing(false)}/>
+          : <GroupChatModal automatic={showBriefing === "automatic"} onClose={()=>setShowBriefing(false)}/>
       )}
       {showUserCenter&&user&&(
         <UserCenter
@@ -5007,9 +5015,9 @@ function MainApp() {
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
               {[
                 {label:"投资主站",   href:"https://www.wise-invest.org",  icon:"🌐"},
-                {label:"Wise-Witness",href:"https://www.wise-witness.com",icon:"🏦"},
-                {label:"Wise-Hold",  href:"https://www.wise-hold.com",    icon:"📈"},
-                {label:"Wise-SIM",   href:"https://www.wise-sim.org",     icon:"📱"},
+                {label:"VIP",        href:"https://vip.wise-invest.org/",   icon:"👑"},
+                {label:"CHAIN",      href:"https://chain.wise-invest.org/", icon:"📈"},
+                {label:"CRYPTO",     href:"https://crypto.wise-invest.org/",icon:"◈"},
               ].map(l=>(
                 <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer"
                   className="footer-link"
