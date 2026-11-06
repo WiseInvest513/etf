@@ -233,10 +233,10 @@ for (const page of decisionPages) {
 
 for (const page of LEARNING_PAGES) {
   let html = replaceHead(template, {
-    title: page.title, description: page.description, url: `${origin}${page.path}`,
+    title: page.title, description: page.description, url: page.canonical || `${origin}${page.path}`,
     structured: learningStructuredData(page, origin), marker: 'data-wise-learning="true"',
   });
-  html = html.replace(/<meta property="og:type" content="[^"]*"\s*\/>/, `<meta property="og:type" content="${page.article ? "article" : "website"}" />`)
+  html = html.replace(/<meta property="og:type" content="[^"]*"\s*\/>/, `<meta property="og:type" content="website" />`)
     .replace(/<meta property="og:image" content="[^"]*"\s*\/>/, `<meta property="og:image" content="${origin}${page.article?.cover.src || BASKET_IMAGE.src}" />`);
   html = withFallback(html, `${fallbackStyle}<style>.seo-fallback article>section{margin-top:42px}.seo-fallback article p{line-height:1.95;margin:18px 0}.seo-fallback figure{margin:28px 0}.seo-fallback figcaption{font-size:12px;color:#73839b}.seo-fallback table{border-collapse:collapse;width:100%;min-width:520px;font-size:14px}.seo-fallback th,.seo-fallback td{padding:14px;border:1px solid #e1e6ef;text-align:left}.seo-fallback caption{text-align:left;margin:12px 0}.seo-fallback li{margin:12px 0}</style>${learningFallback(page)}`);
   const destination = path.join(dist, page.path.slice(1), "index.html");

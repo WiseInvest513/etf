@@ -24,7 +24,8 @@ for (const route of routes) {
   const file = path.join(dist, route.slice(1), "index.html");
   await access(file);
   const html = await readFile(file, "utf8");
-  const canonical = `<link rel="canonical" href="${origin}${route}" />`;
+  const target = LEARNING_PAGES.find(page => page.path === route)?.canonical || `${origin}${route}`;
+  const canonical = `<link rel="canonical" href="${target}" />`;
   if (!html.includes(canonical)) throw new Error(`Missing canonical: ${route}`);
   if (!html.includes('type="application/ld+json"')) throw new Error(`Missing structured data: ${route}`);
   if (!html.includes('<div id="root">') || !html.includes("seo-fallback")) throw new Error(`Missing static fallback: ${route}`);
@@ -68,7 +69,7 @@ for (const product of catalog.products) {
 }
 
 const sitemap = await readFile(path.join(dist, "sitemap.xml"), "utf8");
-for (const route of routes) {
+for (const route of routes.filter(route => !LEARNING_PAGES.some(page => page.path === route && page.canonical))) {
   if (!sitemap.includes(`<loc>${origin}${route}</loc>`)) throw new Error(`Route missing from sitemap: ${route}`);
 }
 if (sitemap.includes("<changefreq>") || sitemap.includes("<priority>")) throw new Error("Sitemap contains ignored priority hints");
@@ -82,18 +83,10 @@ for (const page of LEARNING_PAGES) {
     await access(path.join(dist, article.cover.src.slice(1)));
   }
   if (page.article) {
-    if (!html.includes('"@type":"Article"')) throw new Error("Learning article schema missing");
-    for (const section of page.article.sections) {
-      if (!html.includes(section.title)) throw new Error(`Article section missing from static HTML: ${section.id}`);
-    }
-    if (!html.includes(`${origin}${page.article.cover.src}`)) throw new Error(`Article sharing image missing: ${page.path}`);
-    await access(path.join(dist, page.article.cover.src.slice(1)));
-    for (const image of page.article.sections.flatMap((section) => section.blocks).filter((block) => block.type === "figure").map((block) => block.image)) {
-      if (!html.includes(`<img src="${image.src}"`)) throw new Error(`Article image missing: ${image.src}`);
-      await access(path.join(dist, image.src.slice(1)));
-    }
-    if (html.includes(`<img src="${page.article.cover.src}"`)) throw new Error("Cover must not appear in the article body");
-    if (!html.includes("资料来源") || !html.includes(page.article.updatedAt)) throw new Error("Article sources/date missing");
+    if (!html.includes(`href="${page.canonical}"`)) throw new Error(`Missing main article link: ${page.path}`);
+    if (!html.includes("前往主站阅读全文")) throw new Error(`Missing migration notice: ${page.path}`);
+    if (html.includes("learn-prose-section") || html.includes("articleBody")) throw new Error(`Duplicated body: ${page.path}`);
+    if (sitemap.includes(`<loc>${origin}${page.path}</loc>`)) throw new Error(`Legacy page remains in sitemap: ${page.path}`);
   }
 }
 
