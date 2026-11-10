@@ -11,11 +11,11 @@ import {
   productRoute,
   subscriptionState,
 } from "./product-detail-model.js";
-import { productSeoTitle } from "../seo/seo-content.js";
+import { productSeoTitle, SITE_ORIGIN } from "../seo/seo-content.js";
 import { productIndexKey } from "../chooser/chooser-model.js";
+import { etfPremiumView, premiumHistoryView } from "../data/model.js";
 import "./product-detail.css";
 
-const SITE_ORIGIN = "https://wise-etf.com";
 const SHARE_IMAGE = `${SITE_ORIGIN}/@Wise%20%E6%8A%95%E8%B5%84%E6%9C%89%E6%9C%AF%20(2).png`;
 
 const hasNumber = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
@@ -126,6 +126,7 @@ export default function ProductDetailPage({ type, code }) {
   const [liveRow, setLiveRow] = useState(null);
   const [liveRows, setLiveRows] = useState([]);
   const [dataset, setDataset] = useState({ status: "loading", source: null, asOf: null, error: null });
+  const [premiumHistory, setPremiumHistory] = useState({ points: [], status: "idle", source: null, asOf: null });
   const [favorite, setFavorite] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("etf-favorites") || "[]");
@@ -200,6 +201,30 @@ export default function ProductDetailPage({ type, code }) {
     };
   }, [product]);
 
+  useEffect(() => {
+    if (!product || product.product_type !== "etf") return undefined;
+    const controller = new AbortController();
+    setPremiumHistory({ points: [], status: "loading", source: null, asOf: null });
+    fetch(`/api/premium_history/${product.code}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => {
+        const points = Array.isArray(payload?.data) ? payload.data : [];
+        setPremiumHistory({
+          points,
+          status: payload?.status || (points.length ? "fresh" : "empty"),
+          source: payload?.source || null,
+          asOf: payload?.as_of || null,
+        });
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") setPremiumHistory({ points: [], status: "error", source: null, asOf: null });
+      });
+    return () => controller.abort();
+  }, [product]);
+
   if (!product) {
     return (
       <main className="pd-not-found">
@@ -209,12 +234,21 @@ export default function ProductDetailPage({ type, code }) {
   }
 
   const subscription = subscriptionModel(row);
+  const premiumView = isEtf ? etfPremiumView(row, { warningAt: 1.5, dangerAt: 3 }) : null;
+  const historyView = isEtf ? premiumHistoryView(premiumHistory.points, {
+    currentPremium: premiumView?.value,
+    canAlert: Boolean(premiumView?.canAlert),
+    usable: premiumHistory.source !== "reference" && premiumHistory.status !== "empty" && premiumHistory.status !== "error",
+    unusableReason: premiumHistory.source === "reference" ? "reference_snapshot" : null,
+  }) : null;
   const decision = isEtf
-    ? !hasNumber(row.premium)
+    ? !premiumView.available
       ? { tone: "neutral", title: "溢价暂不可用", text: "先核对场内价格与基金净值日期，再决定是否交易。" }
-      : Number(row.premium) >= 3
+      : !premiumView.canAlert
+        ? { tone: "neutral", title: premiumView.label === "口径未对齐" ? "当前溢价口径未对齐" : "当前溢价仅供参考", text: "价格日和净值日不是同一天时，不会把这个数字当成高溢价预警。" }
+        : premiumView.severity === "danger"
         ? { tone: "down", title: "当前属于高溢价区间", text: "追价可能同时承担指数波动和溢价回落风险，建议先比较同指数产品。" }
-        : Number(row.premium) >= 1.5
+        : premiumView.severity === "warning"
           ? { tone: "warn", title: "当前溢价需要留意", text: "购买前应比较其他场内ETF、场外额度以及两侧数据日期。" }
           : { tone: "up", title: "当前未进入高溢价区间", text: "仍需核对实时价格、净值日期、成交量和交易费用。" }
     : subscriptionState(row) === "suspended"
@@ -265,11 +299,11 @@ export default function ProductDetailPage({ type, code }) {
             </div>
           </div>
           <div className="pd-primary-card">
-            <span>{isEtf ? "最新溢价率" : "近一年滚动"}</span>
-            <strong className={`pd-tone-${metricTone(isEtf ? row.premium : row.rolling_1y)}`}>
-              {signedPercent(isEtf ? row.premium : row.rolling_1y)}
+            <span>{isEtf ? (premiumView.basisLabel || "最新溢价率") : "近一年滚动"}</span>
+            <strong className={`pd-tone-${isEtf ? (premiumView.canAlert && premiumView.severity === "danger" ? "down" : premiumView.canAlert && premiumView.severity === "warning" ? "warn" : "neutral") : metricTone(row.rolling_1y)}`}>
+              {isEtf ? (premiumView.available ? signedPercent(premiumView.value) : "—") : signedPercent(row.rolling_1y)}
             </strong>
-            <small>{isEtf ? "收盘价相对最新已公布净值" : `截至 ${row.rolling_1y_as_of || row.nav_date || dataset.asOf || "最新净值日"}`}</small>
+            <small>{isEtf ? `${premiumView.label}${premiumView.quoteAsOf || premiumView.referenceAsOf ? ` · 价格 ${premiumView.quoteAsOf || "待更新"} · 净值 ${premiumView.referenceAsOf || "待更新"}` : ""}` : `截至 ${row.rolling_1y_as_of || row.nav_date || dataset.asOf || "最新净值日"}`}</small>
           </div>
         </section>
 
@@ -283,6 +317,19 @@ export default function ProductDetailPage({ type, code }) {
           <div><span>当前判断</span><h2>{decision.title}</h2><p>{decision.text}</p></div>
           <a href={isEtf ? "/today/etf-premium" : "/today/qdii-limits"}>查看完整{isEtf ? "溢价榜" : "额度清单"} →</a>
         </section>
+
+        {isEtf && (
+          <section className="pd-panel pd-history">
+            <div className="pd-section-title"><span>溢价是否偏高</span><small>同日收盘价相对同日净值，近 30 / 90 个交易日{premiumHistory.asOf ? ` · 截至 ${premiumHistory.asOf}` : ""}</small></div>
+            {premiumHistory.status === "loading" ? (
+              <p className="pd-history-copy">正在读取同口径历史溢价…</p>
+            ) : premiumHistory.status === "error" ? (
+              <p className="pd-history-copy">历史溢价暂时读不到，本次先不判断分位。</p>
+            ) : (
+              <p className="pd-history-copy">{historyView.caption}</p>
+            )}
+          </section>
+        )}
 
         {chooserIndex && <a className="pd-cross-route" href={`/chooser?index=${chooserIndex}&amount=1000&mode=monthly&broker=yes`}>
           <div><span>换一个角度比较</span><b>这只产品和同指数的场内、场外方案有什么区别？</b><small>同时查看今日额度、溢价、费率、跟踪误差和成交情况</small></div>

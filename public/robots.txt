@@ -2,5 +2,8 @@ User-agent: *
 Allow: /
 Disallow: /admin
 Disallow: /api/
+Disallow: /login
+Disallow: /qdii
+Disallow: /lazy
 
-Sitemap: https://wise-etf.com/sitemap.xml
+Sitemap: https://www.wise-etf.com/sitemap.xml

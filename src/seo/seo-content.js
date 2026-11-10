@@ -1,10 +1,79 @@
-export const SITE_ORIGIN = "https://wise-etf.com";
+export const SITE_ORIGIN = "https://www.wise-etf.com";
 
 export const HOME_SEO = {
   path: "/",
-  title: "WiseETF - 纳指与标普500基金限购、ETF溢价查询",
+  title: "纳指与标普500基金限购、ETF溢价查询 - WiseETF",
   description: "查询纳指100、标普500与美股QDII基金的申购额度、费率、近一年收益，以及场内ETF溢价率和数据日期。",
+  heading: "纳指与标普500基金限购、ETF溢价查询",
+  lead: "先看今日还能申购的场外QDII、场内ETF溢价，以及产品费率与数据日期。公开额度和溢价不用登录。",
 };
+
+export const GUIDE_SEO = {
+  path: "/guide",
+  title: "纳指和标普500怎么买：场外QDII、场内ETF、美股直购对比 - WiseETF",
+  description: "比较纳指和标普500的三种购买路径：场外QDII、场内ETF和美股直购，并通向今日额度、溢价查询和主站开户教程。",
+  heading: "纳指和标普500怎么买：场外 QDII、场内 ETF、美股直购对比",
+  lead: "同一指数通常有三条路可走。先分清账户、额度、溢价和确认规则，再查当日数字。",
+};
+
+export const ONCHAIN_SEO = {
+  path: "/onchain",
+  title: "链上美股ETF - QQQ与SPY代币化现货购买路径 - WiseETF",
+  description: "比较场外QDII、场内ETF与USDT代币化美股现货的额度、溢价、费率和产品结构，并通向主站开户教程。",
+  heading: "链上美股现货：和场外 QDII、场内 ETF 怎么比",
+  lead: "把额度限制、场内溢价和代币化现货路径放在一起看，再决定要不要继续走场内、场外或链上。",
+};
+
+export const MAIN_SITE_TUTORIALS = [
+  { label: "纳指和标普怎么买", href: "https://www.wise-invest.org/articles/index/gCSTzdEB" },
+  { label: "限购和溢价怎么看", href: "https://www.wise-invest.org/articles/index/ammF22zK" },
+  { label: "开户与开始投资计划", href: "https://www.wise-invest.org/articles/index/eq4k5aIU" },
+];
+
+export const PRIVATE_SEO_PAGES = [
+  {
+    path: "/login",
+    title: "登录 - WiseETF",
+    description: "登录后查看 QDII 估值。公开的申购额度、场内溢价和产品资料无需登录即可查看。",
+    heading: "登录 WiseETF",
+    lead: "公开的申购额度和场内溢价不用登录。只有查看 QDII 估值时才需要登录。",
+  },
+  {
+    path: "/qdii",
+    title: "QDII 估值 - WiseETF",
+    description: "登录后查看 QDII 估值。今日额度和今日溢价仍是公开页面，不必先登录。",
+    heading: "登录后查看 QDII 估值",
+    lead: "这一页需要登录。今日申购额度和场内溢价仍可在公开工具页直接查看。",
+  },
+  {
+    path: "/lazy",
+    title: "懒人组合 - WiseETF",
+    description: "WiseETF 懒人组合交互工具页，不作为公开检索目录。",
+    heading: "懒人组合",
+    lead: "这是交互工具页，不会进入公开检索目录。",
+  },
+  {
+    path: "/export",
+    title: "导出数据 - WiseETF",
+    description: "导出 WiseETF 公开数据的交互工具页，不作为公开检索目录。",
+    heading: "导出数据",
+    lead: "这是交互工具页，不会进入公开检索目录。",
+  },
+  {
+    path: "/watchlist",
+    title: "我的自选 - WiseETF",
+    description: "WiseETF 本地自选基金列表，仅保存在当前浏览器，不作为公开检索目录。",
+    heading: "我的自选",
+    lead: "自选列表只存在于本地浏览器，不会进入公开检索。",
+  },
+  {
+    path: "/admin",
+    title: "管理页 - WiseETF",
+    description: "WiseETF 内部管理页，不作为公开检索目录。",
+    heading: "管理页",
+    lead: "这是内部页面，不会进入公开检索目录。",
+  },
+];
 
 export const TODAY_PAGE_META = {
   limits: {

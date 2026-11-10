@@ -9,6 +9,9 @@ from .market import field_envelope, normalize_yahoo_monthly_returns
 from .normalizers import (
     calendar_year_return,
     calculate_etf_premium,
+    china_calendar_date,
+    classify_etf_premium,
+    build_etf_premium_metrics,
     extract_rolling_1y,
     merge_last_known_good,
     normalize_purchase,
@@ -16,6 +19,7 @@ from .normalizers import (
     parse_number,
     rolling_nav_return,
     safe_sort,
+    summarize_premium_history,
 )
 from .qdii import (
     canonicalize_symbol,
@@ -35,6 +39,9 @@ __all__ = [
     "PurchaseStatus",
     "calendar_year_return",
     "calculate_etf_premium",
+    "china_calendar_date",
+    "classify_etf_premium",
+    "build_etf_premium_metrics",
     "extract_rolling_1y",
     "field_envelope",
     "merge_last_known_good",
@@ -44,6 +51,7 @@ __all__ = [
     "parse_number",
     "rolling_nav_return",
     "safe_sort",
+    "summarize_premium_history",
     "canonicalize_symbol",
     "classify_qdii_market_session",
     "combine_percent_returns",

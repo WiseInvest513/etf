@@ -76,6 +76,9 @@ function stateLabel(row) {
 }
 
 function premiumRisk(row) {
+  if (row.premium_snapshot_status === "misaligned" || row.premium_status === "misaligned" || row.premium_alignment === "misaligned") {
+    return { key: "misaligned", label: "口径未对齐" };
+  }
   if (row.premium_snapshot_status === "stale") return { key: "stale", label: "历史参考" };
   if (row.premium_snapshot_status === "unavailable") return { key: "unknown", label: "待确认" };
   if (!hasNumber(row.premium)) return { key: "unknown", label: "待确认" };
@@ -199,7 +202,7 @@ export default function TodayDataPage({ kind }) {
   }, {}), [isLimits, rows]);
   const filters = isLimits
     ? [["all", "全部"], ["open", "开放"], ["limited", "限额"], ["suspended", "暂停"], ["stale", "历史参考"], ["unknown", "待确认"]]
-    : [["all", "全部"], ["high", "高溢价"], ["watch", "需注意"], ["normal", "正常"], ["discount", "折价"], ["stale", "历史参考"], ["unknown", "待确认"]];
+    : [["all", "全部"], ["high", "高溢价"], ["watch", "需注意"], ["normal", "正常"], ["discount", "折价"], ["misaligned", "口径未对齐"], ["stale", "历史参考"], ["unknown", "待确认"]];
   const categoryFilters = isLimits
     ? [["all", "全部类型"], ["nasdaq_passive", "纳指被动"], ["sp500_passive", "标普被动"], ["us_active", "美股主动"]]
     : [["all", "全部指数"], ["nasdaq", "纳指"], ["sp500", "标普500"], ["other", "其他"]];
@@ -258,7 +261,7 @@ export default function TodayDataPage({ kind }) {
           </div>
         </section>
         <section className="td-table-wrap">
-          <div className="td-table-heading"><div><h2>{isLimits ? "今日申购状态清单" : "ETF 溢价快照清单"}</h2><p>{isLimits ? "待确认不代表开放申购。" : "溢价必须同时结合场内价格日期与基金净值日期理解。"}</p></div><div className="td-result-meta"><strong>{visibleRows.length} 只</strong><small>{sortLabel}</small></div></div>
+          <div className="td-table-heading"><div><h2>{isLimits ? "今日申购状态清单" : "ETF 溢价快照清单"}</h2><p>{isLimits ? "限购和额度可能滞后，待确认不代表开放申购，一切以基金公司公告为准。" : "官方净值溢价必须价格日和净值日同一天才能预警；对不齐只显示数字，标为口径未对齐。"}</p></div><div className="td-result-meta"><strong>{visibleRows.length} 只</strong><small>{sortLabel}</small></div></div>
           <div className="td-table">
             <div className="td-row td-head">
               <SortHeader field="name" activeField={sortKey} direction={sortDirection} onSort={sortBy}>产品</SortHeader>

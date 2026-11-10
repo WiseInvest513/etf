@@ -6,7 +6,7 @@ import { AuthProvider, useAuth } from "./auth/AuthProvider.jsx";
 import WiseLoginGate from "./auth/WiseLoginGate.jsx";
 import { currentReturnTo } from "./auth/auth-client.js";
 import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
-import { CATEGORY_PAGE_META, HOME_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
+import { CATEGORY_PAGE_META, GUIDE_SEO, HOME_SEO, ONCHAIN_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
 import { FOOTER_NAV_ITEMS, VIP_JOIN_URL } from "./navigation/navigationConfig.js";
 import {
@@ -19,6 +19,8 @@ import {
   normalizeSubscriptionStatus,
   nullLastComparator,
   premiumDisplayModel,
+  etfPremiumView,
+  premiumHistoryView,
   resolveLocalAuthBypass,
   shouldRequireAuth,
 } from "./data/model.js";
@@ -46,8 +48,8 @@ const MARKET_SENTIMENT_FIELDS = ["vix","fear_greed","pe","nasdaq_pe","ndx_price"
 const MAIN_TAB_SEO = {
   overview: HOME_SEO,
   ...CATEGORY_PAGE_META,
-  guide: {path:"/guide",title:"WiseETF核心介绍 - 纳指、标普500与QDII数据口径 - WiseETF",description:"了解WiseETF如何展示纳指、标普500、主动QDII和场内ETF的申购额度、费率、收益及溢价数据。"},
-  onchain: {path:"/onchain",title:"链上美股ETF - QQQ与SPY代币化现货购买路径 - WiseETF",description:"比较场外QDII、场内ETF与USDT代币化美股现货的额度、溢价、费率和产品结构。"},
+  guide: GUIDE_SEO,
+  onchain: ONCHAIN_SEO,
 };
 async function apiFetch(path, options={}) {
   const response = await fetch(`${API_BASE}${path}`, options);
@@ -1105,16 +1107,18 @@ const StatusBadge = ({status,dailyLimit}) => {
   );
 };
 
-function PremiumBadge({value}) {
-  const model=premiumDisplayModel(value,{warningAt:1,dangerAt:3});
+function PremiumBadge({value, status, alignment, row}) {
+  const model=row?etfPremiumView(row,{warningAt:1,dangerAt:3}):premiumDisplayModel(value,{warningAt:1,dangerAt:3,status,alignment});
   if(!model.available){
-    return <span style={{display:"inline-flex",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:C.borderLight,color:C.textDim}}>暂不可用</span>;
+    return <span style={{display:"inline-flex",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:C.borderLight,color:C.textDim}}>{model.label==="待确认"?"待确认":"暂不可用"}</span>;
   }
-  const danger = model.severity==="danger", mid=model.severity==="warning";
+  const danger = model.canAlert && model.severity==="danger";
+  const mid=model.canAlert && model.severity==="warning";
   const discount=model.kind==="discount";
-  const color = danger?C.red:mid?C.orange:discount?C.cyan:C.green;
-  const bg    = danger?C.redBg:mid?C.orangeBg:discount?`${C.cyan}14`:C.greenBg;
-  const label = danger?"极高":mid?"注意":discount?"折价":model.kind==="par"?"平价":"正常";
+  const muted=model.severity==="misaligned"||model.severity==="stale"||model.severity==="unavailable";
+  const color = danger?C.red:mid?C.orange:discount?C.cyan:muted?C.textDim:C.green;
+  const bg    = danger?C.redBg:mid?C.orangeBg:discount?`${C.cyan}14`:muted?C.borderLight:C.greenBg;
+  const label = danger?"极高":mid?"注意":discount?"折价":model.kind==="par"?"平价":muted?model.label:"正常";
   return (
     <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}30`,animation:danger?"premiumAlert 1.8s ease infinite":"none"}}>
       {formatPercent(model.value,{digits:2,showPlus:model.value>0})} <span style={{fontSize:10,opacity:0.8}}>{label}</span>
@@ -2041,7 +2045,7 @@ function CompareModal({list,onClose}) {
     {label:"近1年滚动",     fmt:f=>f.rolling_1y!=null?<span style={{color:f.rolling_1y>0?C.green:C.red,fontWeight:700}}>{f.rolling_1y>0?"+":""}{f.rolling_1y}%</span>:"—"},
     {label:"跟踪误差",      fmt:f=>f.track_error!=null?<span style={{color:f.track_error>2?C.orange:C.textMuted}}>{f.track_error}%</span>:"—"},
     {label:"申购/交易上限",  fmt:f=>isEtf(f)?"场内交易":(f.daily_limit||"—")},
-    {label:"溢价率",        fmt:f=>f.premium!=null?<PremiumBadge value={f.premium}/>:"—"},
+    {label:"溢价率",        fmt:f=>f.premium!=null?<PremiumBadge row={f}/>:"—"},
     {label:"申购状态",      fmt:f=>!isEtf(f)?<StatusBadge status={f.subscription_status||f.buy_status} dailyLimit={f.daily_limit}/>:<span style={{color:C.cyan,fontSize:12}}>场内交易</span>},
   ];
 
@@ -4054,6 +4058,44 @@ function DeferredPage({ children, compact = false }) {
   );
 }
 
+
+function NoIndexShell({title,description,children}) {
+  useEffect(()=>{
+    document.title=title;
+    const upsert=(selector,tag,attrs)=>{
+      let node=document.head.querySelector(selector);
+      if(!node){node=document.createElement(tag);document.head.appendChild(node);}
+      Object.entries(attrs).forEach(([key,value])=>node.setAttribute(key,value));
+    };
+    upsert('meta[name="robots"]','meta',{name:"robots",content:"noindex,follow"});
+    if(description) upsert('meta[name="description"]','meta',{name:"description",content:description});
+  },[title,description]);
+  return children;
+}
+
+function NotFoundPage() {
+  useEffect(()=>{
+    document.title="页面不存在 - WiseETF";
+    const upsert=(selector,tag,attrs)=>{
+      let node=document.head.querySelector(selector);
+      if(!node){node=document.createElement(tag);document.head.appendChild(node);}
+      Object.entries(attrs).forEach(([key,value])=>node.setAttribute(key,value));
+    };
+    upsert('meta[name="robots"]','meta',{name:"robots",content:"noindex,follow"});
+    upsert('meta[name="description"]','meta',{name:"description",content:"这个地址在 WiseETF 上不存在。"});
+    const canonical=document.head.querySelector('link[rel="canonical"]');
+    if(canonical) canonical.remove();
+  },[]);
+  return (
+    <main style={{maxWidth:720,margin:"80px auto",padding:"0 24px",fontFamily:'Inter,"PingFang SC","Microsoft YaHei",sans-serif',color:"#182238"}}>
+      <p style={{color:"#2d68dc",fontWeight:800,fontSize:12,letterSpacing:".12em"}}>404</p>
+      <h1 style={{fontSize:36,letterSpacing:"-0.04em"}}>页面不存在</h1>
+      <p style={{color:"#667389",lineHeight:1.8}}>这个地址没有对应的页面。请回到首页，或从今日额度和今日溢价继续查看公开数据。</p>
+      <p><a href="/" style={{color:"#2164d7"}}>回到首页</a> · <a href="/guide" style={{color:"#2164d7"}}>怎么买</a> · <a href="/today/qdii-limits" style={{color:"#2164d7"}}>今日额度</a> · <a href="/today/etf-premium" style={{color:"#2164d7"}}>今日溢价</a></p>
+    </main>
+  );
+}
+
 export default function App() {
   return <AuthProvider localBypass={LOCAL_AUTH_BYPASS}><AppRoutes/></AuthProvider>;
 }
@@ -4067,14 +4109,14 @@ function AppRoutes() {
   if(path==="/today/etf-premium") return <DeferredPage><TodayDataPage kind="premium"/></DeferredPage>;
   if(path==="/chooser") return <DeferredPage><PathChooserPage/></DeferredPage>;
   if(path==="/admin") return <AdminPage/>;
-  if(path==="/login") return <WiseLoginGate><MainApp/></WiseLoginGate>;
-  if(path==="/export") return <WiseLoginGate><ReportPage/></WiseLoginGate>;
-  if(path==="/lazy") return <WiseLoginGate><DeferredPage><LazyPage/></DeferredPage></WiseLoginGate>;
-  if(path==="/qdii") return <WiseLoginGate><DeferredPage><QDIIPage/></DeferredPage></WiseLoginGate>;
-  if(["/nasdaq","/sp500","/etf","/active","/watchlist"].includes(path)) {
-    return <WiseLoginGate><MainApp/></WiseLoginGate>;
-  }
-  return <MainApp/>;
+  if(path==="/login") return <NoIndexShell title="登录 - WiseETF" description="登录后查看 QDII 估值。公开额度和溢价无需登录。"><WiseLoginGate><MainApp/></WiseLoginGate></NoIndexShell>;
+  if(path==="/export") return <ReportPage/>;
+  if(path==="/lazy") return <DeferredPage><LazyPage/></DeferredPage>;
+  if(path==="/qdii") return <NoIndexShell title="登录后查看 QDII 估值 - WiseETF" description="登录后查看 QDII 估值。公开额度和溢价无需登录。"><WiseLoginGate title="登录后查看 QDII 估值"><DeferredPage><QDIIPage/></DeferredPage></WiseLoginGate></NoIndexShell>;
+  const normalized=path.replace(/\/$/, "") || "/";
+  const publicTabs=["/","/guide","/nasdaq","/sp500","/etf","/active","/watchlist","/onchain"];
+  if(publicTabs.includes(normalized)) return <MainApp/>;
+  return <NotFoundPage/>;
 }
 
 function MainApp() {
@@ -4136,7 +4178,8 @@ function MainApp() {
     upsert('meta[property="og:title"]','meta',{property:"og:title",content:document.title});
     upsert('meta[property="og:description"]','meta',{property:"og:description",content:activeTab==="watchlist"?"WiseETF本地自选基金列表。":meta.description});
     upsert('meta[property="og:url"]','meta',{property:"og:url",content:`${SITE_ORIGIN}${path}`});
-    upsert('meta[name="robots"]','meta',{name:"robots",content:activeTab==="watchlist"?"noindex,follow":"index,follow"});
+    const privateShell=["/login","/qdii","/admin"].includes(window.location.pathname.replace(/\/$/, "") || "/");
+    upsert('meta[name="robots"]','meta',{name:"robots",content:activeTab==="watchlist"||privateShell?"noindex,follow":"index,follow"});
     upsert('link[rel="canonical"]','link',{rel:"canonical",href:`${SITE_ORIGIN}${path}`});
   },[activeTab]);
 
@@ -4300,7 +4343,7 @@ function MainApp() {
     const selector=sortKey==="daily_limit"?parseDailyLimit:row=>row?.[sortKey];
     return [...data].sort(nullLastComparator(selector,sortDir));
   };
-  const _PROTECTED_TABS = ["nasdaq","sp500","etf","active","watchlist","lazy","qdii","export"];
+  const _PROTECTED_TABS = ["qdii"];
   const switchTab = id=>{
     if(authChecking)return;
     if(shouldRequireAuth({isProtected:_PROTECTED_TABS.includes(id),hasUser:Boolean(user),localBypass:LOCAL_AUTH_BYPASS})){
@@ -4331,6 +4374,13 @@ function MainApp() {
     }).finally(()=>{if(!controller.signal.aborted)setPremHistLoading(false);});
     return()=>controller.abort();
   },[selETF,startupReady]);
+  const selectedEtfPremium = etfPremiumView((etfs || []).find((item) => item.code === selETF) || {}, { warningAt: 1, dangerAt: 3 });
+  const premHistView = premiumHistoryView(premHist, {
+    currentPremium: selectedEtfPremium.value,
+    canAlert: selectedEtfPremium.canAlert,
+    usable: premHistMeta.source !== "reference" && premHistMeta.status !== "empty" && premHistMeta.status !== "error",
+    unusableReason: premHistMeta.source === "reference" ? "reference_snapshot" : null,
+  });
 
   const filterData = (data,applyStatus=true) => {
     let filtered = data;
@@ -4369,7 +4419,7 @@ function MainApp() {
   const totalFunds=nasdaqM.length+sp500M.length+activeM.length+etfsM.length;
   const openFunds=[...nasdaqM,...sp500M,...activeM].filter(f=>normalizeSubscriptionStatus(f).canSubscribe).length;
   const activeRollingStats=finiteAverage(activeM,"rolling_1y");
-  const validPremiums=etfsM.filter(e=>Number.isFinite(e.premium));
+  const validPremiums=etfsM.filter(e=>e.premium_status==="fresh"&&Number.isFinite(e.premium));
   const highestPremium=validPremiums.length
     ? [...validPremiums].sort(nullLastComparator("premium","desc"))[0]
     : null;
@@ -4465,7 +4515,7 @@ function MainApp() {
     {key:"market_change_pct",label:"场内涨跌",tip:"最新A股交易日场内价格涨跌",align:"right",render:(_,row)=>renderDayChange(row.market_change_pct??row.change_pct)},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），以基金最新公告为准",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
-    {key:"premium",label:"溢价率",tip:"场内收盘价相对最新已公布净值；价格与净值日期可能不同",align:"center",render:v=><PremiumBadge value={v}/>},
+    {key:"premium",label:"溢价率",tip:"官方净值溢价：同一天的场内收盘价相对已公布净值。日期未对齐时只展示数字，不标极高。",align:"center",render:(v,row)=><PremiumBadge row={row}/>},
     {key:"turnover_cny_100m",label:"当日成交(亿)",tip:"最新A股交易日成交额（亿元）",align:"center",render:(v,row)=>v??row.volume??"—"},
   ];
 
@@ -4737,7 +4787,7 @@ function MainApp() {
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                     <div>
                       <div style={{fontSize:14,fontWeight:700,color:C.text}}>场内ETF溢价走势</div>
-                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>同日收盘价 / 同日净值{premHistMeta.asOf?` · 截至 ${premHistMeta.asOf}`:""}</div>
+                      <div style={{fontSize:12,color:C.textDim,marginTop:2}}>同日收盘价 / 同日净值，近90个交易日{premHistMeta.asOf?` · 截至 ${premHistMeta.asOf}`:""}</div>
                     </div>
                     <select value={selETF} onChange={e=>setSelETF(e.target.value)}
                       style={{background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 10px",fontSize:12,outline:"none",cursor:"pointer"}}>
@@ -4778,6 +4828,9 @@ function MainApp() {
                       <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad)" strokeWidth={2} dot={false}/>
                     </AreaChart>
                   </ResponsiveContainer>
+                  )}
+                  {!premHistLoading && premHistView.caption && (
+                    <div style={{fontSize:12,color:C.textDim,marginTop:10,lineHeight:1.65}}>{premHistView.caption}</div>
                   )}
                 </Card>
               </Reveal>
@@ -4820,20 +4873,21 @@ function MainApp() {
 
             {/* ETF warning */}
             <Reveal delay={0.1}>
-              <SectionHeader title="场内ETF溢价预警" subtitle="溢价 >1% 注意 · >2% 偏高 · >3% 极高建议等待收窄" color={C.orange}/>
+              <SectionHeader title="场内ETF溢价预警" subtitle="只对同一天的官方净值溢价预警：>1% 注意 · >3% 极高。日期未对齐会标「口径未对齐」，不标极高。" color={C.orange}/>
               <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:16}}>
                 {[...etfsM].sort(nullLastComparator("premium","desc")).map(e=>{
-                  const prem = Number.isFinite(e.premium)?e.premium:null;
-                  const barColor = prem>3?C.red:prem>2?"#ff6b35":prem>1?C.orange:C.green;
+                  const view = etfPremiumView(e,{warningAt:1,dangerAt:3});
+                  const prem = view.available?view.value:null;
+                  const barColor = view.canAlert&&prem>3?C.red:view.canAlert&&prem>2?"#ff6b35":view.canAlert&&prem>1?C.orange:C.green;
                   return (
-                  <Card key={e.code} style={{padding:isMobile?"14px 16px":"18px 22px",borderColor:prem>3?`${C.red}40`:prem>2?`#ff6b3530`:C.border}}>
+                  <Card key={e.code} style={{padding:isMobile?"14px 16px":"18px 22px",borderColor:view.canAlert&&prem>3?`${C.red}40`:view.canAlert&&prem>2?`#ff6b3530`:C.border}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                       <div>
                         <div style={{fontSize:11,color:C.textDim,fontFamily:"monospace",marginBottom:4}}>{e.code}</div>
                         <div style={{fontSize:13,fontWeight:600,color:C.text}}>{e.name}</div>
                         <div style={{fontSize:11,color:C.textDim,marginTop:2}}>{e.tracking_index}</div>
                       </div>
-                      <PremiumBadge value={prem}/>
+                      <PremiumBadge row={e}/>
                     </div>
                     {/* Premium meter — 仅在溢价可用时展示 */}
                     {prem!=null&&<div style={{marginBottom:12}}>
@@ -4851,7 +4905,7 @@ function MainApp() {
                       {e.fee_rate!=null&&<div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>费率</div><div style={{fontSize:13,fontWeight:600,color:C.textMuted}}>{e.fee_rate}%</div></div>}
                       {e.track_error!=null&&<div><div style={{fontSize:10,color:C.textDim,marginBottom:1}}>跟踪误差</div><div style={{fontSize:13,fontWeight:600,color:e.track_error>1?C.orange:C.textMuted}}>{e.track_error}%</div></div>}
                     </div>
-                    <div style={{fontSize:10,color:C.textDim,marginTop:9,lineHeight:1.5}}>价格 {e.quote_as_of?String(e.quote_as_of).slice(0,16).replace("T"," "):"待更新"} · 净值 {e.nav_as_of||"待更新"}</div>
+                    <div style={{fontSize:10,color:C.textDim,marginTop:9,lineHeight:1.5}}>{view.basisLabel} · 价格 {view.quoteAsOf?String(view.quoteAsOf).slice(0,16).replace("T"," "):"待更新"} · 净值 {view.referenceAsOf||"待更新"}</div>
                   </Card>
                   );
                 })}
@@ -4915,7 +4969,7 @@ function MainApp() {
         {/* ════ ETF ════ */}
         {activeTab==="etf"&&(
           <Reveal>
-            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价率相对最新已公布净值" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
+            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价先看官方净值口径，日期未对齐时不作为预警" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
             <DataStatusBanner dataset={datasets.etfs} label="场内ETF"/>
             <DailyCollectionLink kind="premium"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
@@ -4925,7 +4979,7 @@ function MainApp() {
             <Card style={{marginTop:24,padding:"24px 26px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>溢价率历史走势（近30交易日）</div>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>溢价率历史走势（近90个交易日）</div>
                   <div style={{fontSize:12,color:C.textDim,marginTop:2}}>同日收盘价 / 同日净值{premHistMeta.asOf?` · 截至 ${premHistMeta.asOf}`:""}{premHistMeta.source?` · ${premHistMeta.source}`:""}</div>
                 </div>
                 <select value={selETF} onChange={e=>setSelETF(e.target.value)}
@@ -4963,6 +5017,9 @@ function MainApp() {
                   <Area type="monotone" dataKey="premium" name="溢价率" stroke={C.orange} fill="url(#premGrad2)" strokeWidth={2} dot={{r:2,fill:C.orange,strokeWidth:0}}/>
                 </AreaChart>
               </ResponsiveContainer>
+              )}
+              {!premHistLoading && premHistView.caption && (
+                <div style={{fontSize:12,color:C.textDim,marginTop:12,lineHeight:1.65}}>{premHistView.caption}</div>
               )}
             </Card>
           </Reveal>

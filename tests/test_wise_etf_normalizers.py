@@ -1,10 +1,12 @@
 import math
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 
 from api.wise_etf.normalizers import (
     calendar_year_return,
     calculate_etf_premium,
+    china_calendar_date,
+    classify_etf_premium,
     extract_rolling_1y,
     merge_last_known_good,
     normalize_purchase,
@@ -12,6 +14,7 @@ from api.wise_etf.normalizers import (
     parse_number,
     rolling_nav_return,
     safe_sort,
+    summarize_premium_history,
 )
 
 
@@ -132,6 +135,119 @@ class LastKnownGoodTests(unittest.TestCase):
         incoming = {"returns": {"rolling_1y": 99.0, "day_change": -0.5}}
         merged = merge_last_known_good(previous, incoming, {"returns.rolling_1y"})
         self.assertEqual(merged["returns"], {"rolling_1y": 10.0, "day_change": -0.5})
+
+
+
+class PremiumAlignmentTests(unittest.TestCase):
+    def test_china_calendar_date_converts_aware_datetimes(self):
+        self.assertEqual(china_calendar_date("2026-11-10"), "2026-11-10")
+        self.assertEqual(china_calendar_date("2026-08-20T07:00:00+00:00"), "2026-08-20")
+        self.assertEqual(china_calendar_date("2026-08-20T15:00:00+08:00"), "2026-08-20")
+        self.assertEqual(
+            china_calendar_date(datetime(2026, 8, 20, 7, 0, tzinfo=timezone.utc)),
+            "2026-08-20",
+        )
+
+    def test_aligned_official_premium_is_fresh_and_alertable(self):
+        result = classify_etf_premium(
+            "1.70",
+            "1.60",
+            "2026-08-20T07:00:00+00:00",
+            "2026-08-20",
+        )
+        self.assertEqual(result["premium"], 6.25)
+        self.assertEqual(result["premium_status"], "fresh")
+        self.assertEqual(result["premium_alignment"], "aligned")
+        self.assertTrue(result["can_alert"])
+
+    def test_mismatched_dates_keep_the_number_but_cannot_alert(self):
+        result = classify_etf_premium(
+            2.896,
+            2.0172,
+            "2026-11-10T16:14:51+08:00",
+            "2026-11-06",
+        )
+        self.assertEqual(result["premium"], 43.57)
+        self.assertEqual(result["premium_status"], "misaligned")
+        self.assertEqual(result["premium_alignment"], "misaligned")
+        self.assertFalse(result["can_alert"])
+
+    def test_missing_dates_do_not_publish_a_warning_ready_premium(self):
+        result = classify_etf_premium(1.70, 1.60, "2026-08-20T07:00:00+00:00", None)
+        self.assertIsNone(result["premium"])
+        self.assertEqual(result["premium_status"], "unavailable")
+        self.assertFalse(result["can_alert"])
+
+
+
+class PremiumHistorySummaryTests(unittest.TestCase):
+    def _points(self, values, start="2026-06-01"):
+        from datetime import date, timedelta
+        day = date.fromisoformat(start)
+        rows = []
+        for value in values:
+            while day.weekday() >= 5:
+                day += timedelta(days=1)
+            rows.append({
+                "full_date": day.isoformat(),
+                "premium": value,
+                "basis": "same_day_close_vs_same_day_nav",
+            })
+            day += timedelta(days=1)
+        return rows
+
+    def test_aligned_premium_gets_30_and_90_day_percentiles(self):
+        values = [0.2] * 40 + [1.0] * 30 + [3.0] * 20
+        result = summarize_premium_history(
+            self._points(values),
+            current_premium=3.0,
+            current_can_alert=True,
+        )
+        self.assertTrue(result["usable"])
+        window_30 = result["windows"]["30"]
+        window_90 = result["windows"]["90"]
+        self.assertEqual(window_30["status"], "ok")
+        self.assertEqual(window_30["count"], 30)
+        self.assertEqual(window_30["band"], "偏高")
+        self.assertGreaterEqual(window_30["percentile"], 80)
+        self.assertEqual(window_90["status"], "ok")
+        self.assertEqual(window_90["count"], 90)
+
+    def test_misaligned_current_premium_does_not_get_a_percentile(self):
+        result = summarize_premium_history(
+            self._points([0.5] * 30),
+            current_premium=8.0,
+            current_can_alert=False,
+        )
+        self.assertTrue(result["usable"])
+        self.assertIsNone(result["windows"]["30"]["percentile"])
+        self.assertEqual(result["windows"]["30"]["status"], "ok")
+        self.assertIn("区间", result["windows"]["30"]["label"])
+
+    def test_reference_snapshot_is_not_used_to_judge_current_premium(self):
+        result = summarize_premium_history(
+            self._points([1.0] * 30),
+            current_premium=4.0,
+            current_can_alert=True,
+            usable=False,
+            unusable_reason="reference_snapshot",
+        )
+        self.assertFalse(result["usable"])
+        self.assertEqual(result["reason"], "reference_snapshot")
+        self.assertEqual(result["windows"]["30"]["status"], "unavailable")
+        self.assertIsNone(result["windows"]["30"]["percentile"])
+
+    def test_short_history_is_marked_insufficient(self):
+        result = summarize_premium_history(
+            self._points([1.1, 1.2, 1.3]),
+            current_premium=1.3,
+            current_can_alert=True,
+        )
+        self.assertTrue(result["usable"])
+        self.assertEqual(result["windows"]["30"]["status"], "unavailable")
+        self.assertEqual(result["windows"]["30"]["label"], "样本不足，暂不判断")
+        self.assertEqual(result["windows"]["90"]["status"], "unavailable")
+
 
 
 if __name__ == "__main__":

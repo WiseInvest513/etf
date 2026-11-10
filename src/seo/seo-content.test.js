@@ -2,20 +2,26 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CATEGORY_PAGE_META,
+  GUIDE_SEO,
   HOME_SEO,
+  MAIN_SITE_TUTORIALS,
+  ONCHAIN_SEO,
   TODAY_FAQS,
   TODAY_PAGE_META,
   productSeoTitle,
+  SITE_ORIGIN,
 } from "./seo-content.js";
 
 test("core SEO pages have unique intent-led titles and descriptions", () => {
-  const pages = [HOME_SEO, ...Object.values(CATEGORY_PAGE_META), ...Object.values(TODAY_PAGE_META)];
+  const pages = [HOME_SEO, GUIDE_SEO, ONCHAIN_SEO, ...Object.values(CATEGORY_PAGE_META), ...Object.values(TODAY_PAGE_META)];
   assert.equal(new Set(pages.map((page) => page.path)).size, pages.length);
   assert.equal(new Set(pages.map((page) => page.title)).size, pages.length);
   for (const page of pages) {
-    assert.ok(page.title.includes("WiseETF") || page.path.startsWith("/today/"));
+    assert.ok(page.title.endsWith("WiseETF") || page.path.startsWith("/today/"));
     assert.ok(page.description.length >= 35);
   }
+  assert.match(GUIDE_SEO.heading, /场外 QDII、场内 ETF、美股直购对比/);
+  assert.equal(MAIN_SITE_TUTORIALS.length, 3);
 });
 
 test("daily search pages answer the user intent they target", () => {
@@ -28,4 +34,8 @@ test("daily search pages answer the user intent they target", () => {
 test("product titles match fund and ETF search intent", () => {
   assert.match(productSeoTitle({ name: "测试基金", code: "000001", product_type: "fund" }), /申购额度、费率与收益 - WiseETF$/);
   assert.match(productSeoTitle({ name: "测试ETF", code: "500001", product_type: "etf" }), /溢价率、净值与成交额 - WiseETF$/);
+});
+
+test("SITE_ORIGIN uses the www canonical host", () => {
+  assert.equal(SITE_ORIGIN, "https://www.wise-etf.com");
 });

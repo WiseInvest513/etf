@@ -54,6 +54,8 @@ from api.auth_sso import (
 from api.wise_etf import (
     canonicalize_symbol,
     calculate_etf_premium,
+    china_calendar_date,
+    classify_etf_premium,
     classify_qdii_market_session,
     compute_fund_valuation,
     currency_for_symbol,
@@ -65,6 +67,7 @@ from api.wise_etf import (
     quote_observation_is_recent,
     rolling_nav_return,
     safe_sort,
+    summarize_premium_history,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -703,13 +706,33 @@ def _get(url, **kwargs) -> Optional[requests.Response]:
     # routes can briefly overlap during a cold page load.  Queue briefly rather
     # than dropping an otherwise valid provider request after only two seconds.
     queue_timeout = kwargs.pop("_queue_timeout", 8)
+    retries = max(0, min(int(kwargs.pop("retries", 1)), 2))
     if not _PROVIDER_SEMAPHORE.acquire(timeout=queue_timeout):
         logger.warning(f"GET skipped (provider concurrency limit) {url[:60]}")
         return None
+    timeout = kwargs.pop("timeout", (2, 4))
     try:
-        return _thread_http_session().get(url, timeout=kwargs.pop("timeout", (2, 4)), **kwargs)
-    except Exception as e:
-        logger.warning(f"GET {url[:60]}: {e}")
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                resp = _thread_http_session().get(url, timeout=timeout, **kwargs)
+                if resp is not None and resp.status_code >= 500 and attempt < retries:
+                    logger.warning(f"GET {url[:60]} HTTP {resp.status_code}, retry {attempt + 1}")
+                    time.sleep(0.2 * (attempt + 1))
+                    continue
+                return resp
+            except (requests.Timeout, requests.ConnectionError, requests.exceptions.ChunkedEncodingError) as exc:
+                last_error = exc
+                logger.warning(f"GET {url[:60]}: {exc}")
+                if attempt < retries:
+                    time.sleep(0.2 * (attempt + 1))
+                    continue
+                return None
+            except Exception as exc:
+                logger.warning(f"GET {url[:60]}: {exc}")
+                return None
+        if last_error:
+            return None
         return None
     finally:
         _PROVIDER_SEMAPHORE.release()
@@ -2292,7 +2315,7 @@ def _build_etfs() -> tuple:
         nav_core_fields = ("nav", "nav_date", "nav_as_of", "nav_source")
         premium_fields = (
             "premium", "premium_pct", "premium_as_of", "premium_quote_as_of",
-            "premium_nav_as_of", "premium_basis",
+            "premium_nav_as_of", "premium_basis", "premium_alignment",
         )
         track_fields = ("track_error", "track_error_as_of", "track_error_source", "track_error_fetched_at")
         retained = {
@@ -2364,18 +2387,28 @@ def _build_etfs() -> tuple:
             merged.update({key: fb.get(key) for key in track_fields})
         if quote_is_current:
             quote_count += 1
+        computed_premium_status = None
         if quote_is_current and nav_is_current:
-            premium = calculate_etf_premium(market_price, nav)
-        if quote_is_current and nav_is_current and premium is not None:
-            premium_count += 1
-            merged.update({
-                "premium": premium,
-                "premium_pct": premium,
-                "premium_as_of": quote.get("quote_as_of"),
-                "premium_quote_as_of": quote.get("quote_as_of"),
-                "premium_nav_as_of": nav_date,
-                "premium_basis": "market_close_vs_latest_published_nav",
-            })
+            official = classify_etf_premium(
+                merged.get("market_price"),
+                merged.get("nav"),
+                merged.get("quote_as_of"),
+                merged.get("nav_date") or merged.get("nav_as_of"),
+            )
+            premium = official["premium"]
+            computed_premium_status = official["premium_status"] if premium is not None else None
+            if premium is not None:
+                if official["premium_status"] == "fresh":
+                    premium_count += 1
+                merged.update({
+                    "premium": premium,
+                    "premium_pct": premium,
+                    "premium_as_of": official["premium_as_of"],
+                    "premium_quote_as_of": official["premium_quote_as_of"],
+                    "premium_nav_as_of": official["premium_nav_as_of"],
+                    "premium_basis": official["premium_basis"],
+                    "premium_alignment": official["premium_alignment"],
+                })
 
         daily_complete = (
             nav_is_current
@@ -2387,7 +2420,7 @@ def _build_etfs() -> tuple:
         fully_current = (
             quote_complete
             and daily_complete
-            and premium is not None
+            and computed_premium_status == "fresh"
         )
         merged.update({
             "quote_status": "fresh" if quote_is_current else ("stale" if previous_row.get("market_price") is not None else "unavailable"),
@@ -2395,7 +2428,7 @@ def _build_etfs() -> tuple:
             "fund_daily_status": "fresh" if daily_complete else (
                 "partial" if nav_is_current else ("stale" if previous_row else "unavailable")
             ),
-            "premium_status": "fresh" if quote_is_current and nav_is_current and premium is not None else (
+            "premium_status": computed_premium_status or (
                 "stale" if previous_row.get("premium") is not None else "unavailable"
             ),
             "track_error_status": "fresh" if track_accepted else ("stale" if merged.get("track_error") is not None else "unavailable"),
@@ -2538,11 +2571,11 @@ def _reference_etfs() -> list:
 
 def _daily_board_status(rows: list, field: str) -> str:
     states = [row.get(field) for row in rows if isinstance(row, dict)]
-    if not states or not any(state in {"fresh", "stale"} for state in states):
+    if not states or not any(state in {"fresh", "stale", "misaligned"} for state in states):
         return "unavailable"
     if all(state == "fresh" for state in states):
         return "fresh"
-    if any(state == "fresh" for state in states):
+    if any(state in {"fresh", "misaligned"} for state in states):
         return "partial"
     return "stale"
 
@@ -2620,18 +2653,32 @@ def _daily_board_etf_rows(
         quote_as_of = row.get("premium_quote_as_of") or row.get("quote_as_of")
         quote = _as_of_instant(quote_as_of)
         quote_date = quote.astimezone(_CHINA_TZ).date().isoformat() if quote else None
+        nav_date = china_calendar_date(
+            row.get("premium_nav_as_of") or row.get("nav_as_of") or row.get("nav_date")
+        )
+        alignment = row.get("premium_alignment")
+        if not alignment and quote_date and nav_date:
+            alignment = "aligned" if quote_date == nav_date else "misaligned"
+            row["premium_alignment"] = alignment
+        is_misaligned = row.get("premium_status") == "misaligned" or alignment == "misaligned"
         is_fresh = (
             source != "catalog"
             and row.get("premium_status") == "fresh"
             and row.get("premium") is not None
             and quote_date == expected_close_date
+            and nav_date == quote_date
+            and not is_misaligned
         )
         has_historical = row.get("premium") is not None and bool(quote_date)
-        row["premium_snapshot_status"] = (
-            "fresh" if is_fresh else "stale" if has_historical else "unavailable"
-        )
-        if not is_fresh:
-            row["premium_status"] = "stale" if has_historical else "unavailable"
+        if is_fresh:
+            row["premium_snapshot_status"] = "fresh"
+        elif is_misaligned and has_historical:
+            row["premium_snapshot_status"] = "misaligned"
+            row["premium_status"] = "misaligned"
+        else:
+            row["premium_snapshot_status"] = "stale" if has_historical else "unavailable"
+            if not is_fresh:
+                row["premium_status"] = "stale" if has_historical else "unavailable"
         rows.append(row)
     return rows, source
 
@@ -3638,20 +3685,84 @@ _SINA_KL_HEADERS = {
     "Referer":    "https://finance.sina.com.cn/",
 }
 
-def fetch_premium_history(code: str, days: int = 35) -> list:
+def _fetch_etf_daily_closes_sina(code: str, days: int) -> Dict[str, float]:
+    prefix = "sh" if code.startswith("5") else "sz"
+    price_map: Dict[str, float] = {}
+    try:
+        resp = _get(
+            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
+            params={"symbol": f"{prefix}{code}", "scale": 240, "ma": "no", "datalen": days},
+            headers=_SINA_KL_HEADERS,
+            timeout=(3, 6),
+        )
+        if resp and resp.ok:
+            for item in resp.json():
+                d, c = item.get("day", ""), item.get("close", "")
+                if d and c:
+                    try:
+                        price_map[d] = float(c)
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.warning(f"[prem_hist] sina close failed {code}: {exc}")
+    return price_map
+
+
+def _fetch_etf_daily_closes_em(code: str, days: int) -> Dict[str, float]:
+    """东方财富日K收盘价，作为新浪日线失败时的同口径兜底。"""
+    secid = f"1.{code}" if code.startswith("5") else f"0.{code}"
+    price_map: Dict[str, float] = {}
+    try:
+        resp = _get(
+            "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+            params={
+                "secid": secid,
+                "klt": "101",
+                "fqt": "0",
+                "lmt": days,
+                "end": "20500101",
+                "fields1": "f1,f2,f3,f4,f5,f6",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+            },
+            headers=HEADERS,
+            timeout=(3, 6),
+        )
+        if not (resp and resp.ok):
+            return price_map
+        payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else None
+        if payload is None:
+            try:
+                payload = resp.json()
+            except Exception:
+                return price_map
+        klines = ((payload or {}).get("data") or {}).get("klines") or []
+        for item in klines:
+            parts = str(item).split(",")
+            if len(parts) < 3:
+                continue
+            try:
+                price_map[parts[0]] = float(parts[2])
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.warning(f"[prem_hist] em close failed {code}: {exc}")
+    return price_map
+
+
+def fetch_premium_history(code: str, days: int = 90) -> list:
     """
     计算ETF近N个交易日的真实溢价率。
     - 历史净值：东方财富 f10/lsjz
-    - 历史收盘价：新浪财经 CN_MarketData.getKLineData（scale=240 = 日线）
+    - 历史收盘价：新浪日线，失败时用东方财富日K兜底
     """
-    prefix = "sh" if code.startswith("5") else "sz"
+    pull = days + 10
 
     # 1. 历史净值
     nav_map: Dict[str, float] = {}
     try:
         resp = _get(
             "https://api.fund.eastmoney.com/f10/lsjz",
-            params={"fundCode": code, "pageIndex": 1, "pageSize": days + 5},
+            params={"fundCode": code, "pageIndex": 1, "pageSize": pull},
             headers={**HEADERS, "Referer": "https://fundf10.eastmoney.com/"},
             timeout=(3, 6),
         )
@@ -3667,24 +3778,13 @@ def fetch_premium_history(code: str, days: int = 35) -> list:
         logger.warning(f"[prem_hist] NAV failed {code}: {e}")
 
     # 2. 历史收盘价
-    price_map: Dict[str, float] = {}
-    try:
-        resp = _get(
-            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
-            params={"symbol": f"{prefix}{code}", "scale": 240, "ma": "no", "datalen": days + 5},
-            headers=_SINA_KL_HEADERS,
-            timeout=(3, 6),
-        )
-        if resp and resp.ok:
-            for item in resp.json():
-                d, c = item.get("day", ""), item.get("close", "")
-                if d and c:
-                    try:
-                        price_map[d] = float(c)
-                    except Exception:
-                        pass
-    except Exception as e:
-        logger.warning(f"[prem_hist] price failed {code}: {e}")
+    price_map = _fetch_etf_daily_closes_sina(code, pull)
+    price_source = "sina_close"
+    if len(price_map) < 15:
+        em_prices = _fetch_etf_daily_closes_em(code, pull)
+        if len(em_prices) > len(price_map):
+            price_map = em_prices
+            price_source = "eastmoney_close"
 
     # 3. 交叉匹配 + 计算溢价率
     common = sorted(set(nav_map) & set(price_map))
@@ -3704,10 +3804,10 @@ def fetch_premium_history(code: str, days: int = 35) -> list:
             "market_price": price,
             "nav": nav,
             "basis": "same_day_close_vs_same_day_nav",
-            "source": "eastmoney_nav+sina_close",
+            "source": f"eastmoney_nav+{price_source}",
         })
 
-    logger.info(f"[prem_hist] {code}: {len(result)} points (nav={len(nav_map)}, price={len(price_map)})")
+    logger.info(f"[prem_hist] {code}: {len(result)} points (nav={len(nav_map)}, price={len(price_map)}, close={price_source})")
     return result
 
 
@@ -3726,20 +3826,35 @@ STATIC_PREMIUM_HISTORY: Dict[str, list] = {
 }
 
 
+def _premium_history_payload(data, source: str) -> dict:
+    usable = source in ("live", "cache", "lkg")
+    status = "fresh" if source in ("live", "cache") else ("stale" if data else "empty")
+    as_of = _latest_field_date(data, ("full_date",))
+    if source == "reference":
+        as_of = as_of or "2026-03-31"
+        status = "stale"
+    return {
+        "data": data,
+        "source": source,
+        "status": status,
+        "as_of": as_of,
+        "summary": summarize_premium_history(
+            data,
+            usable=usable,
+            unusable_reason=None if usable else ("reference_snapshot" if source == "reference" else "empty"),
+        ),
+    }
+
+
 @app.get("/api/premium_history/{code}")
 def get_premium_history(code: str, response: Response):
-    """ETF历史溢价率（近30个交易日）"""
+    """ETF历史溢价率（近90个交易日，同日收盘价对同日净值）"""
     cache_key = f"prem_hist_{code}"
 
     cached = _mem_get(cache_key, "premium_history")
     if cached is not None:
         _cache_header(response, 1800)
-        return {
-            "data": cached,
-            "source": "cache",
-            "status": "fresh",
-            "as_of": _latest_field_date(cached, ("full_date",)),
-        }
+        return _premium_history_payload(cached, "cache")
 
     data = fetch_premium_history(code)
     if data:
@@ -3757,12 +3872,7 @@ def get_premium_history(code: str, response: Response):
                 logger.info(f"[prem_hist] {code} fallback to reference snapshot")
 
     _cache_header(response, 1800)
-    return {
-        "data": data,
-        "source": source,
-        "status": "fresh" if source in ("live", "cache") else ("stale" if data else "empty"),
-        "as_of": _latest_field_date(data, ("full_date",)) or ("2026-03-31" if data else None),
-    }
+    return _premium_history_payload(data, source)
 
 
 @app.get("/api/debug_live/{code}")
@@ -5928,6 +6038,32 @@ def _qdii_verified_latest_portfolio(master_code: str) -> Optional[dict]:
         "source": "eastmoney_quarterly",
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "holdings": top,
+    }
+
+
+@app.get("/api/cron/seo-rebuild")
+def cron_seo_rebuild(authorization: Optional[str] = Header(default=None)):
+    """Trigger a production rebuild so prerendered daily pages pick up the latest snapshot."""
+    _require_job_secret(authorization)
+    hook = (os.environ.get("WISEETF_DEPLOY_HOOK_URL") or os.environ.get("VERCEL_DEPLOY_HOOK_URL") or "").strip()
+    if not hook:
+        return {
+            "ts": _china_now().isoformat(),
+            "ok": False,
+            "reason": "deploy_hook_unconfigured",
+        }
+    try:
+        response = requests.post(hook, timeout=15)
+    except requests.RequestException as exc:
+        logger.warning("[seo-rebuild] deploy hook failed: %s", exc.__class__.__name__)
+        raise HTTPException(status_code=502, detail={"ok": False, "error": "deploy_hook_failed"})
+    if response.status_code >= 400:
+        logger.warning("[seo-rebuild] deploy hook status %s", response.status_code)
+        raise HTTPException(status_code=502, detail={"ok": False, "status": response.status_code})
+    return {
+        "ts": _china_now().isoformat(),
+        "ok": True,
+        "status": response.status_code,
     }
 
 

@@ -272,6 +272,127 @@ def calculate_etf_premium(market_price: Any, nav: Any, digits: int = 2) -> Optio
     return round((price_value / nav_value - 1.0) * 100.0, digits)
 
 
+_CHINA_TZ = timezone(timedelta(hours=8))
+OFFICIAL_NAV_PREMIUM_BASIS = "market_close_vs_latest_published_nav"
+IOPV_PREMIUM_BASIS = "market_price_vs_iopv"
+
+
+def china_calendar_date(value: Any) -> Optional[str]:
+    """Return an Asia/Shanghai calendar date (YYYY-MM-DD), or ``None``."""
+
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=_CHINA_TZ)
+        return dt.astimezone(_CHINA_TZ).date().isoformat()
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    text = value.strip()
+    try:
+        if "T" in text or text.endswith("Z"):
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=_CHINA_TZ)
+            return parsed.astimezone(_CHINA_TZ).date().isoformat()
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        return None
+
+
+def classify_etf_premium(
+    market_price: Any,
+    reference_value: Any,
+    quote_as_of: Any,
+    reference_as_of: Any,
+    *,
+    digits: int = 2,
+    basis: str = OFFICIAL_NAV_PREMIUM_BASIS,
+) -> Dict[str, Any]:
+    """Classify an official-NAV or IOPV premium by China calendar alignment.
+
+    A number is only ``fresh`` and alertable when both sides fall on the same
+    Asia/Shanghai date.  Misaligned dates may still return the number, but the
+    status is ``misaligned`` and ``can_alert`` is false.  Missing dates do not
+    publish a warning-ready premium.
+    """
+
+    premium = calculate_etf_premium(market_price, reference_value, digits=digits)
+    quote_date = china_calendar_date(quote_as_of)
+    reference_date = china_calendar_date(reference_as_of)
+    if quote_date and reference_date:
+        alignment = "aligned" if quote_date == reference_date else "misaligned"
+    else:
+        alignment = "unknown"
+
+    if premium is None or alignment == "unknown":
+        return {
+            "premium": None,
+            "premium_status": "unavailable",
+            "premium_alignment": alignment,
+            "premium_as_of": None,
+            "premium_quote_as_of": None,
+            "premium_nav_as_of": None,
+            "premium_basis": basis,
+            "can_alert": False,
+        }
+
+    status = "fresh" if alignment == "aligned" else "misaligned"
+    return {
+        "premium": premium,
+        "premium_status": status,
+        "premium_alignment": alignment,
+        "premium_as_of": quote_as_of,
+        "premium_quote_as_of": quote_as_of,
+        "premium_nav_as_of": reference_as_of,
+        "premium_basis": basis,
+        "can_alert": status == "fresh",
+    }
+
+
+def build_etf_premium_metrics(
+    *,
+    market_price: Any,
+    quote_as_of: Any,
+    nav: Any,
+    nav_as_of: Any,
+    iopv: Any = None,
+    iopv_as_of: Any = None,
+) -> Dict[str, Any]:
+    """Build official-NAV and optional IOPV premium slots for one ETF row."""
+
+    official = classify_etf_premium(
+        market_price,
+        nav,
+        quote_as_of,
+        nav_as_of,
+        basis=OFFICIAL_NAV_PREMIUM_BASIS,
+    )
+    iopv_value = parse_number(iopv)
+    iopv_result = classify_etf_premium(
+        market_price,
+        iopv_value,
+        quote_as_of,
+        iopv_as_of,
+        basis=IOPV_PREMIUM_BASIS,
+    )
+    return {
+        **official,
+        "iopv": iopv_value if iopv_value is not None and iopv_value > 0 else None,
+        "iopv_as_of": iopv_as_of if iopv_result["premium"] is not None else None,
+        "iopv_premium": iopv_result["premium"],
+        "iopv_premium_status": iopv_result["premium_status"],
+        "iopv_premium_alignment": iopv_result["premium_alignment"],
+        "iopv_basis": IOPV_PREMIUM_BASIS if iopv_result["premium"] is not None else None,
+        "iopv_can_alert": iopv_result["can_alert"],
+    }
+
+
 def _sort_value(value: Any) -> Tuple[int, Any]:
     numeric = parse_number(value)
     if numeric is not None:
@@ -349,6 +470,122 @@ def merge_last_known_good(
             result[field] = value
 
     return result
+
+
+
+
+SAME_DAY_PREMIUM_BASIS = "same_day_close_vs_same_day_nav"
+_PREMIUM_HISTORY_MIN_POINTS = {30: 15, 90: 40}
+
+
+def _premium_history_band(percentile: Optional[int]) -> str:
+    if percentile is None:
+        return ""
+    if percentile >= 80:
+        return "偏高"
+    if percentile <= 20:
+        return "偏低"
+    return "中等"
+
+
+def summarize_premium_history(
+    points: Optional[Iterable[Mapping[str, Any]]],
+    *,
+    current_premium: Any = None,
+    current_can_alert: bool = False,
+    usable: bool = True,
+    unusable_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Describe where a current official NAV premium sits in 30/90-day history.
+
+    Only same-day close vs same-day NAV points are used. A reference snapshot
+    or a misaligned current premium must not produce a "high vs history" call.
+    """
+
+    rows: List[Tuple[str, float]] = []
+    for item in points or []:
+        if not isinstance(item, Mapping):
+            continue
+        basis = item.get("basis") or SAME_DAY_PREMIUM_BASIS
+        if basis != SAME_DAY_PREMIUM_BASIS:
+            continue
+        premium = parse_number(item.get("premium"))
+        date_s = item.get("full_date") or item.get("date")
+        if premium is None or not date_s:
+            continue
+        rows.append((str(date_s), float(premium)))
+    rows.sort(key=lambda row: row[0])
+
+    reason = None if usable else (unusable_reason or "reference_snapshot")
+    if not rows:
+        usable = False
+        reason = reason or "empty"
+
+    def _empty_window(size: int, label: str) -> Dict[str, Any]:
+        return {
+            "window": size,
+            "status": "unavailable",
+            "count": 0,
+            "min_points": _PREMIUM_HISTORY_MIN_POINTS[size],
+            "min": None,
+            "max": None,
+            "median": None,
+            "percentile": None,
+            "band": None,
+            "label": label,
+        }
+
+    def _window_stats(size: int) -> Dict[str, Any]:
+        min_points = _PREMIUM_HISTORY_MIN_POINTS[size]
+        if not usable:
+            label = (
+                "参考快照不用于判断当前溢价"
+                if reason == "reference_snapshot"
+                else "暂无同口径历史"
+            )
+            return _empty_window(size, label)
+        values = [premium for _, premium in rows[-size:]]
+        if len(values) < min_points:
+            return {
+                **_empty_window(size, "样本不足，暂不判断"),
+                "count": len(values),
+            }
+        ordered = sorted(values)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        current = parse_number(current_premium) if current_can_alert else None
+        percentile = None
+        band = None
+        label = f"近{size}个交易日区间 {min(values):.2f}%～{max(values):.2f}%"
+        if current is not None:
+            rank = sum(1 for value in values if value <= current)
+            percentile = int(round(rank / len(values) * 100))
+            band = _premium_history_band(percentile)
+            label = (
+                f"近{size}个交易日{band}（{percentile}%分位，"
+                f"区间 {min(values):.2f}%～{max(values):.2f}%）"
+            )
+        return {
+            "window": size,
+            "status": "ok",
+            "count": len(values),
+            "min_points": min_points,
+            "min": round(min(values), 2),
+            "max": round(max(values), 2),
+            "median": round(median, 2),
+            "percentile": percentile,
+            "band": band,
+            "label": label,
+        }
+
+    windows = {"30": _window_stats(30), "90": _window_stats(90)}
+    return {
+        "basis": SAME_DAY_PREMIUM_BASIS,
+        "usable": bool(usable and rows),
+        "reason": None if (usable and rows) else reason,
+        "point_count": len(rows),
+        "windows": windows,
+    }
 
 
 # Readable aliases for call sites that use domain-specific terminology.

@@ -11,6 +11,8 @@ import {
   normalizeSubscriptionStatus,
   nullLastComparator,
   premiumDisplayModel,
+  etfPremiumView,
+  premiumHistoryView,
   resolveLocalAuthBypass,
   shouldRequireAuth,
 } from "./model.js";
@@ -221,6 +223,7 @@ test("normalizeSubscriptionStatus reconciles backend status and daily limit", ()
 test("premiumDisplayModel distinguishes unavailable, discount, par, and premium risk", () => {
   assert.deepEqual(premiumDisplayModel(null), {
     available: false,
+    canAlert: false,
     value: null,
     kind: "unavailable",
     severity: "unavailable",
@@ -234,10 +237,88 @@ test("premiumDisplayModel distinguishes unavailable, discount, par, and premium 
   assert.equal(discount.kind, "discount");
   assert.equal(discount.displayText, "折价 0.86%");
   assert.equal(discount.signedPercentText, "-0.86%");
+  assert.equal(discount.canAlert, false);
 
   assert.equal(premiumDisplayModel(0).kind, "par");
   assert.equal(premiumDisplayModel(1.49).severity, "normal");
   assert.equal(premiumDisplayModel(1.5).severity, "warning");
+  assert.equal(premiumDisplayModel(1.5).canAlert, true);
   assert.equal(premiumDisplayModel(3).severity, "warning");
   assert.equal(premiumDisplayModel(3.01).severity, "danger");
+  assert.equal(premiumDisplayModel(3.01).canAlert, true);
+});
+
+test("premiumDisplayModel does not warn on misaligned or stale premiums", () => {
+  const misaligned = premiumDisplayModel(43.57, { status: "misaligned" });
+  assert.equal(misaligned.available, true);
+  assert.equal(misaligned.canAlert, false);
+  assert.equal(misaligned.severity, "misaligned");
+  assert.equal(misaligned.label, "口径未对齐");
+
+  const stale = premiumDisplayModel(4.2, { status: "stale" });
+  assert.equal(stale.canAlert, false);
+  assert.equal(stale.label, "历史参考");
+});
+
+test("etfPremiumView prefers fresh IOPV and otherwise shows official NAV alignment", () => {
+  const official = etfPremiumView({
+    premium: 43.57,
+    premium_status: "misaligned",
+    premium_alignment: "misaligned",
+    premium_quote_as_of: "2026-11-10T16:14:51+08:00",
+    premium_nav_as_of: "2026-11-06",
+  }, { warningAt: 1, dangerAt: 3 });
+  assert.equal(official.source, "official_nav");
+  assert.equal(official.canAlert, false);
+  assert.equal(official.label, "口径未对齐");
+  assert.equal(official.basisLabel, "官方净值溢价");
+
+  const iopv = etfPremiumView({
+    premium: 43.57,
+    premium_status: "misaligned",
+    iopv_premium: 0.8,
+    iopv_premium_status: "fresh",
+    iopv_as_of: "2026-11-10T16:14:51+08:00",
+  }, { warningAt: 1, dangerAt: 3 });
+  assert.equal(iopv.source, "iopv");
+  assert.equal(iopv.value, 0.8);
+  assert.equal(iopv.canAlert, false);
+  assert.equal(iopv.basisLabel, "IOPV 溢价");
+});
+
+
+test("premiumHistoryView scores an aligned premium against 30 and 90 day history", () => {
+  const points = Array.from({ length: 90 }, (_, index) => ({
+    full_date: `2026-06-${String((index % 28) + 1).padStart(2, "0")}`,
+    premium: index < 40 ? 0.2 : index < 70 ? 1 : 3,
+    basis: "same_day_close_vs_same_day_nav",
+  }));
+  // fix dates to be unique and sortable
+  const dated = points.map((item, index) => ({
+    ...item,
+    full_date: `2026-${String(Math.floor(index / 28) + 6).padStart(2, "0")}-${String((index % 28) + 1).padStart(2, "0")}`,
+  }));
+  const view = premiumHistoryView(dated, { currentPremium: 3, canAlert: true, usable: true });
+  assert.equal(view.usable, true);
+  assert.equal(view.windows[30].status, "ok");
+  assert.equal(view.windows[30].band, "偏高");
+  assert.ok(view.windows[30].percentile >= 80);
+  assert.equal(view.windows[90].status, "ok");
+  assert.match(view.caption, /近30个交易日偏高/);
+});
+
+test("premiumHistoryView does not percentile a misaligned or reference series", () => {
+  const points = Array.from({ length: 30 }, (_, index) => ({
+    full_date: `2026-07-${String(index + 1).padStart(2, "0")}`,
+    premium: 0.5,
+    basis: "same_day_close_vs_same_day_nav",
+  }));
+  const misaligned = premiumHistoryView(points, { currentPremium: 8, canAlert: false, usable: true });
+  assert.equal(misaligned.windows[30].percentile, null);
+  assert.match(misaligned.caption, /日期未对齐/);
+
+  const reference = premiumHistoryView(points, { currentPremium: 4, canAlert: true, usable: false, unusableReason: "reference_snapshot" });
+  assert.equal(reference.usable, false);
+  assert.equal(reference.windows[30].percentile, null);
+  assert.match(reference.caption, /参考快照/);
 });

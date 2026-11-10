@@ -359,15 +359,21 @@ export function premiumDisplayModel(value, {
   digits = 2,
   warningAt = 1.5,
   dangerAt = 3,
+  status,
+  alignment,
 } = {}) {
   const premium = toFiniteNumber(value);
+  const explicitStatus = status || (alignment === "misaligned" ? "misaligned" : alignment === "unknown" ? "unavailable" : null);
+
   if (premium === null) {
+    const unknown = explicitStatus === "unavailable" || explicitStatus === "unknown";
     return {
       available: false,
+      canAlert: false,
       value: null,
       kind: "unavailable",
       severity: "unavailable",
-      label: "不可用",
+      label: unknown ? "待确认" : "不可用",
       percentText: "—",
       signedPercentText: "—",
       displayText: "—",
@@ -380,9 +386,52 @@ export function premiumDisplayModel(value, {
   const absoluteText = formatPercent(Math.abs(normalized), { digits, showPlus: false });
   const signedPercentText = formatPercent(normalized, { digits, showPlus: false });
 
+  if (explicitStatus === "misaligned") {
+    return {
+      available: true,
+      canAlert: false,
+      value: normalized,
+      kind: "misaligned",
+      severity: "misaligned",
+      label: "口径未对齐",
+      percentText: absoluteText,
+      signedPercentText,
+      displayText: `溢价 ${signedPercentText}（口径未对齐）`,
+    };
+  }
+
+  if (explicitStatus === "stale") {
+    return {
+      available: true,
+      canAlert: false,
+      value: normalized,
+      kind: "stale",
+      severity: "stale",
+      label: "历史参考",
+      percentText: absoluteText,
+      signedPercentText,
+      displayText: `溢价 ${signedPercentText}（历史参考）`,
+    };
+  }
+
+  if (explicitStatus === "unavailable" || explicitStatus === "unknown") {
+    return {
+      available: true,
+      canAlert: false,
+      value: normalized,
+      kind: "unavailable",
+      severity: "unavailable",
+      label: "待确认",
+      percentText: absoluteText,
+      signedPercentText,
+      displayText: `溢价 ${signedPercentText}（待确认）`,
+    };
+  }
+
   if (normalized < 0) {
     return {
       available: true,
+      canAlert: false,
       value: normalized,
       kind: "discount",
       severity: "discount",
@@ -396,6 +445,7 @@ export function premiumDisplayModel(value, {
   if (normalized === 0) {
     return {
       available: true,
+      canAlert: false,
       value: 0,
       kind: "par",
       severity: "normal",
@@ -413,6 +463,7 @@ export function premiumDisplayModel(value, {
       : "normal";
   return {
     available: true,
+    canAlert: severity === "warning" || severity === "danger",
     value: normalized,
     kind: "premium",
     severity,
@@ -420,5 +471,144 @@ export function premiumDisplayModel(value, {
     percentText: absoluteText,
     signedPercentText,
     displayText: `溢价 ${absoluteText}`,
+  };
+}
+
+/**
+ * Pick the premium a page should show: same-day IOPV first, otherwise the
+ * official NAV premium, including a misaligned official number that must not
+ * trigger a high-premium warning.
+ */
+export function etfPremiumView(row = {}, options = {}) {
+  const iopvFresh = row?.iopv_premium_status === "fresh" && toFiniteNumber(row?.iopv_premium) !== null;
+  const value = iopvFresh ? row.iopv_premium : row?.premium;
+  const status = iopvFresh
+    ? row.iopv_premium_status
+    : (row?.premium_status || row?.premium_snapshot_status);
+  const alignment = iopvFresh ? row.iopv_premium_alignment : row?.premium_alignment;
+  const model = premiumDisplayModel(value, { ...options, status, alignment });
+  return {
+    ...model,
+    source: iopvFresh ? "iopv" : "official_nav",
+    basis: iopvFresh
+      ? (row.iopv_basis || "market_price_vs_iopv")
+      : (row?.premium_basis || "market_close_vs_latest_published_nav"),
+    basisLabel: iopvFresh ? "IOPV 溢价" : "官方净值溢价",
+    quoteAsOf: iopvFresh
+      ? (row.iopv_premium_quote_as_of || row.quote_as_of)
+      : (row?.premium_quote_as_of || row?.quote_as_of),
+    referenceAsOf: iopvFresh
+      ? (row.iopv_as_of || row.iopv_premium_as_of)
+      : (row?.premium_nav_as_of || row?.nav_as_of || row?.nav_date),
+  };
+}
+
+
+const SAME_DAY_PREMIUM_BASIS = "same_day_close_vs_same_day_nav";
+const PREMIUM_HISTORY_MIN_POINTS = { 30: 15, 90: 40 };
+
+function premiumHistoryBand(percentile) {
+  if (!Number.isFinite(percentile)) return null;
+  if (percentile >= 80) return "偏高";
+  if (percentile <= 20) return "偏低";
+  return "中等";
+}
+
+function emptyPremiumWindow(size, label) {
+  return {
+    window: size,
+    status: "unavailable",
+    count: 0,
+    minPoints: PREMIUM_HISTORY_MIN_POINTS[size],
+    min: null,
+    max: null,
+    median: null,
+    percentile: null,
+    band: null,
+    label,
+  };
+}
+
+export function premiumHistoryView(points = [], {
+  currentPremium,
+  canAlert = false,
+  usable = true,
+  unusableReason = null,
+} = {}) {
+  const rows = (Array.isArray(points) ? points : [])
+    .filter((item) => item && (item.basis == null || item.basis === SAME_DAY_PREMIUM_BASIS))
+    .map((item) => {
+      const premium = toFiniteNumber(item.premium);
+      const date = item.full_date || item.date;
+      return premium === null || !date ? null : { date: String(date), premium };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  let reason = usable ? null : (unusableReason || "reference_snapshot");
+  let canUse = Boolean(usable && rows.length);
+  if (!rows.length) {
+    canUse = false;
+    reason = reason || "empty";
+  }
+
+  const windowStats = (size) => {
+    const minPoints = PREMIUM_HISTORY_MIN_POINTS[size];
+    if (!canUse) {
+      const label = reason === "reference_snapshot" ? "参考快照不用于判断当前溢价" : "暂无同口径历史";
+      return emptyPremiumWindow(size, label);
+    }
+    const values = rows.slice(-size).map((item) => item.premium);
+    if (values.length < minPoints) {
+      return { ...emptyPremiumWindow(size, "样本不足，暂不判断"), count: values.length };
+    }
+    const ordered = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(ordered.length / 2);
+    const median = ordered.length % 2 ? ordered[mid] : (ordered[mid - 1] + ordered[mid]) / 2;
+    const current = canAlert ? toFiniteNumber(currentPremium) : null;
+    let percentile = null;
+    let band = null;
+    let label = `近${size}个交易日区间 ${Math.min(...values).toFixed(2)}%～${Math.max(...values).toFixed(2)}%`;
+    if (current !== null) {
+      const rank = values.filter((value) => value <= current).length;
+      percentile = Math.round(rank / values.length * 100);
+      band = premiumHistoryBand(percentile);
+      label = `近${size}个交易日${band}（${percentile}%分位，区间 ${Math.min(...values).toFixed(2)}%～${Math.max(...values).toFixed(2)}%）`;
+    }
+    return {
+      window: size,
+      status: "ok",
+      count: values.length,
+      minPoints,
+      min: Number(Math.min(...values).toFixed(2)),
+      max: Number(Math.max(...values).toFixed(2)),
+      median: Number(median.toFixed(2)),
+      percentile,
+      band,
+      label,
+    };
+  };
+
+  const windows = { 30: windowStats(30), 90: windowStats(90) };
+  let caption;
+  if (!canUse) {
+    caption = reason === "reference_snapshot"
+      ? "这笔历史是参考快照，不用于判断当前溢价是否偏高。"
+      : "暂无同口径历史溢价，无法判断当前是否偏高。";
+  } else {
+    const parts = [windows[30].label, windows[90].label];
+    const prefix = canAlert
+      ? "相对自身同日口径历史："
+      : "当前溢价日期未对齐，只展示历史区间，不给出分位。";
+    caption = `${prefix}${parts.join("；")}`;
+  }
+
+  return {
+    basis: SAME_DAY_PREMIUM_BASIS,
+    usable: canUse,
+    reason: canUse ? null : reason,
+    pointCount: rows.length,
+    windows,
+    caption,
   };
 }

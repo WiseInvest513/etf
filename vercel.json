@@ -10,6 +10,46 @@
       "destination": "/api/index"
     },
     {
+      "source": "/guide",
+      "destination": "/guide/index.html"
+    },
+    {
+      "source": "/onchain",
+      "destination": "/onchain/index.html"
+    },
+    {
+      "source": "/chooser",
+      "destination": "/chooser/index.html"
+    },
+    {
+      "source": "/login",
+      "destination": "/login/index.html"
+    },
+    {
+      "source": "/qdii",
+      "destination": "/qdii/index.html"
+    },
+    {
+      "source": "/lazy",
+      "destination": "/lazy/index.html"
+    },
+    {
+      "source": "/export",
+      "destination": "/export/index.html"
+    },
+    {
+      "source": "/watchlist",
+      "destination": "/watchlist/index.html"
+    },
+    {
+      "source": "/admin",
+      "destination": "/admin/index.html"
+    },
+    {
+      "source": "/404",
+      "destination": "/404/index.html"
+    },
+    {
       "source": "/fund/:code",
       "destination": "/fund/:code/index.html"
     },
@@ -48,10 +88,6 @@
     {
       "source": "/active",
       "destination": "/active/index.html"
-    },
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
     }
   ],
   "functions": {
@@ -61,17 +97,79 @@
     }
   },
   "crons": [
-    { "path": "/api/cron/funds/nasdaq_passive", "schedule": "10 2 * * 1-5" },
-    { "path": "/api/cron/funds/sp500_passive", "schedule": "20 2 * * 1-5" },
-    { "path": "/api/cron/funds/us_active", "schedule": "30 2 * * 1-5" },
-    { "path": "/api/cron/etfs",    "schedule": "30 7 * * 1-5" },
-    { "path": "/api/cron/prem",    "schedule": "30 23 * * 1-5" },
-    { "path": "/api/cron/qdii/holdings/0", "schedule": "10 0 * * *" },
-    { "path": "/api/cron/qdii/holdings/1", "schedule": "15 0 * * *" },
-    { "path": "/api/cron/qdii/holdings/2", "schedule": "20 0 * * *" },
-    { "path": "/api/cron/qdii/holdings/3", "schedule": "25 0 * * *" },
-    { "path": "/api/cron/qdii/quotes-asia", "schedule": "*/15 1-7 * * 1-5" },
-    { "path": "/api/cron/qdii/quotes",      "schedule": "*/5 8-23 * * 1-5" },
-    { "path": "/api/cron/qdii/quotes-late", "schedule": "*/5 0 * * 2-6" }
+    {
+      "path": "/api/cron/funds/nasdaq_passive",
+      "schedule": "10 2 * * 1-5"
+    },
+    {
+      "path": "/api/cron/funds/sp500_passive",
+      "schedule": "20 2 * * 1-5"
+    },
+    {
+      "path": "/api/cron/funds/us_active",
+      "schedule": "30 2 * * 1-5"
+    },
+    {
+      "path": "/api/cron/etfs",
+      "schedule": "30 7 * * 1-5"
+    },
+    {
+      "path": "/api/cron/prem",
+      "schedule": "30 23 * * 1-5"
+    },
+    {
+      "path": "/api/cron/qdii/holdings/0",
+      "schedule": "10 0 * * *"
+    },
+    {
+      "path": "/api/cron/qdii/holdings/1",
+      "schedule": "15 0 * * *"
+    },
+    {
+      "path": "/api/cron/qdii/holdings/2",
+      "schedule": "20 0 * * *"
+    },
+    {
+      "path": "/api/cron/qdii/holdings/3",
+      "schedule": "25 0 * * *"
+    },
+    {
+      "path": "/api/cron/qdii/quotes-asia",
+      "schedule": "*/15 1-7 * * 1-5"
+    },
+    {
+      "path": "/api/cron/qdii/quotes",
+      "schedule": "*/5 8-23 * * 1-5"
+    },
+    {
+      "path": "/api/cron/qdii/quotes-late",
+      "schedule": "*/5 0 * * 2-6"
+    },
+    {
+      "path": "/api/cron/seo-rebuild",
+      "schedule": "50 7 * * 1-5"
+    },
+    {
+      "path": "/api/cron/seo-rebuild",
+      "schedule": "50 23 * * 1-5"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "wise-etf.com"
+        }
+      ],
+      "destination": "https://www.wise-etf.com/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/:path+/",
+      "destination": "/:path",
+      "permanent": true
+    }
   ]
 }
