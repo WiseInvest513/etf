@@ -10,6 +10,9 @@ import {
   normalizeObjectDataset,
   normalizeSubscriptionStatus,
   nullLastComparator,
+  defaultSameIndexFundOrder,
+  fundMatchesQualityFilters,
+  fundPurchaseAvailabilityRank,
   premiumDisplayModel,
   etfPremiumView,
   premiumHistoryView,
@@ -321,4 +324,22 @@ test("premiumHistoryView does not percentile a misaligned or reference series", 
   assert.equal(reference.usable, false);
   assert.equal(reference.windows[30].percentile, null);
   assert.match(reference.caption, /参考快照/);
+});
+
+test("default same-index order keeps suspended and insufficient funds off the top", () => {
+  const ranked = defaultSameIndexFundOrder([
+    { code: "STOP", subscription_status: "suspended", subscription_status_status: "fresh", fee_rate: 0.4, track_error: 0.8, scale: 80 },
+    { code: "LOW", subscription_status: "limited", daily_limit: "10元", subscription_status_status: "fresh", fee_rate: 0.5, track_error: 1, scale: 50 },
+    { code: "OPEN", subscription_status: "open", daily_limit: "不限额", subscription_status_status: "fresh", fee_rate: 0.8, track_error: 1.2, scale: 20 },
+    { code: "OLD", subscription_status: "open", daily_limit: "不限额", subscription_status_status: "stale", fee_rate: 0.3, track_error: 0.5, scale: 90 },
+  ], 100);
+  assert.deepEqual(ranked.map((row) => row.code), ["OPEN", "LOW", "OLD", "STOP"]);
+  assert.ok(fundPurchaseAvailabilityRank({ subscription_status: "limited", daily_limit: "10元", subscription_status_status: "fresh" }, 100) > 10);
+});
+
+test("quality filters can combine fee, tracking error and scale", () => {
+  const row = { fee_rate: 0.65, track_error: 1.2, scale: 15 };
+  assert.equal(fundMatchesQualityFilters(row, ["fee", "track", "scale"]), true);
+  assert.equal(fundMatchesQualityFilters({ ...row, fee_rate: 1.2 }, ["fee"]), false);
+  assert.equal(fundMatchesQualityFilters({ ...row, scale: 8 }, ["scale"]), false);
 });

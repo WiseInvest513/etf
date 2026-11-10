@@ -612,3 +612,65 @@ export function premiumHistoryView(points = [], {
     caption,
   };
 }
+
+const FRESH_SUBSCRIPTION = new Set(["fresh"]);
+
+function snapshotIsFresh(row) {
+  const snapshot = row?.subscription_status_status || row?.subscription_snapshot_status;
+  return !snapshot || FRESH_SUBSCRIPTION.has(snapshot);
+}
+
+/**
+ * Lower ranks are better purchase candidates. Suspended or clearly
+ * insufficient quotas stay behind open/adequate funds when the snapshot is fresh.
+ */
+export function fundPurchaseAvailabilityRank(row, amount = null) {
+  const model = normalizeSubscriptionStatus(row);
+  const fresh = snapshotIsFresh(row);
+  if (!fresh) {
+    if (model.status === "suspended") return 80;
+    return 70;
+  }
+  if (model.status === "open") return 0;
+  if (model.status === "limited") {
+    const limit = Number.isFinite(model.limitAmount) ? model.limitAmount : null;
+    if (amount != null && Number.isFinite(Number(amount)) && limit != null && limit < Number(amount)) {
+      return 40;
+    }
+    return 10;
+  }
+  if (model.status === "suspended") return 90;
+  return 60;
+}
+
+export function fundMatchesQualityFilters(row, filters = []) {
+  const selected = new Set(Array.isArray(filters) ? filters : []);
+  if (selected.size === 0) return true;
+  if (selected.has("fee")) {
+    if (!Number.isFinite(Number(row?.fee_rate)) || Number(row.fee_rate) > 0.8) return false;
+  }
+  if (selected.has("track")) {
+    if (!Number.isFinite(Number(row?.track_error)) || Number(row.track_error) <= 0 || Number(row.track_error) > 2) return false;
+  }
+  if (selected.has("scale")) {
+    if (!Number.isFinite(Number(row?.scale)) || Number(row.scale) < 10) return false;
+  }
+  return true;
+}
+
+export function defaultSameIndexFundOrder(rows, amount = null) {
+  return [...(rows || [])].sort((left, right) => {
+    const availability = fundPurchaseAvailabilityRank(left, amount) - fundPurchaseAvailabilityRank(right, amount);
+    if (availability) return availability;
+    const feeLeft = Number.isFinite(Number(left?.fee_rate)) ? Number(left.fee_rate) : Infinity;
+    const feeRight = Number.isFinite(Number(right?.fee_rate)) ? Number(right.fee_rate) : Infinity;
+    if (feeLeft !== feeRight) return feeLeft - feeRight;
+    const errorLeft = Number.isFinite(Number(left?.track_error)) && Number(left.track_error) > 0 ? Number(left.track_error) : Infinity;
+    const errorRight = Number.isFinite(Number(right?.track_error)) && Number(right.track_error) > 0 ? Number(right.track_error) : Infinity;
+    if (errorLeft !== errorRight) return errorLeft - errorRight;
+    const scaleLeft = Number.isFinite(Number(left?.scale)) ? Number(left.scale) : -Infinity;
+    const scaleRight = Number.isFinite(Number(right?.scale)) ? Number(right.scale) : -Infinity;
+    if (scaleLeft !== scaleRight) return scaleRight - scaleLeft;
+    return String(left?.code || "").localeCompare(String(right?.code || ""));
+  });
+}

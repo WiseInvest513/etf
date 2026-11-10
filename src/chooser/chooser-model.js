@@ -112,11 +112,15 @@ export function rankEtfCandidates(rows, { hasBroker = true } = {}) {
 }
 
 export function buildPathSummary(funds, etfs, { hasBroker = true } = {}) {
-  const bestFund = funds.find((item) => ["fit", "partial"].includes(item.signal?.key));
+  const bestFund = funds.find((item) => item.signal?.key === "fit");
+  const tightFund = funds.find((item) => item.signal?.key === "partial");
   const bestEtf = etfs.find((item) => ["low", "watch", "high"].includes(item.signal?.key));
-  if (!bestFund && !bestEtf) return { key: "unknown", title: "今日动态数据不足，暂不判断路径", text: "额度或溢价尚未更新到有效日期，可以查看低频资料，但不应据此判断今天优先买哪一侧。" };
+  if (!bestFund && !bestEtf) {
+    if (tightFund) return { key: "unknown", title: "当前场外额度可能不足", text: "没有额度足够的场外候选，也不会把它标成可买首选。可以比较其他份额、场内ETF或链上路径。" };
+    return { key: "unknown", title: "今日动态数据不足，暂不判断路径", text: "额度或溢价尚未更新到有效日期，可以查看低频资料，但不应据此判断今天优先买哪一侧。" };
+  }
   if (!hasBroker) return { key: "fund", title: "先看场外路径", text: "你当前选择了没有证券账户，场外基金操作门槛更低；仍需确认今日额度。" };
-  if (!bestFund) return { key: "etf", title: "当前仅有场内候选", text: "场外产品资料暂不可用，请继续核对场内溢价与成交情况。" };
+  if (!bestFund) return { key: "etf", title: "当前仅有场内候选", text: tightFund ? "场外候选额度可能不足，不会作为可买首选；请继续核对场内溢价与成交情况。" : "场外产品资料暂不可用，请继续核对场内溢价与成交情况。" };
   if (!bestEtf) return { key: "fund", title: "当前仅有场外候选", text: "场内产品资料暂不可用，请继续核对场外申购额度。" };
   const difference = bestFund.dataScore - bestEtf.dataScore;
   if (difference >= 12) return { key: "fund", title: "今天可以优先比较场外路径", text: "当前场外额度与费用数据的匹配度更高，仍请在下单渠道复核实际申购上限。" };

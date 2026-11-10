@@ -50,3 +50,8 @@ test("subscription state never treats an explicit limit as fully open", () => {
   assert.equal(subscriptionState({ subscription_status: "open" }), "open");
   assert.equal(subscriptionState({}), "unknown");
 });
+
+test("does not treat 待确认 as a live limit", () => {
+  assert.equal(subscriptionState({ subscription_status: "unknown", daily_limit: "待确认" }), "unknown");
+  assert.equal(subscriptionState({ daily_limit: "待确认" }), "unknown");
+});

@@ -80,9 +80,22 @@ export function extractProductRows(payload) {
 }
 
 export function subscriptionState(row) {
-  const raw = String(row?.subscription_status || row?.buy_status || "unknown").toLowerCase();
+  const raw = String(row?.subscription_status || row?.buy_status || "").toLowerCase().trim();
   if (raw === "suspended" || raw === "closed") return "suspended";
-  if (raw === "limited" || row?.daily_limit) return "limited";
-  if (raw === "open") return "open";
-  return "unknown";
+  if (raw === "limited") return "limited";
+  if (raw === "unknown") return "unknown";
+  if (raw === "open") {
+    const limit = String(row?.daily_limit || "").trim();
+    if (limit && !/待确认|不限|无上限|无限/.test(limit)) return "limited";
+    return "open";
+  }
+  const limit = String(row?.daily_limit || "").trim();
+  if (/暂停(?:申购|认购)|停止申购/.test(limit)) return "suspended";
+  if (!limit || /待确认|未知/.test(limit)) return "unknown";
+  if (/不限|无上限|无限/.test(limit)) return "open";
+  return "limited";
+}
+
+export function agencyChannel(row) {
+  return row?.subscription_channels?.agency || null;
 }

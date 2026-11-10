@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Analytics } from "@vercel/analytics/react";
 import catalog from "../../catalog/products.v1.json";
 import {
+  agencyChannel,
   buildProductDescription,
   categoryLabel,
   extractProductRows,
@@ -14,6 +15,8 @@ import {
 import { productSeoTitle, SITE_ORIGIN } from "../seo/seo-content.js";
 import { productIndexKey } from "../chooser/chooser-model.js";
 import { etfPremiumView, premiumHistoryView } from "../data/model.js";
+import { emptyHistoryCopy, historyEventsFromPayload, splitHistoryChannels } from "../data/subscription-history.js";
+import SubscriptionHistoryChart from "./SubscriptionHistoryChart.jsx";
 import "./product-detail.css";
 
 const SHARE_IMAGE = `${SITE_ORIGIN}/@Wise%20%E6%8A%95%E8%B5%84%E6%9C%89%E6%9C%AF%20(2).png`;
@@ -127,6 +130,7 @@ export default function ProductDetailPage({ type, code }) {
   const [liveRows, setLiveRows] = useState([]);
   const [dataset, setDataset] = useState({ status: "loading", source: null, asOf: null, error: null });
   const [premiumHistory, setPremiumHistory] = useState({ points: [], status: "idle", source: null, asOf: null });
+  const [limitHistory, setLimitHistory] = useState({ payload: null, status: "idle" });
   const [favorite, setFavorite] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("etf-favorites") || "[]");
@@ -225,6 +229,24 @@ export default function ProductDetailPage({ type, code }) {
     return () => controller.abort();
   }, [product]);
 
+  useEffect(() => {
+    if (!product || product.product_type === "etf") return undefined;
+    const controller = new AbortController();
+    setLimitHistory({ payload: null, status: "loading" });
+    fetch(`/api/subscription_history/${product.code}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => {
+        setLimitHistory({ payload, status: payload?.status || (payload?.data?.length ? "available" : "empty") });
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") setLimitHistory({ payload: null, status: "error" });
+      });
+    return () => controller.abort();
+  }, [product]);
+
   if (!product) {
     return (
       <main className="pd-not-found">
@@ -234,6 +256,9 @@ export default function ProductDetailPage({ type, code }) {
   }
 
   const subscription = subscriptionModel(row);
+  const agency = agencyChannel(row);
+  const limitSplit = splitHistoryChannels(limitHistory.payload);
+  const agencyEvents = historyEventsFromPayload(limitHistory.payload, { channel: "agency" });
   const premiumView = isEtf ? etfPremiumView(row, { warningAt: 1.5, dangerAt: 3 }) : null;
   const historyView = isEtf ? premiumHistoryView(premiumHistory.points, {
     currentPremium: premiumView?.value,
@@ -318,6 +343,26 @@ export default function ProductDetailPage({ type, code }) {
           <a href={isEtf ? "/today/etf-premium" : "/today/qdii-limits"}>查看完整{isEtf ? "溢价榜" : "额度清单"} →</a>
         </section>
 
+        {!isEtf && (
+          <section className="pd-panel pd-history">
+            <div className="pd-section-title"><span>限额是否变化</span><small>只画已存档的代销/平台工作日观察，没有存档的日期会留空{limitHistory.payload?.as_of ? ` · 截至 ${limitHistory.payload.as_of}` : ""}</small></div>
+            {limitHistory.status === "loading" ? (
+              <p className="pd-history-copy">正在读取已存档的限额变化…</p>
+            ) : limitHistory.status === "error" ? (
+              <p className="pd-history-copy">限额历史暂时读不到，本次先不画变化图。</p>
+            ) : (
+              <SubscriptionHistoryChart
+                title="代销 / 平台展示"
+                caption="来自东方财富基金接口的观察记录"
+                points={limitSplit.agency}
+                events={agencyEvents}
+                channel="agency"
+                emptyText={emptyHistoryCopy()}
+              />
+            )}
+          </section>
+        )}
+
         {isEtf && (
           <section className="pd-panel pd-history">
             <div className="pd-section-title"><span>溢价是否偏高</span><small>同日收盘价相对同日净值，近 30 / 90 个交易日{premiumHistory.asOf ? ` · 截至 ${premiumHistory.asOf}` : ""}</small></div>
@@ -359,8 +404,8 @@ export default function ProductDetailPage({ type, code }) {
               </>
             ) : (
               <>
-                <Metric label="申购状态" value={subscription.label} tone={subscription.tone} note={subscription.note} />
-                <Metric label="每日限额" value={row.daily_limit || "待确认"} note={row.subscription_as_of ? `检查于 ${row.subscription_as_of}` : "仅在有效接口返回后展示"} />
+                <p className="pd-caliber">申购数字来自东方财富基金接口，属于代销或平台展示口径，不是全部渠道，尤其不能当成直销额度。额度可能滞后，下单前请以基金公告和实际购买渠道为准。</p>
+                <Metric label="申购额度" value={agency?.daily_limit || row.daily_limit || subscription.label} tone={subscription.tone} note={agency?.as_of ? `观察日 ${agency.as_of} · ${agency?.source_label || "东方财富基金接口"}` : row.subscription_as_of ? `观察日 ${row.subscription_as_of} · 东方财富基金接口` : "等待有效观察日"} />
                 <Metric label="最新净值" value={hasNumber(row.nav) ? number(row.nav, 4) : "—"} note={row.nav_date || "等待最新净值"} />
               </>
             )}

@@ -57,3 +57,20 @@ test("path summary respects the lack of a securities account", () => {
   );
   assert.equal(summary.key, "fund");
 });
+
+test("does not present an insufficient or suspended fund as the default choice", () => {
+  const ranked = rankFundCandidates([
+    { code: "STOP", subscription_status: "suspended", subscription_snapshot_status: "fresh", fee_rate: 0.4 },
+    { code: "LOW", subscription_status: "limited", daily_limit: "10元", subscription_snapshot_status: "fresh", fee_rate: 0.5 },
+    { code: "OK", subscription_status: "limited", daily_limit: "1000元", subscription_snapshot_status: "fresh", fee_rate: 0.8 },
+  ], { amount: 500 });
+  assert.equal(ranked[0].code, "OK");
+  assert.ok(ranked.find((item) => item.code === "STOP").dataScore <= 8);
+
+  const tightOnly = buildPathSummary(
+    [{ dataScore: 50, signal: { key: "partial" } }],
+    [],
+  );
+  assert.equal(tightOnly.key, "unknown");
+  assert.match(tightOnly.title, /不足/);
+});

@@ -9,6 +9,8 @@ import {
   subscriptionState,
 } from "../product/product-detail-model.js";
 import { sortTodayRows } from "./today-data-model.js";
+import { emptyHistoryCopy, historyEventsFromPayload } from "../data/subscription-history.js";
+import SubscriptionHistoryChart from "../product/SubscriptionHistoryChart.jsx";
 import {
   SITE_ORIGIN,
   TODAY_FAQS,
@@ -125,6 +127,7 @@ export default function TodayDataPage({ kind }) {
   const [query, setQuery] = useState(() => initialQueryState("q", ""));
   const [sortKey, setSortKey] = useState(() => initialQueryState("sort", isLimits ? "status" : "premium"));
   const [sortDirection, setSortDirection] = useState(() => initialQueryState("direction", isLimits ? "asc" : "desc"));
+  const [limitHistory, setLimitHistory] = useState({ payload: null, status: "idle" });
 
   useEffect(() => {
     let active = true;
@@ -170,6 +173,24 @@ export default function TodayDataPage({ kind }) {
   }, [isLimits]);
 
   useEffect(() => {
+    if (!isLimits) return undefined;
+    const controller = new AbortController();
+    setLimitHistory({ payload: null, status: "loading" });
+    fetch("/api/subscription_history", { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => {
+        setLimitHistory({ payload, status: payload?.status || (payload?.events?.length ? "available" : "empty") });
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") setLimitHistory({ payload: null, status: "error" });
+      });
+    return () => controller.abort();
+  }, [isLimits]);
+
+  useEffect(() => {
     const params = new URLSearchParams();
     if (filter !== "all") params.set("status", filter);
     if (categoryFilter !== "all") params.set("category", categoryFilter);
@@ -210,6 +231,7 @@ export default function TodayDataPage({ kind }) {
     ? [
         ["status:asc", "风险状态优先"], ["status:desc", "可申购优先"],
         ["limit:desc", "额度从高到低"], ["limit:asc", "额度从低到高"],
+        ["fee:asc", "费率从低到高"], ["track:asc", "跟踪误差从低到高"], ["scale:desc", "规模从高到低"],
         ["rolling:desc", "近一年从高到低"], ["rolling:asc", "近一年从低到高"],
         ["date:desc", "数据日期从新到旧"], ["name:asc", "按产品名称"],
       ]
@@ -260,8 +282,34 @@ export default function TodayDataPage({ kind }) {
             <label className="td-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、代码或指数" /></label>
           </div>
         </section>
+        {isLimits && (
+          <section className="td-history">
+            <h2>近日限额变化</h2>
+            <p>只展示已经存档的代销/平台工作日观察，没有存档的日期会留空，不会补造历史点。</p>
+            {limitHistory.status === "loading" ? (
+              <p className="td-history-copy">正在读取已存档的限额变化…</p>
+            ) : limitHistory.status === "error" ? (
+              <p className="td-history-copy">限额历史暂时读不到，本次先不画变化图。</p>
+            ) : (
+              <SubscriptionHistoryChart
+                points={(limitHistory.payload?.series || []).map((item) => ({
+                  date: item.date,
+                  label: item.date.slice(5).replace("-", "/"),
+                  status: "limited",
+                  daily_limit_cny: item.limited,
+                  daily_limit: `限额 ${item.limited} 只 · 暂停 ${item.suspended} 只 · 开放 ${item.open} 只`,
+                  channel: "agency",
+                }))}
+                events={historyEventsFromPayload(limitHistory.payload).slice(0, 12)}
+                channel="agency"
+                emptyText={emptyHistoryCopy()}
+              />
+            )}
+          </section>
+        )}
         <section className="td-table-wrap">
-          <div className="td-table-heading"><div><h2>{isLimits ? "今日申购状态清单" : "ETF 溢价快照清单"}</h2><p>{isLimits ? "限购和额度可能滞后，待确认不代表开放申购，一切以基金公司公告为准。" : "官方净值溢价必须价格日和净值日同一天才能预警；对不齐只显示数字，标为口径未对齐。"}</p></div><div className="td-result-meta"><strong>{visibleRows.length} 只</strong><small>{sortLabel}</small></div></div>
+          <div className="td-table-heading">
+<div><h2>{isLimits ? "今日申购状态清单" : "ETF 溢价快照清单"}</h2><p>{isLimits ? "申购数字来自东方财富基金接口，属于代销或平台展示口径，不是全部渠道，尤其不能当成直销额度。限购和额度可能滞后，待确认不代表开放申购，下单前请以基金公告和实际购买渠道为准。" : "官方净值溢价必须价格日和净值日同一天才能预警；对不齐只显示数字，标为口径未对齐。"}</p></div><div className="td-result-meta"><strong>{visibleRows.length} 只</strong><small>{sortLabel}</small></div></div>
           <div className="td-table">
             <div className="td-row td-head">
               <SortHeader field="name" activeField={sortKey} direction={sortDirection} onSort={sortBy}>产品</SortHeader>
@@ -286,7 +334,7 @@ export default function TodayDataPage({ kind }) {
         </section>
         <section className="td-explain">
           <article><span>01</span><h3>{isLimits ? "待确认不等于可以买" : "溢价不是额外收益"}</h3><p>{isLimits ? "只有上游明确返回开放、限额或暂停时才展示对应状态。接口失败时保留产品资料，但状态降级为待确认。" : "溢价表示场内价格高于对应净值。买入后即使指数不跌，溢价回落也可能造成损失。"}</p></article>
-          <article><span>02</span><h3>{isLimits ? "额度可能随公告变化" : "必须检查两侧日期"}</h3><p>{isLimits ? "销售渠道、份额类别和单日累计规则可能不同，页面适合用于筛选，最终下单前仍需核对销售渠道。" : "场内价格与基金净值可能处于不同披露时点。WiseETF同时保留报价日期和净值日期，避免把错位数据当成实时IOPV。"}</p></article>
+          <article><span>02</span><h3>{isLimits ? "这是代销或平台口径" : "必须检查两侧日期"}</h3><p>{isLimits ? "当前清单里的额度来自东方财富基金接口，属于代销或平台展示，不是全部渠道，尤其不能当成直销额度。下单前请以基金公告和实际购买渠道为准。" : "场内价格与基金净值可能处于不同披露时点。WiseETF同时保留报价日期和净值日期，避免把错位数据当成实时IOPV。"}</p></article>
           <article><span>03</span><h3>找到替代路径</h3><p>{isLimits ? "场外额度不足时，可以比较同指数的其他份额、场内ETF以及链上代币化现货，而不是只盯着一只产品。" : "高溢价时不必追价，可以比较其他同指数ETF、等待溢价回落，或者选择场外及链上购买路径。"}</p></article>
         </section>
         <section className="td-faq">

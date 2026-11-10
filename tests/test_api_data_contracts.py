@@ -1408,5 +1408,114 @@ class PeHistoryContractTests(unittest.TestCase):
         self.assertEqual(payload["status"], "partial")
 
 
+
+class SubscriptionHistoryRouteTests(unittest.TestCase):
+    def test_missing_history_is_empty_and_not_fabricated(self):
+        with (
+            patch.object(api, "_mem_get", return_value=None),
+            patch.object(api, "_cache_get", return_value=None),
+            patch.object(api, "_lkg_get", return_value=None),
+        ):
+            payload = api.get_subscription_history("000834", Response())
+
+        self.assertEqual(payload["status"], "empty")
+        self.assertEqual(payload["data"], [])
+        self.assertEqual(payload["events"], [])
+        self.assertIsNone(payload["as_of"])
+
+    def test_board_series_only_includes_stored_observation_days(self):
+        stored = [{
+            "date": "2026-11-10",
+            "channel": "agency",
+            "status": "limited",
+            "daily_limit": "10元",
+            "daily_limit_cny": 10,
+            "source": "eastmoney_basic",
+        }]
+
+        def load(code, prefer_memory=True):
+            return (list(stored), "cache") if code == "000834" else ([], "empty")
+
+        with patch.object(api, "_load_subscription_history", side_effect=load):
+            payload = api.get_subscription_history_board(Response())
+
+        self.assertEqual(payload["status"], "available")
+        self.assertEqual(payload["data"]["000834"]["data"][0]["date"], "2026-11-10")
+        self.assertEqual([row["date"] for row in payload["series"]], ["2026-11-10"])
+        self.assertTrue(all(event["date"] == "2026-11-10" for event in payload["events"]))
+
+    def test_refresh_persists_only_fresh_agency_snapshots(self):
+        rows = [
+            {
+                "code": "000834",
+                "name": "大成纳斯达克100指数(QDII)A",
+                "subscription_status": "limited",
+                "subscription_status_status": "fresh",
+                "daily_limit": "10元",
+                "daily_limit_cny": 10,
+                "subscription_as_of": "2026-11-10",
+                "source": "eastmoney_basic",
+            },
+            {
+                "code": "016055",
+                "subscription_status": "suspended",
+                "subscription_status_status": "stale",
+                "subscription_as_of": "2026-11-07",
+            },
+        ]
+        published = {}
+
+        def publish(key, data, ttl):
+            published[key] = data
+            return True
+
+        with (
+            patch.object(api, "STATIC_FUNDS", {"nasdaq_passive": rows}),
+            patch.object(api, "_build_funds", return_value=(rows, "live")),
+            patch.object(api, "_store_snapshot", return_value=True),
+            patch.object(api, "_publish_live_projection", return_value={"status": "fresh"}),
+            patch.object(api, "_mem_get", return_value=None),
+            patch.object(api, "_cache_get", return_value=None),
+            patch.object(api, "_lkg_get", return_value=None),
+            patch.object(api, "_publish_cache", side_effect=publish),
+        ):
+            result = api._refresh_fund_category("nasdaq_passive")
+
+        self.assertEqual(result["subscription_history"]["written"], 1)
+        self.assertIn("sub_hist_000834", published)
+        self.assertNotIn("sub_hist_016055", published)
+        self.assertEqual([point["date"] for point in published["sub_hist_000834"]], ["2026-11-10"])
+
+    def test_daily_board_labels_agency_caliber(self):
+        today = "2026-08-25"
+        cached = [{
+            "code": "000834",
+            "name": "大成纳斯达克100指数(QDII)A",
+            "subscription_status": "limited",
+            "daily_limit": "10元",
+            "daily_limit_cny": 10,
+            "subscription_as_of": today,
+            "subscription_status_status": "fresh",
+        }]
+        rows, _source = api._daily_board_fund_rows("nasdaq_passive", today, cached, "cache")
+        self.assertEqual(rows[0]["subscription_channels"]["agency"]["source"], "eastmoney_basic")
+        self.assertNotIn("direct", rows[0]["subscription_channels"])
+        self.assertIn("代销", rows[0]["subscription_channels"]["agency"]["label"])
+
+    def test_kind_and_allowlist_include_subscription_history(self):
+        self.assertEqual(api.kind_of("sub_hist_000834"), "subscription_history")
+        self.assertIn("sub_hist_", api._VERSIONED_DATA_PREFIXES)
+        with (
+            patch.object(api, "_require_job_secret"),
+            patch.object(api, "_get_redis", return_value=object()),
+            patch.object(api, "_cache_delete") as delete,
+        ):
+            payload = api.cache_delete_key("sub_hist_000834", None)
+        delete.assert_called_once_with("sub_hist_000834")
+        self.assertTrue(payload["ok"])
+
+
+
+
 if __name__ == "__main__":
     unittest.main()

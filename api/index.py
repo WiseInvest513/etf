@@ -52,6 +52,8 @@ from api.auth_sso import (
 )
 
 from api.wise_etf import (
+    append_subscription_history,
+    attach_subscription_channels,
     canonicalize_symbol,
     calculate_etf_premium,
     china_calendar_date,
@@ -63,11 +65,14 @@ from api.wise_etf import (
     normalize_purchase,
     normalize_yahoo_quote,
     normalize_yahoo_monthly_returns,
+    observation_from_agency_row,
     parse_number,
     quote_observation_is_recent,
+    read_subscription_history,
     rolling_nav_return,
     safe_sort,
     summarize_premium_history,
+    summarize_subscription_history,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -96,6 +101,7 @@ CACHE_TTL = {
     "fx_history":      24 * 3600,  # 汇率历史，24h 有效
     "news":            30 * 60,    # 市场新闻，30min 缓存
     "premium_history": 12 * 3600,  # 溢价率历史，cron 每日更新
+    "subscription_history": 180 * 24 * 3600,  # 申购快照归档，不能丢
     "live_data":       36 * 3600,
     "monthly_returns": 36 * 3600,
     "market_sentiment": 20 * 3600,
@@ -125,7 +131,7 @@ _VERSIONED_DATA_KEYS = {
     "market_sentiment", "market_sentiment_v2", "pe_history_v3", "fx_history", "fx_usdcny",
     "news", "market_ai_insight_v2",
 }
-_VERSIONED_DATA_PREFIXES = ("funds_", "prem_hist_", RECOVERY_GATE_PREFIX)
+_VERSIONED_DATA_PREFIXES = ("funds_", "prem_hist_", "sub_hist_", RECOVERY_GATE_PREFIX)
 
 
 def _storage_key(key: str) -> str:
@@ -293,6 +299,7 @@ def kind_of(key: str) -> str:
     """根据 key 推断缓存类型"""
     if key.startswith("funds_"):        return "funds"
     if key.startswith("prem_hist_"):    return "premium_history"
+    if key.startswith("sub_hist_"):     return "subscription_history"
     if key == "etfs":                   return "etfs"
     if key == "live_data":              return "live_data"
     if key == "monthly_returns_v1":     return "monthly_returns"
@@ -861,7 +868,7 @@ def _normalize_basic_information(code: str, data: dict) -> dict:
     legacy_status = "open" if status in ("open", "limited") else status
     fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    return {
+    snapshot = {
         "code": code,
         "nav": nav,
         "nav_date": nav_date,
@@ -876,10 +883,13 @@ def _normalize_basic_information(code: str, data: dict) -> dict:
         "daily_limit": _format_daily_limit(status, purchase.daily_limit_cny),
         "daily_limit_cny": purchase.daily_limit_cny,
         "subscription_as_of": observed_at.date().isoformat() if subscription_window else None,
+        "subscription_source": "eastmoney_basic",
+        "fund_company": str(data.get("JJGS") or "").strip() or None,
         "source": "eastmoney_basic",
         "daily_source_status": "full" if subscription_window else "partial",
         "fetched_at": fetched_at,
     }
+    return attach_subscription_channels(snapshot)
 
 
 _NET_WORTH_TREND_RE = re.compile(r"Data_netWorthTrend\s*=\s*(\[.*?\]);", re.DOTALL)
@@ -963,6 +973,7 @@ def _sanitize_fund_subscription_rows(rows: Optional[list]) -> Optional[list]:
                 "data_status": "partial",
                 "daily_status": "partial",
             })
+        attach_subscription_channels(row)
         sanitized.append(row)
 
     # 若整个分类在同一批次全部变成暂停，说明上游返回的是时段性占位状态，
@@ -987,6 +998,7 @@ def _sanitize_fund_subscription_rows(rows: Optional[list]) -> Optional[list]:
                 "data_status": "partial",
                 "daily_status": "partial",
             })
+            attach_subscription_channels(row)
     return sanitized
 
 
@@ -2200,6 +2212,7 @@ def _build_funds(category: str) -> tuple:
             merged["daily_status"] = "stale" if fb["code"] in previous_map else "unavailable"
             if fb["code"] in previous_map:
                 merged["subscription_status_status"] = "stale"
+        attach_subscription_channels(merged)
         results.append(merged)
 
     results = safe_sort(
@@ -2632,6 +2645,7 @@ def _daily_board_fund_rows(
             })
         elif not is_fresh:
             row["subscription_status_status"] = "stale" if has_historical else "unavailable"
+        attach_subscription_channels(row)
         rows.append(row)
     return rows, source
 
@@ -2766,7 +2780,7 @@ def get_funds(category: str, response: Response):
             cached = _sanitize_fund_subscription_rows(_file_load(cache_key))
             source = "lkg"
         if cached is None:
-            cached = [{
+            cached = [attach_subscription_channels({
                 **row,
                 "daily_limit": "待确认",
                 "daily_limit_cny": None,
@@ -2776,7 +2790,7 @@ def get_funds(category: str, response: Response):
                 "subscription_status_status": "unavailable",
                 "data_status": "reference",
                 "daily_status": "unavailable",
-            } for row in STATIC_FUNDS.get(category, [])]
+            }) for row in STATIC_FUNDS.get(category, [])]
             source = "reference"
         _cache_header(response, 3600)
         return {
@@ -2826,9 +2840,9 @@ def get_funds(category: str, response: Response):
             }
         previous = _file_load(cache_key) or []
         reference = (
-            [{**row, "data_status": "stale", "daily_status": "stale"} for row in previous]
+            [attach_subscription_channels({**row, "data_status": "stale", "daily_status": "stale"}) for row in previous]
             if previous else
-            [{**row, "data_status": "reference"} for row in static]
+            [attach_subscription_channels({**row, "data_status": "reference"}) for row in static]
         )
         _cache_header(response, 3600)
         return {
@@ -2853,7 +2867,7 @@ def get_funds(category: str, response: Response):
             # 3. 永久 Last-Known-Good（上次成功数据）
             file_data = _file_load(cache_key)
             if file_data:
-                results = [{**row, "data_status": "stale", "daily_status": "stale"} for row in file_data]
+                results = [attach_subscription_channels({**row, "data_status": "stale", "daily_status": "stale"}) for row in file_data]
                 _cache_recovery_snapshot(cache_key, results)
                 source  = "lkg"
             elif cached is not None:
@@ -2863,7 +2877,7 @@ def get_funds(category: str, response: Response):
                 source = "cache"
             else:
                 # 4. 带明确状态的参考快照
-                results = [{**row, "data_status": "reference"} for row in static]
+                results = [attach_subscription_channels({**row, "data_status": "reference"}) for row in static]
                 source  = "reference"
     finally:
         if refresh_lock is not None:
@@ -3303,11 +3317,89 @@ def _store_snapshot(cache_key: str, data: list, source: str, ttl: int) -> bool:
     return False
 
 
+
+def _subscription_history_key(code: str) -> str:
+    return f"sub_hist_{code}"
+
+
+def _load_subscription_history(code: str, prefer_memory: bool = True) -> tuple[list, str]:
+    """Read stored observations only. Never backfill missing dates."""
+    key = _subscription_history_key(code)
+    if prefer_memory:
+        cached = _mem_get(key, "subscription_history")
+        if cached is not None:
+            return read_subscription_history(cached), "cache"
+    cached = _cache_get(key)
+    if cached is not None:
+        return read_subscription_history(cached), "cache"
+    stored = _lkg_get(key)
+    if stored is not None:
+        return read_subscription_history(stored), "lkg"
+    return [], "empty"
+
+
+def _persist_subscription_history(rows: list) -> dict:
+    """Append fresh weekday agency snapshots. Does not invent past points."""
+    written = 0
+    skipped = 0
+    for row in rows or []:
+        if not isinstance(row, dict) or not row.get("code"):
+            continue
+        point = observation_from_agency_row(row)
+        if not point:
+            skipped += 1
+            continue
+        code = str(row["code"])
+        existing, _source = _load_subscription_history(code, prefer_memory=False)
+        updated = append_subscription_history(existing, [point])
+        if updated == existing and existing:
+            # Same-day point already stored with identical fields.
+            continue
+        if _publish_cache(_subscription_history_key(code), updated, CACHE_TTL["subscription_history"]):
+            written += 1
+        else:
+            logger.warning(f"[sub_hist] failed to persist {code}")
+    return {"written": written, "skipped": skipped}
+
+
+def _subscription_history_payload(code: str, points: list, source: str) -> dict:
+    summary = summarize_subscription_history(points)
+    status = "available" if summary["count"] else "empty"
+    return {
+        "schema_version": "1.0",
+        "code": code,
+        "data": summary["points"],
+        "events": summary["events"],
+        "channels": summary["channels"],
+        "source": source if summary["count"] else "empty",
+        "status": status,
+        "as_of": summary["as_of"],
+        "note": "限额变化从本次存档起按工作日记录，没有存档的日期会留空，不会补造。公告时间仅在可可靠解析时展示，否则使用观察日。",
+    }
+
+
+def _subscription_history_series(payloads: list) -> list:
+    """Count recorded statuses by observation date; skip dates with no archive."""
+    by_date: dict = {}
+    for payload in payloads:
+        for point in payload.get("data") or []:
+            day = point.get("date")
+            channel = point.get("channel")
+            status = point.get("status")
+            if not day or channel != "agency" or status not in {"open", "limited", "suspended"}:
+                continue
+            bucket = by_date.setdefault(day, {"date": day, "open": 0, "limited": 0, "suspended": 0, "recorded": 0})
+            bucket[status] += 1
+            bucket["recorded"] += 1
+    return [by_date[key] for key in sorted(by_date)]
+
+
 def _refresh_fund_category(category: str) -> dict:
     if category not in STATIC_FUNDS:
         raise HTTPException(status_code=404, detail=f"Unknown fund category: {category}")
     started = time.monotonic()
     data, source = _build_funds(category)
+    history = _persist_subscription_history(data)
     published = _store_snapshot(f"funds_{category}", data, source, CACHE_TTL["funds"])
     result = {
         "category": category,
@@ -3315,6 +3407,7 @@ def _refresh_fund_category(category: str) -> dict:
         "source": source,
         "published": published,
         "duration_ms": round((time.monotonic() - started) * 1000),
+        "subscription_history": history,
     }
     if source != "live" or not published:
         raise HTTPException(status_code=503, detail={**result, "error": "daily snapshot not published"})
@@ -3638,6 +3731,7 @@ def cache_delete_key(
         "monthly_returns_v1", "fx_history", "fx_usdcny", "news",
         *{f"funds_{category}" for category in STATIC_FUNDS},
         *{f"prem_hist_{item['code']}" for item in STATIC_ETFS},
+        *{f"sub_hist_{item['code']}" for category in STATIC_FUNDS.values() for item in category},
     }
     qdii_exact = bool(re.fullmatch(r"qdii:(?:chg|close|post|live):[A-Za-z0-9._-]+", key))
     if key not in public_cache_keys and not qdii_exact:
@@ -3844,6 +3938,67 @@ def _premium_history_payload(data, source: str) -> dict:
             unusable_reason=None if usable else ("reference_snapshot" if source == "reference" else "empty"),
         ),
     }
+
+
+
+@app.get("/api/subscription_history")
+def get_subscription_history_board(response: Response):
+    """Public archive of stored weekday subscription snapshots. Never fabricates dates."""
+    codes = []
+    names = {}
+    for category, rows in STATIC_FUNDS.items():
+        for item in rows:
+            code = item.get("code")
+            if not code or code in names:
+                continue
+            codes.append(code)
+            names[code] = item.get("name") or code
+    payloads = []
+    events = []
+    as_of = None
+    sources = set()
+    for code in codes:
+        points, source = _load_subscription_history(code)
+        payload = _subscription_history_payload(code, points, source)
+        if payload["status"] == "empty":
+            continue
+        payload["name"] = names.get(code)
+        payloads.append(payload)
+        sources.add(payload["source"])
+        if payload.get("as_of") and (as_of is None or payload["as_of"] > as_of):
+            as_of = payload["as_of"]
+        for event in payload.get("events") or []:
+            events.append({**event, "code": code, "name": names.get(code)})
+    events.sort(key=lambda item: (item.get("date") or "", item.get("code") or ""), reverse=True)
+    _cache_header(response, 60)
+    return {
+        "schema_version": "1.0",
+        "data": {item["code"]: item for item in payloads},
+        "events": events,
+        "series": _subscription_history_series(payloads),
+        "count": len(payloads),
+        "source": "cache" if "cache" in sources else ("lkg" if sources else "empty"),
+        "status": "available" if payloads else "empty",
+        "as_of": as_of,
+        "note": "限额变化从本次存档起按工作日记录，没有存档的日期会留空，不会补造。",
+    }
+
+
+@app.get("/api/subscription_history/{code}")
+def get_subscription_history(code: str, response: Response):
+    """Stored limit history for one fund. Empty until the first valid weekday persist."""
+    cleaned = str(code or "").strip()
+    if not re.fullmatch(r"\d{6}", cleaned):
+        raise HTTPException(status_code=400, detail="code must be a 6-digit fund code")
+    points, source = _load_subscription_history(cleaned)
+    _cache_header(response, 60)
+    payload = _subscription_history_payload(cleaned, points, source)
+    for category, rows in STATIC_FUNDS.items():
+        for item in rows:
+            if item.get("code") == cleaned:
+                payload["name"] = item.get("name")
+                break
+    return payload
 
 
 @app.get("/api/premium_history/{code}")

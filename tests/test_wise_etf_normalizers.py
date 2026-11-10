@@ -3,6 +3,8 @@ import unittest
 from datetime import date, datetime, timezone, timedelta
 
 from api.wise_etf.normalizers import (
+    append_subscription_history,
+    attach_subscription_channels,
     calendar_year_return,
     calculate_etf_premium,
     china_calendar_date,
@@ -11,10 +13,13 @@ from api.wise_etf.normalizers import (
     merge_last_known_good,
     normalize_purchase,
     normalize_purchase_status,
+    observation_from_agency_row,
     parse_number,
+    read_subscription_history,
     rolling_nav_return,
     safe_sort,
     summarize_premium_history,
+    summarize_subscription_history,
 )
 
 
@@ -252,3 +257,96 @@ class PremiumHistorySummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubscriptionChannelTests(unittest.TestCase):
+    def test_agency_channel_keeps_eastmoney_caliber_label(self):
+        row = attach_subscription_channels({
+            "code": "000834",
+            "name": "大成纳斯达克100指数(QDII)A",
+            "subscription_status": "limited",
+            "subscription_status_status": "fresh",
+            "daily_limit": "10元",
+            "daily_limit_cny": 10,
+            "subscription_as_of": "2026-11-10",
+        })
+        agency = row["subscription_channels"]["agency"]
+        self.assertEqual(row["subscription_caliber"], "eastmoney_agency")
+        self.assertEqual(agency["source"], "eastmoney_basic")
+        self.assertIn("代销", agency["label"])
+        self.assertIn("不是全部渠道", agency["note"])
+        self.assertEqual(agency["status"], "limited")
+        self.assertEqual(agency["daily_limit"], "10元")
+        self.assertNotIn("direct", row["subscription_channels"])
+        self.assertNotIn("subscription_channel_diff", row)
+
+
+class SubscriptionHistoryTests(unittest.TestCase):
+    def test_appends_valid_points_without_fabricating_missing_dates(self):
+        first = {
+            "date": "2026-11-10",
+            "channel": "agency",
+            "status": "limited",
+            "daily_limit_cny": 10,
+            "source": "eastmoney_basic",
+        }
+        stored = append_subscription_history([], [first])
+        self.assertEqual([item["date"] for item in stored], ["2026-11-10"])
+        # A later weekday is recorded; the gap stays empty.
+        stored = append_subscription_history(stored, [{
+            "date": "2026-11-12",
+            "channel": "agency",
+            "status": "suspended",
+            "source": "eastmoney_basic",
+        }])
+        self.assertEqual([item["date"] for item in stored], ["2026-11-10", "2026-11-12"])
+        self.assertNotIn("2026-11-11", [item["date"] for item in stored])
+
+    def test_rejects_weekend_points_and_unknown_status(self):
+        stored = append_subscription_history([], [
+            {"date": "2026-11-08", "channel": "agency", "status": "open", "source": "eastmoney_basic"},
+            {"date": "2026-11-10", "channel": "agency", "status": "unknown", "source": "eastmoney_basic"},
+            {"date": "2026-11-10", "channel": "agency", "status": "limited", "daily_limit_cny": 50, "source": "eastmoney_basic"},
+        ])
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["date"], "2026-11-10")
+        self.assertEqual(stored[0]["daily_limit"], "50元")
+
+    def test_same_day_upsert_does_not_duplicate(self):
+        first = {"date": "2026-11-10", "channel": "agency", "status": "limited", "daily_limit_cny": 100, "source": "eastmoney_basic"}
+        updated = {"date": "2026-11-10", "channel": "agency", "status": "limited", "daily_limit_cny": 10, "source": "eastmoney_basic"}
+        stored = append_subscription_history([first], [updated])
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["daily_limit_cny"], 10)
+
+    def test_observation_requires_fresh_business_day_snapshot(self):
+        self.assertIsNone(observation_from_agency_row({
+            "subscription_status": "limited",
+            "subscription_status_status": "stale",
+            "daily_limit_cny": 10,
+            "subscription_as_of": "2026-11-09",
+            "source": "eastmoney_basic",
+        }))
+        point = observation_from_agency_row({
+            "subscription_status": "limited",
+            "subscription_status_status": "fresh",
+            "daily_limit": "10元",
+            "daily_limit_cny": 10,
+            "subscription_as_of": "2026-11-10",
+            "source": "eastmoney_basic",
+        })
+        self.assertEqual(point["channel"], "agency")
+        self.assertEqual(point["date"], "2026-11-10")
+
+    def test_history_events_start_at_first_record_and_mark_pauses(self):
+        points = read_subscription_history([
+            {"date": "2026-11-10", "channel": "agency", "status": "limited", "daily_limit_cny": 10, "source": "eastmoney_basic"},
+            {"date": "2026-11-12", "channel": "agency", "status": "suspended", "source": "eastmoney_basic"},
+        ])
+        summary = summarize_subscription_history(points)
+        kinds = [event["kind"] for event in summary["events"]]
+        self.assertEqual(kinds, ["recorded", "pause"])
+        self.assertTrue(summary["events"][0]["label"].startswith("2026-11-10"))
+        self.assertIn("暂停申购", summary["events"][1]["label"])
+        self.assertEqual(list(summary["channels"]), ["agency"])
+        self.assertEqual(len(summary["channels"]["agency"]), 2)

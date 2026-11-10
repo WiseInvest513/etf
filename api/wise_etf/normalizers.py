@@ -12,6 +12,14 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 from .models import NavPoint, PurchaseSnapshot, PurchaseStatus
 
+AGENCY_SOURCE = "eastmoney_basic"
+AGENCY_SOURCE_LABEL = "东方财富基金接口"
+AGENCY_CHANNEL_LABEL = "代销 / 平台展示"
+AGENCY_CALIBER_NOTE = (
+    "该数字来自东方财富基金接口，更接近代销或平台展示，不是全部渠道，"
+    "尤其不能当成基金公司直销额度。额度可能滞后，下单前请以基金公告和实际购买渠道为准。"
+)
+
 
 T = TypeVar("T")
 SortKey = Union[str, Callable[[T], Any]]
@@ -592,3 +600,252 @@ def summarize_premium_history(
 etf_premium = calculate_etf_premium
 rolling_one_year_return = extract_rolling_1y
 merge_lkg = merge_last_known_good
+
+
+_VALID_PURCHASE_STATUS = {"open", "limited", "suspended"}
+_VALID_CHANNELS = {"agency"}
+_VALID_SNAPSHOT_STATUS = {"fresh", "stale", "unavailable"}
+
+
+def format_purchase_limit(status: Any, limit_cny: Any = None) -> str:
+    """Format a canonical purchase status into the UI's short Chinese label."""
+
+    if status == "suspended":
+        return "暂停申购"
+    parsed = parse_number(limit_cny)
+    if status == "limited" and parsed is not None and parsed > 0:
+        value = int(parsed) if float(parsed).is_integer() else round(parsed, 2)
+        return f"{value}元"
+    if status == "open":
+        return "不限额"
+    return "待确认"
+
+
+def _valid_observation_date(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        observed = date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if observed.weekday() >= 5:
+        return None
+    return observed.isoformat()
+
+
+def _history_point_key(point: Mapping[str, Any]) -> Tuple[str, str]:
+    return (str(point.get("date") or ""), str(point.get("channel") or ""))
+
+
+def normalize_subscription_history_point(raw: Any) -> Optional[Dict[str, Any]]:
+    """Keep only a real observation day; never invent a date or a channel number."""
+
+    if not isinstance(raw, Mapping):
+        return None
+    channel = raw.get("channel")
+    status = raw.get("status")
+    observed = _valid_observation_date(raw.get("date") or raw.get("full_date") or raw.get("observed_at"))
+    if channel not in _VALID_CHANNELS or status not in _VALID_PURCHASE_STATUS or not observed:
+        return None
+    source = str(raw.get("source") or "").strip() or None
+    if not source:
+        return None
+    limit_cny = parse_number(raw.get("daily_limit_cny"))
+    if status != "limited" or limit_cny is None or limit_cny <= 0:
+        limit_cny = None
+    announced = raw.get("announced_at")
+    announced_at = _valid_observation_date(announced) if isinstance(announced, str) else None
+    display = raw.get("daily_limit") or format_purchase_limit(status, limit_cny)
+    return {
+        "date": observed,
+        "full_date": observed,
+        "channel": channel,
+        "status": status,
+        "daily_limit": display,
+        "daily_limit_cny": limit_cny,
+        "source": source,
+        "announced_at": announced_at,
+        "observed_at": observed,
+    }
+
+
+def read_subscription_history(points: Optional[Iterable[Any]]) -> List[Dict[str, Any]]:
+    """Return stored observations only, sorted, with no backfilled dates."""
+
+    cleaned: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for item in points or ():
+        point = normalize_subscription_history_point(item)
+        if not point:
+            continue
+        key = _history_point_key(point)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(point)
+    cleaned.sort(key=lambda item: (item["date"], item["channel"]))
+    return cleaned
+
+
+def append_subscription_history(
+    existing: Optional[Iterable[Any]],
+    incoming: Optional[Iterable[Any]],
+) -> List[Dict[str, Any]]:
+    """Upsert valid observations by (date, channel). Same-day updates replace."""
+
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for item in read_subscription_history(existing):
+        by_key[_history_point_key(item)] = item
+    for item in incoming or ():
+        point = normalize_subscription_history_point(item)
+        if not point:
+            continue
+        by_key[_history_point_key(point)] = point
+    return [by_key[key] for key in sorted(by_key)]
+
+
+def observation_from_agency_row(row: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Build an agency history point only from a fresh, valid business-day snapshot."""
+
+    if not isinstance(row, Mapping):
+        return None
+    if row.get("subscription_status_status") != "fresh":
+        return None
+    return normalize_subscription_history_point({
+        "date": row.get("subscription_as_of"),
+        "channel": "agency",
+        "status": row.get("subscription_status"),
+        "daily_limit": row.get("daily_limit"),
+        "daily_limit_cny": row.get("daily_limit_cny"),
+        "source": row.get("subscription_source") or row.get("source") or AGENCY_SOURCE,
+        "announced_at": None,
+        "observed_at": row.get("subscription_as_of"),
+    })
+
+
+def _channel_status_label(status: str) -> str:
+    return {
+        "open": "开放申购",
+        "limited": "限额申购",
+        "suspended": "暂停申购",
+    }.get(status, "待确认")
+
+
+def _event_label(channel: str, kind: str, previous: Optional[Mapping[str, Any]], current: Mapping[str, Any]) -> str:
+    channel_label = AGENCY_CHANNEL_LABEL
+    current_text = _channel_status_label(current["status"])
+    if current["status"] == "limited" and current.get("daily_limit"):
+        current_text = f"{current_text} {current['daily_limit']}"
+    if kind == "recorded":
+        return f"{current['date']} {channel_label}开始记录：{current_text}"
+    previous_text = _channel_status_label(previous["status"]) if previous else "待确认"
+    if previous and previous.get("status") == "limited" and previous.get("daily_limit"):
+        previous_text = f"{previous_text} {previous['daily_limit']}"
+    return f"{current['date']} {channel_label}：{previous_text} → {current_text}"
+
+
+def summarize_subscription_history(
+    points: Optional[Iterable[Any]],
+    channel: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Describe pauses and limit changes. Missing days stay missing."""
+
+    cleaned = read_subscription_history(points)
+    if channel in _VALID_CHANNELS:
+        cleaned = [item for item in cleaned if item["channel"] == channel]
+
+    events: List[Dict[str, Any]] = []
+    by_channel: Dict[str, List[Dict[str, Any]]] = {"agency": [], "direct": []}
+    for item in cleaned:
+        by_channel.setdefault(item["channel"], []).append(item)
+
+    for channel_name, rows in by_channel.items():
+        previous = None
+        for item in rows:
+            if previous is None:
+                kind = "recorded"
+            elif item["status"] == "suspended" and previous["status"] != "suspended":
+                kind = "pause"
+            elif previous["status"] == "suspended" and item["status"] != "suspended":
+                kind = "resume"
+            elif item.get("daily_limit_cny") != previous.get("daily_limit_cny") or item["status"] != previous["status"]:
+                kind = "limit_change"
+            else:
+                previous = item
+                continue
+            events.append({
+                "date": item["date"],
+                "channel": channel_name,
+                "kind": kind,
+                "status": item["status"],
+                "daily_limit": item.get("daily_limit"),
+                "daily_limit_cny": item.get("daily_limit_cny"),
+                "from_status": None if previous is None else previous["status"],
+                "from_daily_limit": None if previous is None else previous.get("daily_limit"),
+                "label": _event_label(channel_name, kind, previous, item),
+            })
+            previous = item
+
+    events.sort(key=lambda item: (item["date"], item["channel"], item["kind"]))
+    as_of = cleaned[-1]["date"] if cleaned else None
+    return {
+        "points": cleaned,
+        "events": events,
+        "count": len(cleaned),
+        "as_of": as_of,
+        "channels": {
+            "agency": [item for item in cleaned if item["channel"] == "agency"],
+        },
+    }
+
+
+def _snapshot_status_from_row(row: Mapping[str, Any], status: str) -> str:
+    raw = row.get("subscription_status_status") or row.get("subscription_snapshot_status")
+    if raw in _VALID_SNAPSHOT_STATUS:
+        return raw
+    return "unavailable" if status == "unknown" else "stale"
+
+
+def build_agency_channel(row: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    data = row if isinstance(row, Mapping) else {}
+    status = data.get("subscription_status")
+    if status not in _VALID_PURCHASE_STATUS:
+        status = "unknown"
+    snapshot_status = _snapshot_status_from_row(data, status)
+    limit_cny = parse_number(data.get("daily_limit_cny")) if status == "limited" else None
+    if limit_cny is not None and limit_cny <= 0:
+        limit_cny = None
+    as_of = data.get("subscription_as_of") if isinstance(data.get("subscription_as_of"), str) else None
+    if as_of and not _valid_observation_date(as_of) and status != "unknown":
+        # Keep a displayed date even if it later gets sanitized elsewhere;
+        # invalid weekend dates should already have been cleared by callers.
+        pass
+    display = data.get("daily_limit") or format_purchase_limit(status, limit_cny)
+    if status == "unknown":
+        display = display if display and display != "不限额" else "待确认"
+        limit_cny = None
+    return {
+        "channel": "agency",
+        "label": AGENCY_CHANNEL_LABEL,
+        "status": status,
+        "daily_limit": display,
+        "daily_limit_cny": limit_cny,
+        "as_of": as_of,
+        "snapshot_status": snapshot_status,
+        "source": AGENCY_SOURCE,
+        "source_label": AGENCY_SOURCE_LABEL,
+        "note": AGENCY_CALIBER_NOTE,
+    }
+
+
+def attach_subscription_channels(row: Any) -> Any:
+    """Label current Eastmoney purchase fields as the agency/platform caliber."""
+
+    if not isinstance(row, dict):
+        return row
+    agency = build_agency_channel(row)
+    row["subscription_caliber"] = "eastmoney_agency"
+    row["subscription_source"] = AGENCY_SOURCE
+    row["subscription_source_label"] = AGENCY_SOURCE_LABEL
+    row["subscription_channels"] = {"agency": agency}
+    return row

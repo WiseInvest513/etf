@@ -24,6 +24,9 @@ function statusRank(row) {
 function sortValue(row, key) {
   if (key === "status") return statusRank(row);
   if (key === "limit") return parseLimitAmount(row.daily_limit);
+  if (key === "fee") return finite(row.fee_rate) ? Number(row.fee_rate) : null;
+  if (key === "track") return finite(row.track_error) && Number(row.track_error) > 0 ? Number(row.track_error) : null;
+  if (key === "scale") return finite(row.scale) ? Number(row.scale) : null;
   if (key === "rolling") return finite(row.rolling_1y) ? Number(row.rolling_1y) : null;
   if (key === "premium") return finite(row.premium) ? Number(row.premium) : null;
   if (key === "change") return finite(row.market_change_pct ?? row.change_pct) ? Number(row.market_change_pct ?? row.change_pct) : null;

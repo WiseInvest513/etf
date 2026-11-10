@@ -18,6 +18,9 @@ import {
   normalizeObjectDataset,
   normalizeSubscriptionStatus,
   nullLastComparator,
+  defaultSameIndexFundOrder,
+  fundMatchesQualityFilters,
+  fundPurchaseAvailabilityRank,
   premiumDisplayModel,
   etfPremiumView,
   premiumHistoryView,
@@ -1515,8 +1518,26 @@ function SkeletonTable({rows=7,cols=7}) {
 }
 
 // ─── Status Filter Bar ────────────────────────────────────────────────────────
+function QualityFilterBar({value, onChange, color}) {
+  const opts=[{id:"fee",label:"费率≤0.8%"},{id:"track",label:"跟踪误差≤2%"},{id:"scale",label:"规模≥10亿"}];
+  const selected=new Set(value||[]);
+  return (
+    <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+      {opts.map(o=>{
+        const active=selected.has(o.id);
+        return (
+          <button key={o.id} type="button" onClick={()=>onChange(o.id)}
+            style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${active?color:"#e0e0e5"}`,background:active?color+"14":"none",color:active?color:"#6e6e73",fontSize:12,fontWeight:active?700:400,cursor:"pointer",transition:"all 0.18s",lineHeight:1.5}}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function StatusFilterBar({value, onChange, color}) {
-  const opts=[{id:"all",label:"全部"},{id:"open",label:"仅开放申购"},{id:"suspended",label:"暂停申购"}];
+  const opts=[{id:"all",label:"全部"},{id:"open",label:"开放"},{id:"limited",label:"限额"},{id:"suspended",label:"暂停"},{id:"unknown",label:"待确认"}];
   return (
     <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
       {opts.map(o=>(
@@ -4131,6 +4152,7 @@ function MainApp() {
   const [sortDir,setSortDir]=useState("desc");
   const [search,setSearch]=useState("");
   const [statusFilter,setStatusFilter]=useState("all");
+  const [qualityFilters,setQualityFilters]=useState([]);
   const [selETF,setSelETF]=useState("513100");
   const [,setScrolled]=useState(false);
   const [showBackToTop,setShowBackToTop]=useState(false);
@@ -4229,7 +4251,7 @@ function MainApp() {
       const path=window.location.pathname.replace(/^\//,"");
       const valid=["guide","nasdaq","sp500","etf","active","watchlist","onchain"];
       setActiveTab(valid.includes(path)?path:"overview");
-      setSortKey(null);setSearch("");setStatusFilter("all");
+      setSortKey(null);setSearch("");setStatusFilter("all");setQualityFilters([]);
     };
     window.addEventListener("popstate",onPop);
     return()=>window.removeEventListener("popstate",onPop);
@@ -4330,7 +4352,7 @@ function MainApp() {
 
   const handleSort = k => {
     if(sortKey===k) setSortDir(d=>d==="asc"?"desc":"asc");
-    else{setSortKey(k);setSortDir("desc");}
+    else{setSortKey(k);setSortDir(["subscription_status","fee_rate","track_error"].includes(k)?"asc":"desc");}
   };
   const parseDailyLimit = row => {
     if(Number.isFinite(row?.daily_limit_cny)) return row.daily_limit_cny;
@@ -4338,9 +4360,11 @@ function MainApp() {
     if(model.isUnlimited) return Number.MAX_SAFE_INTEGER;
     return Number.isFinite(model.limitAmount)?model.limitAmount:null;
   };
-  const sortData = data => {
-    if(!sortKey) return data;
-    const selector=sortKey==="daily_limit"?parseDailyLimit:row=>row?.[sortKey];
+  const sortData = (data, kind="fund") => {
+    if(!sortKey) return kind==="fund" ? defaultSameIndexFundOrder(data) : data;
+    const selector=sortKey==="daily_limit"?parseDailyLimit
+      :sortKey==="subscription_status"?row=>fundPurchaseAvailabilityRank(row)
+      :row=>row?.[sortKey];
     return [...data].sort(nullLastComparator(selector,sortDir));
   };
   const _PROTECTED_TABS = ["qdii"];
@@ -4351,7 +4375,7 @@ function MainApp() {
       return;
     }
     setActiveTab(id);
-    setSortKey(null);setSearch("");setStatusFilter("all");
+    setSortKey(null);setSearch("");setStatusFilter("all");setQualityFilters([]);
     window.history.pushState(null, "", id === "overview" ? "/" : `/${id}`);
     window.scrollTo({top:0,behavior:"smooth"});
   };
@@ -4382,14 +4406,20 @@ function MainApp() {
     unusableReason: premHistMeta.source === "reference" ? "reference_snapshot" : null,
   });
 
+  const toggleQualityFilter = id => {
+    setQualityFilters(prev=>prev.includes(id)?prev.filter(item=>item!==id):[...prev,id]);
+  };
   const filterData = (data,applyStatus=true) => {
     let filtered = data;
     if(search.trim()){
       const q=search.trim().toLowerCase();
       filtered=filtered.filter(f=>(f.name||"").toLowerCase().includes(q)||(f.code||"").toLowerCase().includes(q));
     }
-    if(applyStatus&&statusFilter==="open") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).canSubscribe);
+    if(applyStatus&&statusFilter==="open") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).status==="open");
+    if(applyStatus&&statusFilter==="limited") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).isLimited);
     if(applyStatus&&statusFilter==="suspended") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).isSuspended);
+    if(applyStatus&&statusFilter==="unknown") filtered=filtered.filter(f=>normalizeSubscriptionStatus(f).status==="unknown");
+    if(qualityFilters.length) filtered=filtered.filter(f=>fundMatchesQualityFilters(f, qualityFilters));
     return filtered;
   };
   const toggleFavorite = code=>{
@@ -4489,8 +4519,8 @@ function MainApp() {
     {key:"rolling_1y",label:"近1年滚动",tip:"截至最新净值日的近一年滚动收益，每日更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
     {key:"track_error",label:"跟踪误差",tip:"基金产品页披露的年化跟踪误差；每日检查",align:"right",render:(v,row)=>v!=null?<span title={row.track_error_as_of?`披露截至 ${row.track_error_as_of}`:""} style={{color:v>2?C.orange:C.textDim}}>{v}%</span>:"—"},
-    {key:"daily_limit",label:"申购上限",tip:"每日单笔最大申购金额",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
-    {key:"subscription_status",label:"申购状态",tip:"开放、限额、暂停和待确认四种状态",align:"center",sortable:false,render:(v,row)=><StatusBadge status={v||row.buy_status} dailyLimit={row.daily_limit}/>},
+    {key:"daily_limit",label:"申购上限",tip:"东方财富基金接口的代销/平台展示口径，不是全部渠道，尤其不是直销额度",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
+    {key:"subscription_status",label:"申购状态",tip:"开放、限额、暂停和待确认。默认排序不会把暂停或额度明显不足的产品排成可买首选",align:"center",render:(v,row)=><StatusBadge status={v||row.buy_status} dailyLimit={row.daily_limit}/>},
   ];
   const activeCols=[
     actionsCol(C.purple),
@@ -4501,8 +4531,8 @@ function MainApp() {
     {key:"annual_return_2025",label:"2025全年",tip:"累计净值口径的2025自然年度收益",align:"right",render:v=>v!=null?<MiniBar value={v} max={maxAnnual} color={v>0?C.green:C.red}/>:"—"},
     {key:"rolling_1y",label:"近1年滚动",tip:"截至最新净值日的最近365天滚动涨幅，每日更新",align:"right",render:(_,row)=>renderRolling1y(row.rolling_1y)},
     {key:"day_change",label:"昨日涨跌",tip:"绿色=上涨，红色=下跌",align:"right",render:(_,row)=>renderDayChange(row.day_change)},
-    {key:"daily_limit",label:"每日限额",tip:"每日单笔最大申购金额，额度越低说明越紧俏",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
-    {key:"subscription_status",label:"申购状态",tip:"开放、限额、暂停和待确认四种状态",align:"center",sortable:false,render:(v,row)=><StatusBadge status={v||row.buy_status} dailyLimit={row.daily_limit}/>},
+    {key:"daily_limit",label:"每日限额",tip:"东方财富基金接口的代销/平台展示口径，不是全部渠道，尤其不是直销额度",align:"right",render:v=><span style={{fontSize:12,color:C.textMuted}}>{v}</span>},
+    {key:"subscription_status",label:"申购状态",tip:"开放、限额、暂停和待确认。默认排序不会把暂停或额度明显不足的产品排成可买首选",align:"center",render:(v,row)=><StatusBadge status={v||row.buy_status} dailyLimit={row.daily_limit}/>},
   ];
   const etfCols=[
     actionsCol(C.cyan),
@@ -4924,8 +4954,12 @@ function MainApp() {
             <DailyCollectionLink/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.accent}/></div>
-              <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
+              <div>
+                <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.accent}/>
+                <QualityFilterBar value={qualityFilters} onChange={toggleQualityFilter} color={C.accent}/>
+              </div>
             </div>
+            <div style={{fontSize:11,color:C.textDim,margin:"0 0 10px",lineHeight:1.6}}>申购上限来自东方财富基金接口，属于代销/平台展示口径，不是全部渠道，尤其不能当成直销额度。默认排序会把暂停或额度明显不足的产品放在可买候选后面。</div>
             {datasets.nasdaq.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(nasdaqM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(nasdaqM).length===0&&<EmptyResult query={search}/>}</>}
             <AcInfoBox/>
           </Reveal>
@@ -4939,8 +4973,12 @@ function MainApp() {
             <DailyCollectionLink/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.cyan}/></div>
-              <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
+              <div>
+                <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.cyan}/>
+                <QualityFilterBar value={qualityFilters} onChange={toggleQualityFilter} color={C.cyan}/>
+              </div>
             </div>
+            <div style={{fontSize:11,color:C.textDim,margin:"0 0 10px",lineHeight:1.6}}>申购上限来自东方财富基金接口，属于代销/平台展示口径，不是全部渠道，尤其不能当成直销额度。默认排序会把暂停或额度明显不足的产品放在可买候选后面。</div>
             {datasets.sp500.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={9}/>:<><DataTable columns={passiveColsF} data={sortData(filterData(sp500M))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(sp500M).length===0&&<EmptyResult query={search}/>}</>}
             <AcInfoBox/>
           </Reveal>
@@ -4954,9 +4992,13 @@ function MainApp() {
             <DailyCollectionLink/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.purple}/></div>
-              <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
+              <div>
+                <StatusFilterBar value={statusFilter} onChange={setStatusFilter} color={C.purple}/>
+                <QualityFilterBar value={qualityFilters} onChange={toggleQualityFilter} color={C.purple}/>
+              </div>
             </div>
-            {datasets.active.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
+            <div style={{fontSize:11,color:C.textDim,margin:"0 0 10px",lineHeight:1.6}}>申购上限来自东方财富基金接口，属于代销/平台展示口径，不是全部渠道，尤其不能当成直销额度。默认排序会把暂停或额度明显不足的产品放在可买候选后面。</div>
+            {datasets.active.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={activeColsF} data={sortData(filterData(activeM),"fund")} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(activeM).length===0&&<EmptyResult query={search}/>}</>}
           </Reveal>
         )}
 
@@ -4975,7 +5017,7 @@ function MainApp() {
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
               <div style={{flex:1,minWidth:200}}><SearchBar value={search} onChange={setSearch} color={C.orange}/></div>
             </div>
-            {datasets.etfs.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfColsF} data={sortData(filterData(etfsM,false))} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM,false).length===0&&<EmptyResult query={search}/>}</>}
+            {datasets.etfs.status===DATASET_STATE.LOADING?<SkeletonTable rows={8} cols={8}/>:<><DataTable columns={etfColsF} data={sortData(filterData(etfsM,false),"etf")} sortKey={sortKey} sortDir={sortDir} onSort={handleSort}/>{filterData(etfsM,false).length===0&&<EmptyResult query={search}/>}</>}
             <Card style={{marginTop:24,padding:"24px 26px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div>
