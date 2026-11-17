@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import html2canvas from "html2canvas";
+import { currentReturnTo } from "./auth/auth-client.js";
+import { withMainSiteAttribution } from "./auth/main-site-attribution.js";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
@@ -606,7 +608,7 @@ function SiteFooter({ isMobile }) {
           <div style={{ fontSize:15, fontWeight:700, color:"#1e293b", marginBottom:20 }}>其他</div>
           <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
             {[
-              { label:"投资主站",    href:"https://www.wise-invest.org",  icon:"🌐" },
+              { label:"投资主站",    href:withMainSiteAttribution("https://www.wise-invest.org", typeof window === "undefined" ? "/" : currentReturnTo()),  icon:"🌐" },
               { label:"Wise-Witness",href:"https://www.wise-witness.com", icon:"🏦" },
               { label:"Wise-Hold",   href:"https://www.wise-hold.com",    icon:"📈" },
               { label:"Wise-SIM",    href:"https://www.wise-sim.org",     icon:"📱" },

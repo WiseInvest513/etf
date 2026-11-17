@@ -2,6 +2,8 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Tooltip, PieChart, Pie, Cell } from "recharts";
 import { useAuth } from "./auth/AuthProvider.jsx";
+import { currentReturnTo } from "./auth/auth-client.js";
+import { withMainSiteAttribution } from "./auth/main-site-attribution.js";
 import { VIP_JOIN_URL } from "./navigation/navigationConfig.js";
 
 const QDII_FREE_FUND_LIMIT = 12;
@@ -1889,7 +1891,7 @@ export default function QDIIPage() {
             <div style={{ fontSize:14, fontWeight:700, color:CC.text, marginBottom:16 }}>Wise 旗下</div>
             <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
               {[
-                { label:"投资主站",     href:"https://www.wise-invest.org",  icon:"🌐" },
+                { label:"投资主站",     href:withMainSiteAttribution("https://www.wise-invest.org", typeof window === "undefined" ? "/" : currentReturnTo()),  icon:"🌐" },
                 { label:"Wise-Witness", href:"https://www.wise-witness.com",  icon:"🏦" },
                 { label:"Wise-Hold",    href:"https://www.wise-hold.com",     icon:"📈" },
                 { label:"Wise-SIM",     href:"https://www.wise-sim.org",      icon:"📱" },
