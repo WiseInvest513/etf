@@ -5,6 +5,7 @@ import { Analytics } from "@vercel/analytics/react";
 import { AuthProvider, useAuth } from "./auth/AuthProvider.jsx";
 import WiseLoginGate from "./auth/WiseLoginGate.jsx";
 import { currentReturnTo } from "./auth/auth-client.js";
+import { withMainSiteAttribution } from "./auth/main-site-attribution.js";
 import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
 import { CATEGORY_PAGE_META, GUIDE_SEO, HOME_SEO, ONCHAIN_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
@@ -5113,7 +5114,7 @@ function MainApp() {
             <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>其他</div>
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
               {[
-                {label:"投资主站",   href:"https://www.wise-invest.org",  icon:"🌐"},
+                {label:"投资主站",   href:withMainSiteAttribution("https://www.wise-invest.org/", typeof window === "undefined" ? "/" : currentReturnTo()),  icon:"🌐"},
                 {label:"VIP",        href:"https://vip.wise-invest.org/",   icon:"👑"},
                 {label:"CHAIN",      href:"https://chain.wise-invest.org/", icon:"📈"},
                 {label:"CRYPTO",     href:"https://crypto.wise-invest.org/",icon:"◈"},

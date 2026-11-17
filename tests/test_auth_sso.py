@@ -11,10 +11,12 @@ from api.auth_sso import (
     WiseAuthService,
     append_query,
     canonicalize_wise_endpoint,
+    main_site_authorization_params,
     membership_at_least,
     membership_label,
     normalize_membership_tier,
     oauth_flow_secret,
+    sanitize_acquisition_content,
     sanitize_return_to,
 )
 
@@ -203,3 +205,21 @@ class SettingsContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MainSiteAttributionTests(unittest.TestCase):
+    def test_campaign_values_are_sanitized_to_path_like_markers(self):
+        self.assertEqual(sanitize_acquisition_content("/qdii?code=017436"), "/qdii?code=017436")
+        self.assertEqual(sanitize_acquisition_content("https://www.wise-etf.com/learn/foo#x"), "/learn/foo")
+        self.assertEqual(sanitize_acquisition_content("javascript:alert(1)"), "/")
+        self.assertEqual(sanitize_acquisition_content("//evil.example/phish"), "/phish")
+
+    def test_authorize_params_use_the_etf_site_code_and_return_path(self):
+        self.assertEqual(
+            main_site_authorization_params("/qdii?code=017436#detail"),
+            {"utm_source": "etf", "utm_campaign": "/qdii?code=017436"},
+        )
+        self.assertEqual(
+            main_site_authorization_params("https://evil.example"),
+            {"utm_source": "etf", "utm_campaign": "/"},
+        )

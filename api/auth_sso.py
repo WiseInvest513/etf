@@ -8,6 +8,7 @@ the browser through a same-origin session endpoint.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import logging
 import os
@@ -162,6 +163,47 @@ def sanitize_return_to(value: Optional[str]) -> str:
     if parsed.scheme or parsed.netloc:
         return "/"
     return urlunsplit(("", "", parsed.path or "/", parsed.query, parsed.fragment))
+
+
+
+ACQUISITION_SITE_CODE = "etf"
+ACQUISITION_CONTENT_MAX_LENGTH = 180
+_SAFE_CONTENT_PATTERN = re.compile(r"^[A-Za-z0-9/_\-.~%&=?]*$")
+
+
+def sanitize_acquisition_content(value: Optional[str], fallback: str = "/") -> str:
+    """Keep only a short, path-like content marker for main-site attribution."""
+    candidate = (value or "").strip()
+    if not candidate:
+        return fallback
+    if candidate.startswith("//") or "://" in candidate:
+        try:
+            parsed_url = urlsplit(candidate if "://" in candidate else f"https:{candidate}")
+            if parsed_url.scheme not in {"http", "https"}:
+                return fallback
+            candidate = urlunsplit(("", "", parsed_url.path or "/", parsed_url.query, ""))
+        except ValueError:
+            return fallback
+    parsed = urlsplit(candidate.split("#", 1)[0])
+    if parsed.scheme or parsed.netloc or not (parsed.path or "/").startswith("/") or parsed.path.startswith("//") or "\\" in candidate:
+        return fallback
+    raw = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    if not raw.startswith("/") or not _SAFE_CONTENT_PATTERN.match(raw[1:]):
+        path_only = parsed.path or "/"
+        if not path_only.startswith("/") or not _SAFE_CONTENT_PATTERN.match(path_only[1:]):
+            return fallback
+        raw = path_only
+    return raw[:ACQUISITION_CONTENT_MAX_LENGTH] or fallback
+
+
+def main_site_authorization_params(return_to: Optional[str] = None) -> dict[str, str]:
+    safe_return_to = sanitize_return_to(return_to)
+    parsed = urlsplit(safe_return_to)
+    campaign = sanitize_acquisition_content(urlunsplit(("", "", parsed.path or "/", parsed.query, "")))
+    return {
+        "utm_source": ACQUISITION_SITE_CODE,
+        "utm_campaign": campaign,
+    }
 
 
 def append_query(path: str, **params: str) -> str:
@@ -444,7 +486,11 @@ class WiseAuthService:
             request.session["wise_return_to"] = safe_return_to
             try:
                 client = self._client(settings)
-                response = await client.authorize_redirect(request, settings.redirect_uri)
+                response = await client.authorize_redirect(
+                    request,
+                    settings.redirect_uri,
+                    **main_site_authorization_params(safe_return_to),
+                )
                 return self._no_store(response)
             except Exception as exc:
                 request.session.clear()

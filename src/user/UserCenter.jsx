@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { normalizeSubscriptionStatus } from "../data/model.js";
+import { withMainSiteAttribution } from "../auth/main-site-attribution.js";
 import "./user-center.css";
 
 const GROUPS = [
@@ -165,7 +166,7 @@ export default function UserCenter({ user, onClose, onLogout, favorites, allFund
               <div><span>会话状态</span><strong>{localPreview ? "仅本机开发预览" : "当前设备已安全登录"}</strong><small>{localPreview ? "未创建真实登录会话" : "Wise ETF 不保存你的密码"}</small></div>
             </section>
             <section className="uc-security-tip"><div><Icon name="shield" size={22}/></div><p><strong>由 Wise ID 保护登录</strong><span>Wise ETF 不再单独创建或保存密码。若需管理账号资料或登录安全，请前往 Wise ID。</span></p></section>
-            {!localPreview && <a className="uc-wise-id-link" href="https://wise-invest.org" target="_blank" rel="noreferrer">前往 Wise ID 管理账号</a>}
+            {!localPreview && <a className="uc-wise-id-link" href={withMainSiteAttribution("https://www.wise-invest.org/account", typeof window === "undefined" ? "/user" : `${window.location.pathname}${window.location.search}`)} target="_blank" rel="noreferrer">前往 Wise ID 管理账号</a>}
             <button className="uc-logout-button" onClick={localPreview ? onClose : onLogout}><Icon name="logout"/>{localPreview ? "关闭个人中心" : "退出当前账号"}</button>
           </>}
         </div>
