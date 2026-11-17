@@ -351,6 +351,41 @@ export function normalizeSubscriptionStatus(statusOrFund, dailyLimit) {
   };
 }
 
+function chinaCalendarDate(value) {
+  if (value == null || value === "") return "";
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    const parsed = Date.parse(text);
+    if (!Number.isFinite(parsed)) return "";
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(parsed));
+  }
+  const timestamp = toTimestamp(value);
+  if (!timestamp) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function formatPremiumDateNote(quoteAsOf, referenceAsOf) {
+  const quote = chinaCalendarDate(quoteAsOf);
+  const nav = chinaCalendarDate(referenceAsOf);
+  if (quote && nav) {
+    return quote === nav ? `价格与净值均为 ${quote}` : `净值 ${nav} · 价格 ${quote}`;
+  }
+  if (quote) return `价格 ${quote}`;
+  if (nav) return `净值 ${nav}`;
+  return "";
+}
+
 /**
  * Produce a semantic premium model. Negative values are discounts rather than
  * malformed or misleading negative "premiums".
@@ -393,10 +428,10 @@ export function premiumDisplayModel(value, {
       value: normalized,
       kind: "misaligned",
       severity: "misaligned",
-      label: "口径未对齐",
+      label: "历史参考",
       percentText: absoluteText,
       signedPercentText,
-      displayText: `溢价 ${signedPercentText}（口径未对齐）`,
+      displayText: `溢价 ${signedPercentText}（历史参考）`,
     };
   }
 
@@ -487,19 +522,23 @@ export function etfPremiumView(row = {}, options = {}) {
     : (row?.premium_status || row?.premium_snapshot_status);
   const alignment = iopvFresh ? row.iopv_premium_alignment : row?.premium_alignment;
   const model = premiumDisplayModel(value, { ...options, status, alignment });
+  const quoteAsOf = iopvFresh
+    ? (row.iopv_premium_quote_as_of || row.quote_as_of)
+    : (row?.premium_quote_as_of || row?.quote_as_of);
+  const referenceAsOf = iopvFresh
+    ? (row.iopv_as_of || row.iopv_premium_as_of)
+    : (row?.premium_nav_as_of || row?.nav_as_of || row?.nav_date);
   return {
     ...model,
     source: iopvFresh ? "iopv" : "official_nav",
+    alignment: alignment || model.kind,
     basis: iopvFresh
       ? (row.iopv_basis || "market_price_vs_iopv")
       : (row?.premium_basis || "market_close_vs_latest_published_nav"),
     basisLabel: iopvFresh ? "IOPV 溢价" : "官方净值溢价",
-    quoteAsOf: iopvFresh
-      ? (row.iopv_premium_quote_as_of || row.quote_as_of)
-      : (row?.premium_quote_as_of || row?.quote_as_of),
-    referenceAsOf: iopvFresh
-      ? (row.iopv_as_of || row.iopv_premium_as_of)
-      : (row?.premium_nav_as_of || row?.nav_as_of || row?.nav_date),
+    quoteAsOf,
+    referenceAsOf,
+    dateNote: formatPremiumDateNote(quoteAsOf, referenceAsOf),
   };
 }
 
@@ -599,7 +638,7 @@ export function premiumHistoryView(points = [], {
     const parts = [windows[30].label, windows[90].label];
     const prefix = canAlert
       ? "相对自身同日口径历史："
-      : "当前溢价日期未对齐，只展示历史区间，不给出分位。";
+      : "当前按最新公布净值计算时，同日口径历史只展示区间，暂不判断分位。";
     caption = `${prefix}${parts.join("；")}`;
   }
 

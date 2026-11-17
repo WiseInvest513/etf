@@ -256,11 +256,27 @@ test("premiumDisplayModel does not warn on misaligned or stale premiums", () => 
   assert.equal(misaligned.available, true);
   assert.equal(misaligned.canAlert, false);
   assert.equal(misaligned.severity, "misaligned");
-  assert.equal(misaligned.label, "口径未对齐");
+  assert.equal(misaligned.label, "历史参考");
 
   const stale = premiumDisplayModel(4.2, { status: "stale" });
   assert.equal(stale.canAlert, false);
   assert.equal(stale.label, "历史参考");
+});
+
+test("etfPremiumView treats previous-weekday official NAV as a current premium", () => {
+  const latest = etfPremiumView({
+    premium: 39.62,
+    premium_status: "fresh",
+    premium_alignment: "expected_lag",
+    premium_quote_as_of: "2026-11-17T15:35:45+08:00",
+    premium_nav_as_of: "2026-11-16",
+  }, { warningAt: 1, dangerAt: 3 });
+  assert.equal(latest.source, "official_nav");
+  assert.equal(latest.canAlert, true);
+  assert.equal(latest.severity, "danger");
+  assert.equal(latest.label, "溢价");
+  assert.equal(latest.dateNote, "净值 2026-11-16 · 价格 2026-11-17");
+  assert.equal(latest.alignment, "expected_lag");
 });
 
 test("etfPremiumView prefers fresh IOPV and otherwise shows official NAV alignment", () => {
@@ -273,7 +289,7 @@ test("etfPremiumView prefers fresh IOPV and otherwise shows official NAV alignme
   }, { warningAt: 1, dangerAt: 3 });
   assert.equal(official.source, "official_nav");
   assert.equal(official.canAlert, false);
-  assert.equal(official.label, "口径未对齐");
+  assert.equal(official.label, "历史参考");
   assert.equal(official.basisLabel, "官方净值溢价");
 
   const iopv = etfPremiumView({
@@ -318,7 +334,7 @@ test("premiumHistoryView does not percentile a misaligned or reference series", 
   }));
   const misaligned = premiumHistoryView(points, { currentPremium: 8, canAlert: false, usable: true });
   assert.equal(misaligned.windows[30].percentile, null);
-  assert.match(misaligned.caption, /日期未对齐/);
+  assert.match(misaligned.caption, /暂不判断分位/);
 
   const reference = premiumHistoryView(points, { currentPremium: 4, canAlert: true, usable: false, unusableReason: "reference_snapshot" });
   assert.equal(reference.usable, false);

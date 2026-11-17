@@ -903,6 +903,35 @@ class EtfCacheContractTests(unittest.TestCase):
         self.assertEqual(rows[0]["premium_alignment"], "aligned")
         self.assertEqual(source, "live")
 
+    def test_previous_weekday_quote_and_nav_is_fresh_premium(self):
+        catalog_row = {"code": "513100", "name": "ETF", "track_error": 1.0, "track_error_as_of": "2026-08-20"}
+        quote = {"513100": {
+            "market_price": 1.70,
+            "market_change_pct": 1.2,
+            "change_pct": 1.2,
+            "quote_as_of": "2026-08-20T07:00:00+00:00",
+            "quote_source": "test",
+        }}
+        with (
+            patch.object(api, "_china_now", return_value=datetime(2026, 8, 20, 16, 0, tzinfo=timezone(timedelta(hours=8)))),
+            patch.object(api, "STATIC_ETFS", [catalog_row]),
+            patch.object(api, "_lkg_get", return_value=None),
+            patch.object(api, "fetch_etfs_em_fallback", return_value=quote),
+            patch.object(api, "_fetch_daily_snapshot", return_value=self._daily_etf_snapshot(nav_date="2026-08-19")),
+            patch.object(api, "_fetch_tracking_error", return_value={
+                "track_error": 1.0,
+                "track_error_as_of": "2026-08-20",
+                "track_error_source": "test",
+            }),
+            patch.object(api, "fetch_etfs_sina_batch", return_value={}),
+        ):
+            rows, source = api._build_etfs()
+
+        self.assertEqual(rows[0]["premium"], 6.25)
+        self.assertEqual(rows[0]["premium_status"], "fresh")
+        self.assertEqual(rows[0]["premium_alignment"], "expected_lag")
+        self.assertEqual(source, "live")
+
     def test_mismatched_quote_and_nav_dates_are_misaligned(self):
         catalog_row = {"code": "513100", "name": "ETF"}
         quote = {"513100": {

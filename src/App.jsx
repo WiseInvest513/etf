@@ -1124,7 +1124,7 @@ function PremiumBadge({value, status, alignment, row}) {
   const bg    = danger?C.redBg:mid?C.orangeBg:discount?`${C.cyan}14`:muted?C.borderLight:C.greenBg;
   const label = danger?"极高":mid?"注意":discount?"折价":model.kind==="par"?"平价":muted?model.label:"正常";
   return (
-    <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}30`,animation:danger?"premiumAlert 1.8s ease infinite":"none"}}>
+    <span title={model.dateNote||undefined} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700,background:bg,color,border:`1px solid ${color}30`,animation:danger?"premiumAlert 1.8s ease infinite":"none"}}>
       {formatPercent(model.value,{digits:2,showPlus:model.value>0})} <span style={{fontSize:10,opacity:0.8}}>{label}</span>
     </span>
   );
@@ -4546,7 +4546,7 @@ function MainApp() {
     {key:"market_change_pct",label:"场内涨跌",tip:"最新A股交易日场内价格涨跌",align:"right",render:(_,row)=>renderDayChange(row.market_change_pct??row.change_pct)},
     {key:"fee_rate",label:"运作费率",tip:"管理费+托管费（年化），以基金最新公告为准",align:"right",render:v=>v!=null?<span style={{color:v>=1.0?C.orange:C.textMuted,fontWeight:v>=1.0?600:400}}>{v}%</span>:"—"},
     {key:"track_error",label:"跟踪误差",tip:"年化跟踪误差，越小说明与指数越贴近",align:"right",render:v=>v!=null?<span style={{color:v>1.5?C.orange:C.textDim,fontWeight:v>1.5?600:400}}>{v}%</span>:"—"},
-    {key:"premium",label:"溢价率",tip:"官方净值溢价：同一天的场内收盘价相对已公布净值。日期未对齐时只展示数字，不标极高。",align:"center",render:(v,row)=><PremiumBadge row={row}/>},
+    {key:"premium",label:"溢价率",tip:"最新场内价相对最新公布净值。官方净值常晚一天，仍按最新溢价展示，并注明两侧日期。净值过旧时才标历史参考。",align:"center",render:(v,row)=><PremiumBadge row={row}/>},
     {key:"turnover_cny_100m",label:"当日成交(亿)",tip:"最新A股交易日成交额（亿元）",align:"center",render:(v,row)=>v??row.volume??"—"},
   ];
 
@@ -4904,7 +4904,7 @@ function MainApp() {
 
             {/* ETF warning */}
             <Reveal delay={0.1}>
-              <SectionHeader title="场内ETF溢价预警" subtitle="只对同一天的官方净值溢价预警：>1% 注意 · >3% 极高。日期未对齐会标「口径未对齐」，不标极高。" color={C.orange}/>
+              <SectionHeader title="场内ETF溢价预警" subtitle="按最新场内价相对最新公布净值预警：>1% 注意 · >3% 极高。官方净值常晚一天，仍会标注；净值过旧时才标历史参考。" color={C.orange}/>
               <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:16}}>
                 {[...etfsM].sort(nullLastComparator("premium","desc")).map(e=>{
                   const view = etfPremiumView(e,{warningAt:1,dangerAt:3});
@@ -5012,7 +5012,7 @@ function MainApp() {
         {/* ════ ETF ════ */}
         {activeTab==="etf"&&(
           <Reveal>
-            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价先看官方净值口径，日期未对齐时不作为预警" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
+            <SectionHeader title="场内ETF（纳指 / 标普）" subtitle="每日收盘更新；溢价为最新场内价相对最新公布净值，并注明两侧日期" count={filterData(etfsM,false).length} color={C.orange} timestamp={datasets.etfs.asOf} sortable/>
             <DataStatusBanner dataset={datasets.etfs} label="场内ETF"/>
             <DailyCollectionLink kind="premium"/>
             <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>

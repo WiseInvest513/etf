@@ -46,7 +46,7 @@ function premiumModel(row) {
   const snapshot = row.premium_snapshot_status || row.premium_status;
   if (snapshot === "misaligned" || row.premium_alignment === "misaligned") {
     const premium = finite(row.premium) ? Number(row.premium).toFixed(2) : null;
-    return { key: "unknown", label: premium ? `口径未对齐 ${premium}%` : "口径未对齐", score: -16 };
+    return { key: "unknown", label: premium ? `历史参考 ${premium}%` : "历史参考", score: -16 };
   }
   if (snapshot && snapshot !== "fresh") {
     return { key: snapshot === "stale" ? "stale" : "unknown", label: snapshot === "stale" ? "历史溢价" : "溢价待确认", score: -16 };

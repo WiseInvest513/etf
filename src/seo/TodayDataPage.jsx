@@ -79,7 +79,7 @@ function stateLabel(row) {
 
 function premiumRisk(row) {
   if (row.premium_snapshot_status === "misaligned" || row.premium_status === "misaligned" || row.premium_alignment === "misaligned") {
-    return { key: "misaligned", label: "口径未对齐" };
+    return { key: "stale", label: "历史参考" };
   }
   if (row.premium_snapshot_status === "stale") return { key: "stale", label: "历史参考" };
   if (row.premium_snapshot_status === "unavailable") return { key: "unknown", label: "待确认" };
@@ -223,7 +223,7 @@ export default function TodayDataPage({ kind }) {
   }, {}), [isLimits, rows]);
   const filters = isLimits
     ? [["all", "全部"], ["open", "开放"], ["limited", "限额"], ["suspended", "暂停"], ["stale", "历史参考"], ["unknown", "待确认"]]
-    : [["all", "全部"], ["high", "高溢价"], ["watch", "需注意"], ["normal", "正常"], ["discount", "折价"], ["misaligned", "口径未对齐"], ["stale", "历史参考"], ["unknown", "待确认"]];
+    : [["all", "全部"], ["high", "高溢价"], ["watch", "需注意"], ["normal", "正常"], ["discount", "折价"], ["stale", "历史参考"], ["unknown", "待确认"]];
   const categoryFilters = isLimits
     ? [["all", "全部类型"], ["nasdaq_passive", "纳指被动"], ["sp500_passive", "标普被动"], ["us_active", "美股主动"]]
     : [["all", "全部指数"], ["nasdaq", "纳指"], ["sp500", "标普500"], ["other", "其他"]];
@@ -309,7 +309,7 @@ export default function TodayDataPage({ kind }) {
         )}
         <section className="td-table-wrap">
           <div className="td-table-heading">
-<div><h2>{isLimits ? "今日申购状态清单" : "ETF 溢价快照清单"}</h2><p>{isLimits ? "申购数字来自东方财富基金接口，属于代销或平台展示口径，不是全部渠道，尤其不能当成直销额度。限购和额度可能滞后，待确认不代表开放申购，下单前请以基金公告和实际购买渠道为准。" : "官方净值溢价必须价格日和净值日同一天才能预警；对不齐只显示数字，标为口径未对齐。"}</p></div><div className="td-result-meta"><strong>{visibleRows.length} 只</strong><small>{sortLabel}</small></div></div>
+<div><h2>{isLimits ? "今日申购状态清单" : "ETF 溢价快照清单"}</h2><p>{isLimits ? "申购数字来自东方财富基金接口，属于代销或平台展示口径，不是全部渠道，尤其不能当成直销额度。限购和额度可能滞后，待确认不代表开放申购，下单前请以基金公告和实际购买渠道为准。" : "溢价为最新场内价相对最新公布净值。官方净值常晚一天，仍按最新溢价展示并注明两侧日期；净值过旧时才标历史参考。"}</p></div><div className="td-result-meta"><strong>{visibleRows.length} 只</strong><small>{sortLabel}</small></div></div>
           <div className="td-table">
             <div className="td-row td-head">
               <SortHeader field="name" activeField={sortKey} direction={sortDirection} onSort={sortBy}>产品</SortHeader>

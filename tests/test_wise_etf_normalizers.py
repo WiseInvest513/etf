@@ -177,6 +177,44 @@ class PremiumAlignmentTests(unittest.TestCase):
         self.assertEqual(result["premium_alignment"], "misaligned")
         self.assertFalse(result["can_alert"])
 
+    def test_previous_weekday_official_nav_is_fresh_and_alertable(self):
+        result = classify_etf_premium(
+            2.812,
+            2.0141,
+            "2026-11-17T15:35:45+08:00",
+            "2026-11-16",
+        )
+        self.assertEqual(result["premium"], 39.62)
+        self.assertEqual(result["premium_status"], "fresh")
+        self.assertEqual(result["premium_alignment"], "expected_lag")
+        self.assertTrue(result["can_alert"])
+
+    def test_friday_nav_and_monday_quote_is_expected_lag(self):
+        result = classify_etf_premium(
+            1.70,
+            1.60,
+            "2026-08-17T15:30:00+08:00",
+            "2026-08-14",
+        )
+        self.assertEqual(result["premium"], 6.25)
+        self.assertEqual(result["premium_status"], "fresh")
+        self.assertEqual(result["premium_alignment"], "expected_lag")
+        self.assertTrue(result["can_alert"])
+
+    def test_iopv_premium_stays_same_day_only(self):
+        from api.wise_etf.normalizers import IOPV_PREMIUM_BASIS
+        result = classify_etf_premium(
+            1.70,
+            1.68,
+            "2026-08-17T15:30:00+08:00",
+            "2026-08-14",
+            basis=IOPV_PREMIUM_BASIS,
+        )
+        self.assertEqual(result["premium"], 1.19)
+        self.assertEqual(result["premium_status"], "misaligned")
+        self.assertEqual(result["premium_alignment"], "misaligned")
+        self.assertFalse(result["can_alert"])
+
     def test_missing_dates_do_not_publish_a_warning_ready_premium(self):
         result = classify_etf_premium(1.70, 1.60, "2026-08-20T07:00:00+00:00", None)
         self.assertIsNone(result["premium"])

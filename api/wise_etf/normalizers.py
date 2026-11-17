@@ -313,6 +313,37 @@ def china_calendar_date(value: Any) -> Optional[str]:
         return None
 
 
+def previous_cn_weekday(value: date) -> date:
+    """Return the previous Monday-Friday date, skipping weekends only."""
+
+    candidate = value - timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def official_nav_alignment(quote_date: Optional[str], reference_date: Optional[str]) -> str:
+    """Classify official NAV lag on the Asia/Shanghai calendar.
+
+    Same-day dates are aligned.  A latest published NAV from the previous
+    weekday is the normal QDII lag and counts as ``expected_lag``.  Larger
+    gaps, or a NAV newer than the quote, are ``misaligned``.
+    """
+
+    if not quote_date or not reference_date:
+        return "unknown"
+    if quote_date == reference_date:
+        return "aligned"
+    try:
+        quote = date.fromisoformat(quote_date)
+        reference = date.fromisoformat(reference_date)
+    except ValueError:
+        return "unknown"
+    if reference == previous_cn_weekday(quote):
+        return "expected_lag"
+    return "misaligned"
+
+
 def classify_etf_premium(
     market_price: Any,
     reference_value: Any,
@@ -324,17 +355,22 @@ def classify_etf_premium(
 ) -> Dict[str, Any]:
     """Classify an official-NAV or IOPV premium by China calendar alignment.
 
-    A number is only ``fresh`` and alertable when both sides fall on the same
-    Asia/Shanghai date.  Misaligned dates may still return the number, but the
-    status is ``misaligned`` and ``can_alert`` is false.  Missing dates do not
-    publish a warning-ready premium.
+    Official NAV premiums are ``fresh`` and alertable when the quote and the
+    latest published NAV fall on the same Asia/Shanghai date, or when the NAV
+    is only one weekday behind the quote.  IOPV premiums stay same-day only.
+    Larger date gaps may still return the number, but the status is
+    ``misaligned`` and ``can_alert`` is false.  Missing dates do not publish a
+    warning-ready premium.
     """
 
     premium = calculate_etf_premium(market_price, reference_value, digits=digits)
     quote_date = china_calendar_date(quote_as_of)
     reference_date = china_calendar_date(reference_as_of)
     if quote_date and reference_date:
-        alignment = "aligned" if quote_date == reference_date else "misaligned"
+        if basis == IOPV_PREMIUM_BASIS:
+            alignment = "aligned" if quote_date == reference_date else "misaligned"
+        else:
+            alignment = official_nav_alignment(quote_date, reference_date)
     else:
         alignment = "unknown"
 
@@ -350,7 +386,7 @@ def classify_etf_premium(
             "can_alert": False,
         }
 
-    status = "fresh" if alignment == "aligned" else "misaligned"
+    status = "fresh" if alignment in {"aligned", "expected_lag"} else "misaligned"
     return {
         "premium": premium,
         "premium_status": status,

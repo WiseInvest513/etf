@@ -262,7 +262,7 @@ export default function ProductDetailPage({ type, code }) {
   const premiumView = isEtf ? etfPremiumView(row, { warningAt: 1.5, dangerAt: 3 }) : null;
   const historyView = isEtf ? premiumHistoryView(premiumHistory.points, {
     currentPremium: premiumView?.value,
-    canAlert: Boolean(premiumView?.canAlert),
+    canAlert: Boolean(premiumView?.canAlert && premiumView?.alignment === "aligned"),
     usable: premiumHistory.source !== "reference" && premiumHistory.status !== "empty" && premiumHistory.status !== "error",
     unusableReason: premiumHistory.source === "reference" ? "reference_snapshot" : null,
   }) : null;
@@ -270,7 +270,7 @@ export default function ProductDetailPage({ type, code }) {
     ? !premiumView.available
       ? { tone: "neutral", title: "溢价暂不可用", text: "先核对场内价格与基金净值日期，再决定是否交易。" }
       : !premiumView.canAlert
-        ? { tone: "neutral", title: premiumView.label === "口径未对齐" ? "当前溢价口径未对齐" : "当前溢价仅供参考", text: "价格日和净值日不是同一天时，不会把这个数字当成高溢价预警。" }
+        ? { tone: "neutral", title: "当前溢价仅供参考", text: "净值或行情过旧时，不会把这个数字当成高溢价预警。" }
         : premiumView.severity === "danger"
         ? { tone: "down", title: "当前属于高溢价区间", text: "追价可能同时承担指数波动和溢价回落风险，建议先比较同指数产品。" }
         : premiumView.severity === "warning"
@@ -328,7 +328,7 @@ export default function ProductDetailPage({ type, code }) {
             <strong className={`pd-tone-${isEtf ? (premiumView.canAlert && premiumView.severity === "danger" ? "down" : premiumView.canAlert && premiumView.severity === "warning" ? "warn" : "neutral") : metricTone(row.rolling_1y)}`}>
               {isEtf ? (premiumView.available ? signedPercent(premiumView.value) : "—") : signedPercent(row.rolling_1y)}
             </strong>
-            <small>{isEtf ? `${premiumView.label}${premiumView.quoteAsOf || premiumView.referenceAsOf ? ` · 价格 ${premiumView.quoteAsOf || "待更新"} · 净值 ${premiumView.referenceAsOf || "待更新"}` : ""}` : `截至 ${row.rolling_1y_as_of || row.nav_date || dataset.asOf || "最新净值日"}`}</small>
+            <small>{isEtf ? `${premiumView.canAlert ? (premiumView.severity === "danger" ? "极高" : premiumView.severity === "warning" ? "注意" : premiumView.label) : premiumView.label}${premiumView.dateNote ? ` · ${premiumView.dateNote}` : premiumView.quoteAsOf || premiumView.referenceAsOf ? ` · 价格 ${premiumView.quoteAsOf || "待更新"} · 净值 ${premiumView.referenceAsOf || "待更新"}` : ""}` : `截至 ${row.rolling_1y_as_of || row.nav_date || dataset.asOf || "最新净值日"}`}</small>
           </div>
         </section>
 
