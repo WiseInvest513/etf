@@ -4166,7 +4166,7 @@ function MainApp() {
     return !localStorage.getItem("etf-disclaimer");
   });
   const [showBriefing,setShowBriefing]=useState(false);
-  useEffect(() => { setShowBriefing("automatic"); }, []);
+  // Current campaign owns automatic promotion; community remains a manual action.
   const [favorites,setFavorites]=useState(()=>JSON.parse(localStorage.getItem("etf-favorites")||"[]"));
   const [showUserCenter,setShowUserCenter]=useState(false);
   const [datasets,setDatasets]=useState({
@@ -4559,7 +4559,7 @@ function MainApp() {
   const dismissDisclaimer = ()=>{
     localStorage.setItem("etf-disclaimer","1");
     setShowDisclaimer(false);
-    // Do not open a second automatic promotion.
+    window.dispatchEvent(new Event("wise-campaign:auto"));
   };
 
   return (
@@ -4656,6 +4656,7 @@ function MainApp() {
           <div style={{flex:1}}/>
 
           {/* Right actions */}
+          <button type="button" data-wise-kraken="">限时福利</button>
           <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
             {!isMobile&&<a href={VIP_JOIN_URL}
               style={{display:"flex",alignItems:"center",gap:5,height:30,padding:"0 12px",borderRadius:20,border:"1px solid #efd28a",background:"linear-gradient(135deg,#fff9eb,#fff1ca)",color:"#8f610d",fontSize:12,fontWeight:750,cursor:"pointer",transition:"all 0.18s",whiteSpace:"nowrap",textDecoration:"none"}}
