@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { pageVisits } from "../navigation/page-navigation.js";
 
 import {
   consumeAuthError,
@@ -8,6 +9,7 @@ import {
 } from "./auth-client.js";
 
 const AuthContext = createContext(null);
+const SESSION_CHECK_ERROR = "暂时无法确认登录状态，请稍后重试。";
 
 const LOCAL_PREVIEW_USER = Object.freeze({
   wiseUserId: "local-preview",
@@ -26,31 +28,49 @@ export function AuthProvider({ children, localBypass = false }) {
   const [sessionUser, setSessionUser] = useState(localBypass ? LOCAL_PREVIEW_USER : null);
   const [loading, setLoading] = useState(!localBypass);
   const [error, setError] = useState(() => consumeAuthError());
+  const pendingRefresh = useRef(null);
+  const sessionRevision = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(({ background = false } = {}) => {
     if (localBypass) {
       setSessionUser(LOCAL_PREVIEW_USER);
       setLoading(false);
-      return LOCAL_PREVIEW_USER;
+      return Promise.resolve(LOCAL_PREVIEW_USER);
     }
-    setLoading(true);
-    try {
-      const response = await fetch("/api/auth/session", {
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) throw new Error(`session_${response.status}`);
-      const user = normalizeAuthSession(await response.json());
-      setSessionUser(user);
-      return user;
-    } catch {
-      setSessionUser(null);
-      setError("暂时无法确认登录状态，请稍后重试。");
-      return null;
-    } finally {
-      setLoading(false);
-    }
+    // StrictMode, route changes and consumers share one session request.
+    if (pendingRefresh.current) return pendingRefresh.current;
+    if (!background) setLoading(true);
+    const revision = sessionRevision.current;
+    let request;
+    request = (async () => {
+      try {
+        const response = await fetch("/api/auth/session", {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          if (response.status === 401 && revision === sessionRevision.current) setSessionUser(null);
+          throw new Error(`session_${response.status}`);
+        }
+        const user = normalizeAuthSession(await response.json());
+        if (revision === sessionRevision.current) {
+          setSessionUser(user);
+          setError(current => user || current === SESSION_CHECK_ERROR ? null : current);
+        }
+        return user;
+      } catch {
+        // A temporary network error is not proof that a previously confirmed
+        // session expired. Protected APIs still enforce server-side access.
+        if (revision === sessionRevision.current) setError(SESSION_CHECK_ERROR);
+        return null;
+      } finally {
+        if (revision === sessionRevision.current) setLoading(false);
+        if (pendingRefresh.current === request) pendingRefresh.current = null;
+      }
+    })();
+    pendingRefresh.current = request;
+    return request;
   }, [localBypass]);
 
   useEffect(() => {
@@ -63,6 +83,7 @@ export function AuthProvider({ children, localBypass = false }) {
       // Storage can be unavailable in private/restricted browser contexts.
     }
     refresh();
+    return pageVisits.subscribe(() => refresh({ background: true }));
   }, [refresh]);
 
   const login = useCallback((returnTo = currentReturnTo()) => {
@@ -80,7 +101,10 @@ export function AuthProvider({ children, localBypass = false }) {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) throw new Error(`logout_${response.status}`);
+      sessionRevision.current += 1;
+      pendingRefresh.current = null;
       setSessionUser(null);
+      setLoading(false);
       setError(null);
       return true;
     } catch {

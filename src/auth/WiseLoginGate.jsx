@@ -2,7 +2,7 @@ import { useAuth } from "./AuthProvider.jsx";
 import { currentReturnTo } from "./auth-client.js";
 import "./auth.css";
 
-function WiseMark() {
+export function WiseMark() {
   return <span className="wise-login-mark" aria-hidden="true">
     <svg width="31" height="31" viewBox="0 0 28 28" fill="none">
       <polyline points="3,20 8,13 13,16 19,7 25,10" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/>

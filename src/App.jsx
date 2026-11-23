@@ -4,12 +4,14 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Ba
 import { Analytics } from "@vercel/analytics/react";
 import { AuthProvider, useAuth } from "./auth/AuthProvider.jsx";
 import WiseLoginGate from "./auth/WiseLoginGate.jsx";
+import GuestLoginPrompt from "./auth/GuestLoginPrompt.jsx";
 import { currentReturnTo } from "./auth/auth-client.js";
 import { withMainSiteAttribution } from "./auth/main-site-attribution.js";
 import UserCenter, { UserAvatar } from "./user/UserCenter.jsx";
 import { CATEGORY_PAGE_META, GUIDE_SEO, HOME_SEO, ONCHAIN_SEO, SITE_ORIGIN } from "./seo/seo-content.js";
 import { DesktopNavigation, MobileNavigation } from "./navigation/SiteNavigation.jsx";
 import { FOOTER_NAV_ITEMS, VIP_JOIN_URL } from "./navigation/navigationConfig.js";
+import { navigateWithinSite } from "./navigation/page-navigation.js";
 import {
   DATASET_STATE,
   deriveDatasetState,
@@ -1478,7 +1480,7 @@ function GalaxyCard() {
 
 function DisclaimerModal({onClose}) {
   return (
-    <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+    <div role="dialog" aria-modal="true" aria-label="投资风险声明" data-state="open" style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
       <div style={{background:"#fff",borderRadius:20,padding:"36px 32px",maxWidth:460,width:"100%",boxShadow:"0 24px 80px rgba(0,0,0,0.22)",animation:"fadeInUp 0.35s ease both"}}>
         <div style={{fontSize:28,marginBottom:14,textAlign:"center"}}>⚠️</div>
         <h3 style={{fontSize:19,fontWeight:800,color:"#1d1d1f",margin:"0 0 12px",letterSpacing:-0.4,textAlign:"center"}}>投资风险声明</h3>
@@ -4119,7 +4121,7 @@ function NotFoundPage() {
 }
 
 export default function App() {
-  return <AuthProvider localBypass={LOCAL_AUTH_BYPASS}><AppRoutes/></AuthProvider>;
+  return <AuthProvider localBypass={LOCAL_AUTH_BYPASS}><AppRoutes/><GuestLoginPrompt/></AuthProvider>;
 }
 
 function AppRoutes() {
@@ -4377,7 +4379,7 @@ function MainApp() {
     }
     setActiveTab(id);
     setSortKey(null);setSearch("");setStatusFilter("all");setQualityFilters([]);
-    window.history.pushState(null, "", id === "overview" ? "/" : `/${id}`);
+    navigateWithinSite(id === "overview" ? "/" : `/${id}`);
     window.scrollTo({top:0,behavior:"smooth"});
   };
 
